@@ -13,6 +13,7 @@ enum Act {
     Open(PathBuf, bool),
     Toggle(usize),
     CollapseAll,
+    Hide,
     Run(Command),
 }
 
@@ -33,6 +34,16 @@ impl App {
             }
         }
         self.save_choice_quietly("sidebar", on, ctx);
+    }
+
+    /// ⌘B: hidden → show it and go in; shown with the keyboard elsewhere →
+    /// just go in; already in it → hide it.
+    pub fn sidebar_key(&mut self, ctx: &egui::Context) {
+        if self.sidebar_shown() && self.focus != Focus::Sidebar {
+            self.focus_sidebar();
+        } else {
+            self.toggle_sidebar(ctx);
+        }
     }
 
     /// ⇧⌘E: into the tree, on the active file (showing the sidebar if
@@ -182,7 +193,7 @@ impl App {
                     (
                         icon::SIDEBAR,
                         format!("Hide File Tree{}", caps(Command::ToggleSidebar)),
-                        Act::Run(Command::ToggleSidebar),
+                        Act::Hide,
                     ),
                     (
                         icon::COLLAPSE_ALL,
@@ -428,6 +439,7 @@ impl App {
                 }
                 self.sidebar.revealed = self.active_tab().and_then(|t| t.path().cloned());
             }
+            Some(Act::Hide) => self.toggle_sidebar(&ctx),
             Some(Act::Run(cmd)) => self.run(cmd, &ctx),
             None => {}
         }

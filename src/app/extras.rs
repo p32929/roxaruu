@@ -110,6 +110,36 @@ impl Setting {
 }
 
 impl App {
+    /// Terminals asking for the user (see `terminalpane::watch`): tell the
+    /// watchers who can see what, and show what they raised: a toast with
+    /// the key to get there, and a bell on the terminal's tab.
+    pub(crate) fn poll_attention(&mut self, ctx: &egui::Context) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let focused = ctx.input(|i| i.focused);
+        crate::terminalpane::APP_FOCUSED.store(focused, Relaxed);
+        let key = self
+            .config
+            .keymap
+            .combo_for(Command::SwitchTerminal)
+            .map(|k| format!(" — {} to switch", k.caps().concat()))
+            .unwrap_or_default();
+        for i in 0..self.terminals.len() {
+            let shown = self.terminal_open && (self.terminal_grid || i == self.active_terminal);
+            let t = &mut self.terminals[i];
+            t.pane.refresh_foreground();
+            t.pane.watch.looking.store(focused && shown, Relaxed);
+            let name = t.pane.display_name();
+            for message in t.pane.take_fired() {
+                self.missed.push(format!("{name}: {message}{key}"));
+            }
+        }
+        if focused {
+            for msg in std::mem::take(&mut self.missed) {
+                self.notify(msg);
+            }
+        }
+    }
+
     // ---- toasts ---------------------------------------------------------
 
     pub fn notify(&mut self, msg: impl Into<String>) {

@@ -1,6 +1,7 @@
 #!/bin/sh
 # Build this checkout in release mode and install it:
-#   1. the `roxaruu` command into ~/.cargo/bin (`roxaruu .` opens a folder), and
+#   1. the `roxaruu` and `rox` commands into ~/.cargo/bin (`rox` opens the
+#      folder you're in, `rox path` another one), and
 #   2. on macOS, Roxaruu.app (Launchpad, Spotlight, the Dock).
 #
 #     ./install-local.sh
@@ -29,6 +30,11 @@ mkdir -p "$BIN_DIR"
 # Copy beside, then rename: replacing a running binary in place can crash it.
 cp "$BIN" "$BIN_DIR/.roxaruu.new" && mv -f "$BIN_DIR/.roxaruu.new" "$BIN_DIR/roxaruu"
 green "Installed $BIN_DIR/roxaruu"
+# `rox`, the short name: a wrapper, not a link, so the process is still
+# called roxaruu (which is how windows find each other).
+printf '#!/bin/sh\nexec "%s/roxaruu" "$@"\n' "$BIN_DIR" > "$BIN_DIR/rox"
+chmod +x "$BIN_DIR/rox"
+green "Installed $BIN_DIR/rox"
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "Note: add $BIN_DIR to your PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;;
@@ -90,4 +96,4 @@ if [ -n "${REGISTER:-}" ]; then
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$DEST" >/dev/null 2>&1 || true
 fi
 green "Installed $DEST"
-echo "Open a folder:  roxaruu .     (or Roxaruu from Spotlight)"
+echo "Open a folder:  rox     (the one you're in; or rox <path>, or Roxaruu from Spotlight)"

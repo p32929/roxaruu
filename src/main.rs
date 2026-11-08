@@ -40,8 +40,19 @@ use eframe::egui;
 const ICON: &[u8] = include_bytes!("../assets/icon.png");
 
 fn main() -> eframe::Result {
-    // `roxaruu [folder | file]`
-    let target = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    // `roxaruu [folder | file]`. Bare `roxaruu` (or `rox`) in a terminal opens
+    // the folder you're in, same as `roxaruu .`; from the Dock or Finder there's
+    // no terminal, and it opens empty.
+    let target = std::env::args_os()
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            use std::io::IsTerminal;
+            std::io::stdin()
+                .is_terminal()
+                .then(std::env::current_dir)
+                .and_then(Result::ok)
+        });
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Roxaruu")

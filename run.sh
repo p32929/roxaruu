@@ -2,14 +2,16 @@
 # Run Roxaruu.
 #
 #     ./run.sh [folder|file]          install it (./install-local.sh) and open it
+#                                     (no folder: the one you're in)
 #     ./run.sh --temp [folder|file]   run this checkout straight from target/,
 #                                     leaving the installed app and its windows alone
 set -eu
 
 TEMP=
 if [ "${1:-}" = "--temp" ]; then TEMP=1; shift; fi
-# Absolute, before we leave the caller's directory.
-if [ $# -gt 0 ]; then set -- "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; fi
+# Absolute, before we leave the caller's directory; none given means the
+# folder you're in, as with `rox`.
+if [ $# -gt 0 ]; then set -- "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; else set -- "$PWD"; fi
 cd "$(dirname "$0")"
 
 if [ -n "$TEMP" ]; then

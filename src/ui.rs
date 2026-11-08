@@ -56,6 +56,7 @@ pub mod icon {
     pub const ARROW_LEFT: &str = "\u{ea9b}";
     pub const ARROW_RIGHT: &str = "\u{ea9c}";
     pub const DOT: &str = "\u{ea71}";
+    pub const BELL: &str = "\u{eaa2}";
     pub const EDIT: &str = "\u{ea73}";
     pub const WARNING: &str = "\u{ea6c}";
     pub const ADD: &str = "\u{ea60}";
@@ -2721,6 +2722,8 @@ impl App {
                     if over_close { c.text } else { c.text_subtle },
                     12.0,
                 )
+            } else if t.pane.attention {
+                (icon::BELL, c.accent, 12.0)
             } else if t.pane.is_running() {
                 (icon::DOT, c.accent, 8.0)
             } else if t.pane.finished_unseen() {
@@ -4058,7 +4061,14 @@ impl App {
                 esc,
             ],
             Mode::Commands => vec![(k("↑ ↓"), "move"), (k("↵"), "run"), esc],
-            Mode::Recent => vec![(k("↑ ↓"), "move"), (k("↵"), "open folder"), esc],
+            Mode::Recent => {
+                let mut v = vec![(k("↑ ↓"), "move"), (k("↵"), "open folder")];
+                if let Some(key) = self.config.keymap.combo_for(Command::OpenFolder) {
+                    v.push((vec![key.caps().concat()], "open another folder…"));
+                }
+                v.push(esc);
+                v
+            }
             Mode::Search => vec![(k("↑ ↓"), "move"), (k("↵"), "open at match"), esc],
             Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to it"), esc],
             Mode::Line => vec![(k("↵"), "go"), esc],

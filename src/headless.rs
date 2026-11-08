@@ -1663,7 +1663,11 @@ fn headless_sidebar_walkthrough() {
         names(&h)
     );
 
-    // ⌘B hides it (and remembers), ⌘B brings it back.
+    // ⌘B from the editor goes into the tree; from the tree it hides it (and
+    // remembers); ⌘B brings it back.
+    press(&mut h, CMD, Key::B);
+    assert!(app(&h).config.settings.sidebar);
+    assert_eq!(app(&h).focus, Focus::Sidebar);
     press(&mut h, CMD, Key::B);
     shot(&mut h, "d1-hidden");
     assert!(!app(&h).config.settings.sidebar);
@@ -1867,4 +1871,149 @@ fn headless_project_home_and_file_browser() {
     // The welcome launcher is for no folder only.
     let mut h = harness(None);
     shot(&mut h, "k5-no-folder");
+}
+
+/// Agents asking for you: a notification escape or the bell from a terminal
+/// you can't see becomes a toast (with the key to get there) and a bell on
+/// its tab; with the window in the background, an OS notification too. An
+/// agent that worked a while and went quiet counts without saying anything.
+#[test]
+#[ignore]
+fn headless_agent_alerts() {
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    // An "agent": bash, under the name claude (re-signed, or macOS kills the copy).
+    std::fs::copy("/bin/bash", root.join("claude")).unwrap();
+    let signed = std::process::Command::new("codesign")
+        .args(["-s", "-", "-f"])
+        .arg(root.join("claude"))
+        .output()
+        .unwrap();
+    assert!(signed.status.success());
+    let toast =
+        |needle: &'static str| move |app: &App| app.toasts.iter().any(|t| t.msg.contains(needle));
+    let notified = |needle: &str| {
+        crate::sys::NOTIFIED
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, body)| body.contains(needle))
+    };
+
+    let mut h = harness(Some(root.clone()));
+    no_sidebar(&mut h);
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "the prompt", screen_has("$ "));
+
+    // On screen: you saw it, nothing to raise.
+    run(&mut h, "printf '\\033]9;seen it\\007'; echo printed");
+    wait_for(&mut h, "the printf", screen_has("printed"));
+    for _ in 0..30 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!toast("seen it")(app(&h)));
+    assert!(!app(&h).terminals[0].pane.attention);
+
+    // Hidden: a toast with what it said and the key to switch, a bell on its tab.
+    run(
+        &mut h,
+        "sleep 1; printf '\\033]9;Claude Code: needs your permission\\007'",
+    );
+    press(&mut h, ALT, Key::T);
+    assert!(!app(&h).terminal_open);
+    wait_for(&mut h, "the toast", toast("needs your permission"));
+    let msg = app(&h).toasts.last().unwrap().msg.clone();
+    assert!(msg.contains("to switch"), "{msg}");
+    assert!(app(&h).terminals[0].pane.attention);
+    assert!(!notified("needs your permission"), "the window had focus");
+
+    // In the background: the OS is told too; the toast waits for your return.
+    press(&mut h, ALT, Key::T);
+    assert!(!app(&h).terminals[0].pane.attention, "seen now");
+    run(&mut h, "sleep 1; printf '\\a'");
+    press(&mut h, ALT, Key::T);
+    h.input_mut().focused = false;
+    h.step();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !notified("wants your attention") {
+        assert!(std::time::Instant::now() < deadline, "no OS notification");
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let title = crate::sys::NOTIFIED
+        .lock()
+        .unwrap()
+        .last()
+        .unwrap()
+        .0
+        .clone();
+    assert!(title.starts_with("Roxaruu · "), "{title}");
+    assert!(!toast("wants your attention")(app(&h)));
+    h.input_mut().focused = true;
+    wait_for(&mut h, "the toast on return", toast("wants your attention"));
+
+    // An agent that worked, then went quiet without a word.
+    press(&mut h, ALT, Key::T);
+    run(
+        &mut h,
+        "./claude -c 'for i in $(seq 1 16); do echo working $i; sleep 0.25; done; sleep 30'",
+    );
+    wait_for(&mut h, "the agent", screen_has("working 2"));
+    press(&mut h, ALT, Key::T);
+    wait_for(
+        &mut h,
+        "the quiet toast",
+        toast("finished, or waiting for you"),
+    );
+    let msg = app(&h).toasts.last().unwrap().msg.clone();
+    assert!(msg.contains("claude"), "names the agent: {msg}");
+    shot(&mut h, "a0-agent-toast");
+}
+
+/// ⌘B moves the keyboard into a tree that's already showing; only from
+/// inside does it hide it. A list's own key closes it. ⌥O offers a folder
+/// that isn't in the list.
+#[test]
+#[ignore]
+fn headless_focus_keys() {
+    use crate::app::Focus;
+    use crate::palette::{Mode, Pick};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
+    let mut h = harness(Some(root.join("main.rs")));
+    h.state_mut().0.config.settings.sidebar = true;
+    h.step();
+
+    press(&mut h, ALT, Key::T);
+    assert_eq!(app(&h).focus, Focus::Terminal);
+    press(&mut h, CMD, Key::B);
+    assert!(app(&h).config.settings.sidebar, "still shown");
+    assert_eq!(app(&h).focus, Focus::Sidebar, "and the keyboard is in it");
+    press(&mut h, CMD, Key::B);
+    assert!(!app(&h).config.settings.sidebar, "from inside, ⌘B hides it");
+    assert_eq!(app(&h).focus, Focus::Editor);
+    press(&mut h, CMD, Key::B);
+    assert!(app(&h).config.settings.sidebar);
+    assert_eq!(app(&h).focus, Focus::Sidebar);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+
+    // ⌥O: the recent folders, then a way to any other folder, with its key.
+    press(&mut h, ALT, Key::O);
+    let p = app(&h).palette.as_ref().unwrap();
+    assert_eq!(p.mode, Mode::Recent);
+    let last = p.items.last().unwrap();
+    assert_eq!(last.pick, Pick::Command(crate::keymap::Command::OpenFolder));
+    assert_eq!(last.caps.concat(), "⌘O");
+    shot(&mut h, "f0-recent");
+    press(&mut h, ALT, Key::O);
+    assert!(app(&h).palette.is_none(), "⌥O again closes it");
+    press(&mut h, ALT, Key::F);
+    press(&mut h, ALT, Key::F);
+    assert!(app(&h).palette.is_none(), "so does ⌥F");
 }

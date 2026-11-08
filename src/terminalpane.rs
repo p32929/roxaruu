@@ -8,7 +8,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -35,12 +35,186 @@ const SCROLLBACK: usize = 3_000;
 /// Called from a terminal's reader thread whenever new output arrives, to wake
 /// the GUI event loop so it redraws promptly (winit throttles its idle timer on
 /// macOS, which otherwise leaves a running CLI looking "stuck" between inputs).
-pub type Waker = std::sync::Arc<dyn Fn() + Send + Sync>;
+/// `true` (from the watcher) means wake even if this terminal is hidden:
+/// it asked for the user.
+pub type Waker = std::sync::Arc<dyn Fn(bool) + Send + Sync>;
+
+/// A burst of output is one with gaps shorter than this.
+const BURST_GAP: Duration = Duration::from_millis(1500);
+/// An agent that printed for this long, then stopped for this long, has
+/// finished or is waiting for an answer.
+const AGENT_QUIET: Duration = Duration::from_secs(3);
+
+/// What programs in the terminal asked to tell the user: the bell, and the
+/// notification escapes — OSC 9 (iTerm2), OSC 777 (Ghostty, rxvt) and
+/// OSC 99 (kitty) — which is what Claude Code and friends send.
+#[derive(Default)]
+pub struct Alerts(Vec<String>);
+
+impl vt100::Callbacks for Alerts {
+    fn audible_bell(&mut self, _: &mut vt100::Screen) {
+        self.0.push(String::new());
+    }
+
+    fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+        if let Some(message) = osc_notification(params) {
+            self.0.push(message);
+        }
+    }
+}
+
+/// The message of a notification OSC, `None` for any other OSC.
+fn osc_notification(params: &[&[u8]]) -> Option<String> {
+    let text = |p: &[&[u8]]| {
+        p.iter()
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .collect::<Vec<_>>()
+            .join(";")
+    };
+    match params {
+        // `9;4;…` is iTerm2's progress bar, not a notification.
+        [b"9", b"4", ..] => None,
+        [b"9", rest @ ..] => Some(text(rest)),
+        [b"777", b"notify", title, body @ ..] => {
+            let (title, body) = (text(&[title]), text(body));
+            Some(match (title.is_empty(), body.is_empty()) {
+                (false, false) => format!("{title}: {body}"),
+                (true, _) => body,
+                (_, true) => title,
+            })
+        }
+        // kitty sends the title and the body as separate pieces; the body says it.
+        [b"99", meta, body @ ..] if meta.windows(6).any(|w| w == b"p=body") => Some(text(body)),
+        _ => None,
+    }
+}
+
+/// When the current burst of output started and when output last came.
+#[derive(Default)]
+struct Activity {
+    burst: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl Activity {
+    /// Whether a burst at least [`AGENT_QUIET`] long has just been followed
+    /// by [`AGENT_QUIET`] of silence: for an agent, done or waiting. Reports
+    /// each burst once.
+    fn went_quiet(&mut self) -> bool {
+        let (Some(start), Some(last)) = (self.burst, self.last) else {
+            return false;
+        };
+        if last.elapsed() < AGENT_QUIET {
+            return false;
+        }
+        self.burst = None;
+        last - start >= AGENT_QUIET
+    }
+}
+
+/// Programs whose falling silent after a stretch of output means "finished,
+/// or waiting for you".
+const AGENTS: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "opencode",
+    "aider",
+    "amp",
+    "goose",
+    "cursor-agent",
+    "crush",
+    "qwen",
+    "droid",
+    "copilot",
+];
+
+/// Whether the app window has the keyboard; set by the UI every frame. While
+/// it doesn't, alerts also go to the OS as notifications.
+pub static APP_FOCUSED: AtomicBool = AtomicBool::new(true);
+
+/// A terminal's alert state, shared with its watcher thread. The watcher
+/// runs off the UI loop on purpose: macOS stops giving a hidden window
+/// frames, and that's exactly when the user needs telling.
+#[derive(Default)]
+pub struct Watch {
+    /// The foreground program is a coding agent.
+    agent: AtomicBool,
+    /// The user can see this terminal right now (set by the UI).
+    pub looking: AtomicBool,
+    /// "folder · program", for the notification's title.
+    name: Mutex<String>,
+    /// Alerts the UI hasn't shown yet.
+    fired: Mutex<Vec<String>>,
+}
+
+/// Twice a second: anything asked for the user here? An agent gone quiet
+/// counts unless it just said so itself (Claude Code's OSC 9 comes ~3s
+/// before the silence does).
+fn watch(
+    parser: std::sync::Weak<Mutex<vt100::Parser<Alerts>>>,
+    activity: std::sync::Weak<Mutex<Activity>>,
+    w: std::sync::Weak<Watch>,
+    waker: Option<Waker>,
+) {
+    // When something was last raised, and when the program last said
+    // something itself.
+    let (mut last, mut spoke): (Option<Instant>, Option<Instant>) = (None, None);
+    loop {
+        thread::sleep(Duration::from_millis(500));
+        let (Some(parser), Some(activity), Some(w)) =
+            (parser.upgrade(), activity.upgrade(), w.upgrade())
+        else {
+            return; // the terminal closed
+        };
+        let mut said = std::mem::take(
+            &mut parser
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .callbacks_mut()
+                .0,
+        );
+        let quiet = activity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .went_quiet();
+        if said.iter().any(|m| !m.is_empty()) {
+            spoke = Some(Instant::now());
+        }
+        let recent = spoke.is_some_and(|t| t.elapsed() < Duration::from_secs(5));
+        if said.is_empty() && quiet && !recent && w.agent.load(Ordering::Relaxed) {
+            said.push("finished, or waiting for you".into());
+        }
+        // Seen as it happened; and a ringing bell is one alert, not twenty.
+        if said.is_empty()
+            || w.looking.load(Ordering::Relaxed)
+            || last.is_some_and(|t| t.elapsed() < Duration::from_millis(1500))
+        {
+            continue;
+        }
+        last = Some(Instant::now());
+        let message = said
+            .into_iter()
+            .rfind(|m| !m.is_empty())
+            .unwrap_or_else(|| "wants your attention".into());
+        if !APP_FOCUSED.load(Ordering::Relaxed) {
+            let name = w.name.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            crate::sys::notify(&format!("Roxaruu · {name}"), &message);
+        }
+        w.fired
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(message);
+        if let Some(waker) = &waker {
+            waker(true);
+        }
+    }
+}
 
 /// A read lock on a terminal's emulator that dereferences to its
 /// [`vt100::Screen`], so callers keep writing `term.screen().cell(..)` even
 /// though the parser now lives behind a mutex (written by the reader thread).
-pub struct ScreenGuard<'a>(std::sync::MutexGuard<'a, vt100::Parser>);
+pub struct ScreenGuard<'a>(std::sync::MutexGuard<'a, vt100::Parser<Alerts>>);
 
 impl std::ops::Deref for ScreenGuard<'_> {
     type Target = vt100::Screen;
@@ -69,7 +243,13 @@ pub struct TerminalPane {
     /// The vt100 emulator, written by the **reader thread** (so PTY output is
     /// consumed even when the UI event loop is parked) and read under the lock
     /// for rendering and queries.
-    parser: Arc<Mutex<vt100::Parser>>,
+    parser: Arc<Mutex<vt100::Parser<Alerts>>>,
+    /// Output timing, kept by the reader thread.
+    activity: Arc<Mutex<Activity>>,
+    pub watch: Arc<Watch>,
+    /// A program here asked for the user (bell, notification, an agent
+    /// gone quiet) while nobody was looking; cleared by [`Self::mark_viewed`].
+    pub attention: bool,
     /// Bytes the reader thread has parsed since the last [`pump`] — lets the UI
     /// know a redraw is warranted without re-draining anything itself.
     pending: Arc<AtomicU64>,
@@ -156,6 +336,15 @@ impl TerminalPane {
     /// of a focused terminal dialog) — clears the finished-unseen flag.
     pub fn mark_viewed(&mut self) {
         self.finished_unseen = false;
+        self.attention = false;
+    }
+
+    /// Alerts the watcher raised since the last call; marks the tab.
+    pub fn take_fired(&mut self) -> Vec<String> {
+        let fired =
+            std::mem::take(&mut *self.watch.fired.lock().unwrap_or_else(|e| e.into_inner()));
+        self.attention |= !fired.is_empty();
+        fired
     }
 
     /// The shell's actual live working directory (reflects any `cd` the user
@@ -245,11 +434,23 @@ impl TerminalPane {
         // the event loop (macOS does this during occlusion / resize / background),
         // the terminal contents stay current and there's never a catch-up burst —
         // the UI just renders the already-up-to-date screen whenever it next wakes.
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
+        let parser = Arc::new(Mutex::new(new_parser(rows, cols)));
+        let activity = Arc::new(Mutex::new(Activity::default()));
+        let watch = Arc::new(Watch::default());
+        {
+            let (p, a, w, waker) = (
+                Arc::downgrade(&parser),
+                Arc::downgrade(&activity),
+                Arc::downgrade(&watch),
+                waker.clone(),
+            );
+            thread::spawn(move || self::watch(p, a, w, waker));
+        }
         let pending = Arc::new(AtomicU64::new(0));
         let stamp: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
         {
             let parser = parser.clone();
+            let activity = activity.clone();
             let pending = pending.clone();
             let stamp = stamp.clone();
             thread::spawn(move || {
@@ -271,6 +472,15 @@ impl TerminalPane {
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner())
                                 .process(&buf[..n]);
+                            // Burst timing, for the watcher's "agent went quiet".
+                            {
+                                let mut a = activity.lock().unwrap_or_else(|e| e.into_inner());
+                                let now = Instant::now();
+                                if a.burst.is_none() || a.last.is_none_or(|t| now - t > BURST_GAP) {
+                                    a.burst = Some(now);
+                                }
+                                a.last = Some(now);
+                            }
                             pending.fetch_add(n as u64, Ordering::Release);
                             // Stamp the first chunk of a burst so pump() can measure
                             // how long it waited to be shown (the freeze probe).
@@ -281,7 +491,7 @@ impl TerminalPane {
                             }
                             // Nudge the UI to redraw now that there's fresh output.
                             if let Some(w) = &waker {
-                                w();
+                                w(false);
                             }
                         }
                     }
@@ -304,6 +514,9 @@ impl TerminalPane {
             cwd_dirty: true,
             last_cwd_check: Instant::now() - CWD_POLL,
             parser,
+            activity,
+            watch,
+            attention: false,
             pending,
             stamp,
             writer,
@@ -461,7 +674,7 @@ impl TerminalPane {
     ///
     /// vt100 has no getter for this, but `set_scrollback` clamps to it — so ask
     /// for an impossible offset and read back what you were given, then restore.
-    fn history_len(p: &mut vt100::Parser) -> usize {
+    fn history_len(p: &mut vt100::Parser<Alerts>) -> usize {
         let current = p.screen().scrollback();
         p.screen_mut().set_scrollback(usize::MAX);
         let len = p.screen().scrollback();
@@ -780,7 +993,7 @@ impl TerminalPane {
 
     /// Update the foreground-process label (throttled). Shows the running
     /// command, or nothing when only the shell is at the prompt.
-    fn refresh_foreground(&mut self) {
+    pub fn refresh_foreground(&mut self) {
         if self.last_proc_check.elapsed() < PROC_POLL {
             return;
         }
@@ -836,6 +1049,10 @@ impl TerminalPane {
     fn set_proc(&mut self, proc: String) {
         let was_running = self.is_running();
         self.proc = proc;
+        self.watch
+            .agent
+            .store(AGENTS.contains(&self.proc.as_str()), Ordering::Relaxed);
+        *self.watch.name.lock().unwrap_or_else(|e| e.into_inner()) = self.display_name();
         if was_running && !self.is_running() {
             self.finished_unseen = true;
         }
@@ -983,7 +1200,7 @@ impl TerminalPane {
         if p.screen().alternate_screen() {
             return false;
         }
-        *p = vt100::Parser::new(self.rows, self.cols, SCROLLBACK);
+        *p = new_parser(self.rows, self.cols);
         drop(p);
         self.scroll = 0;
         self.send_input(b"\x0c");
@@ -1009,6 +1226,10 @@ impl Drop for TerminalPane {
 
 /// Whether a process name is this app's own (a just-forked child that hasn't
 /// exec'd the shell yet).
+fn new_parser(rows: u16, cols: u16) -> vt100::Parser<Alerts> {
+    vt100::Parser::new_with_callbacks(rows, cols, SCROLLBACK, Alerts::default())
+}
+
 fn is_own_name(name: &str) -> bool {
     std::env::current_exe()
         .ok()
@@ -1724,6 +1945,57 @@ mod tests {
             before,
             "the mark drifted onto different text as output arrived"
         );
+    }
+
+    /// What Claude Code and other tools send, per channel; progress and
+    /// other OSCs aren't notifications.
+    #[test]
+    fn notification_escapes() {
+        let said = |bytes: &[u8]| {
+            let mut p = new_parser(3, 80);
+            p.process(bytes);
+            std::mem::take(&mut p.callbacks_mut().0)
+        };
+        assert_eq!(
+            said(b"\x1b]9;Claude Code: waiting for input\x07"),
+            ["Claude Code: waiting for input"]
+        );
+        assert_eq!(said(b"\x1b]9;4;1;50\x07"), Vec::<String>::new());
+        assert_eq!(
+            said(b"\x1b]777;notify;Claude Code;Task done\x1b\\"),
+            ["Claude Code: Task done"]
+        );
+        assert_eq!(
+            said(b"\x1b]99;i=1:d=0:p=title;Claude Code\x1b\\\x1b]99;i=1:p=body;All done\x1b\\"),
+            ["All done"]
+        );
+        assert_eq!(said(b"hi\x07"), [""]);
+        assert_eq!(
+            said(b"\x1b]0;a title\x07\x1b]7;file:///tmp\x07"),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Only a burst that went on a while, then stopped, counts; once.
+    #[test]
+    fn quiet_after_work() {
+        let ago = |s: f32| Some(Instant::now() - Duration::from_secs_f32(s));
+        let mut a = Activity {
+            burst: ago(10.0),
+            last: ago(4.0),
+        };
+        assert!(a.went_quiet());
+        assert!(!a.went_quiet(), "reported once");
+        let mut a = Activity {
+            burst: ago(5.0),
+            last: ago(4.0),
+        };
+        assert!(!a.went_quiet(), "a one-second blip isn't work");
+        let mut a = Activity {
+            burst: ago(10.0),
+            last: ago(1.0),
+        };
+        assert!(!a.went_quiet(), "still going");
     }
 
     #[test]

@@ -76,8 +76,10 @@ impl Terminal {
         let visible = Arc::new(AtomicBool::new(true));
         let waker: Waker = {
             let (throttle, visible) = (throttle.clone(), visible.clone());
-            Arc::new(move || {
-                if visible.load(Ordering::Relaxed) {
+            Arc::new(move |urgent| {
+                if urgent {
+                    ctx.request_repaint();
+                } else if visible.load(Ordering::Relaxed) {
                     ctx.request_repaint_after(throttle.delay());
                 }
             })

@@ -126,6 +126,9 @@ pub struct App {
     font_errors: Vec<String>,
     /// Notifications, oldest first.
     pub toasts: Vec<Toast>,
+    /// Terminal alerts raised while the window was in the background,
+    /// shown as toasts on coming back.
+    missed: Vec<String>,
     /// Text copied in the app this session, newest first (⌥V).
     pub clips: Vec<String>,
     /// The to-do list, as last read from (and written to) `todos.md`.
@@ -191,6 +194,7 @@ impl App {
             applied_fonts: None,
             font_errors: Vec::new(),
             toasts: Vec::new(),
+            missed: Vec::new(),
             clips: Vec::new(),
             todos: Vec::new(),
             help: false,
@@ -366,6 +370,7 @@ impl App {
             self.after_terminal_removed();
         }
         self.poll_terminal_requests(ctx);
+        self.poll_attention(ctx);
         self.poll_search(ctx);
         self.throttle.fps.store(
             self.config.settings.terminal_fps,
@@ -477,6 +482,22 @@ impl App {
         }) {
             return;
         }
+        // The key that opened a list closes it again.
+        let list = match command {
+            Command::Palette => Some(Mode::Commands),
+            Command::GoToFile => Some(Mode::Files),
+            Command::RecentFolders => Some(Mode::Recent),
+            Command::SearchInFiles => Some(Mode::Search),
+            Command::GoToLine => Some(Mode::Line),
+            Command::SwitchTerminal => Some(Mode::Terminals),
+            Command::Settings => Some(Mode::Settings),
+            Command::Keybindings => Some(Mode::Keybindings),
+            Command::ClipboardHistory => Some(Mode::Clipboard),
+            _ => None,
+        };
+        if list.is_some() && self.palette.as_ref().map(|p| p.mode) == list {
+            return self.close_palette(false, ctx);
+        }
         match command {
             Command::Palette => self.open_palette(Mode::Commands, ctx),
             Command::GoToFile => {
@@ -487,6 +508,8 @@ impl App {
                 }
             }
             Command::OpenFolder => {
+                // The Finder panel takes over: nothing should be left open behind it.
+                self.close_palette(false, ctx);
                 if let Some(dir) = pick_folder() {
                     self.open_folder(dir, ctx);
                 }
@@ -558,7 +581,7 @@ impl App {
             }
             Command::SearchInFiles => self.open_palette(Mode::Search, ctx),
             Command::ToggleSplit => self.editor_grid = !self.editor_grid,
-            Command::ToggleSidebar => self.toggle_sidebar(ctx),
+            Command::ToggleSidebar => self.sidebar_key(ctx),
             Command::GoToLine => self.open_palette(Mode::Line, ctx),
             Command::ToggleComment
             | Command::MoveLineUp
@@ -1812,6 +1835,24 @@ impl App {
                     pick: Pick::Folder(dir),
                 })
             })
+            // Last, whatever was typed: a folder that isn't in the list.
+            .chain(std::iter::once(Item {
+                icon: icon::FOLDER_OPEN,
+                label: "Open Another Folder…".into(),
+                detail: "choose it in Finder".into(),
+                caps: self
+                    .config
+                    .keymap
+                    .combo_for(Command::OpenFolder)
+                    .map(|k| k.caps())
+                    .unwrap_or_default(),
+                matched: Vec::new(),
+                depth: 0,
+                dim: false,
+                expanded: None,
+                tint: None,
+                pick: Pick::Command(Command::OpenFolder),
+            }))
             .collect()
     }
 

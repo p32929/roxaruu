@@ -171,8 +171,8 @@ commands! {
     SearchInFiles, "search.inFiles", "Search in Files", ["ctrl+shift+f"];
     ToggleSplit, "view.split", "Split View On / Off (All Open Files)", ["ctrl+\\"];
     ToggleWordWrap, "view.wordWrap", "Word Wrap On / Off", ["alt+z"];
-    ToggleSidebar, "view.sidebar", "Show / Hide File Tree", ["ctrl+b"];
-    FocusSidebar, "view.focusSidebar", "Focus File Tree (on the Current File)", ["ctrl+shift+e"];
+    ToggleSidebar, "view.sidebar", "File Tree: Show and Go In, or Hide", ["ctrl+b"];
+    FocusSidebar, "view.focusSidebar", "File Tree: Go In, or Back to the Editor", ["ctrl+shift+e"];
     SwitchFocus, "view.switchFocus", "Switch Between Editor and Terminal", ["ctrl+j"];
     ToggleTerminal, "terminal.toggle", "Show / Hide Terminal", ["alt+t"];
     NewTerminal, "terminal.new", "New Terminal", ["alt+n"];

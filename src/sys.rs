@@ -192,6 +192,44 @@ pub fn prevent_app_nap() {
 #[cfg(not(target_os = "macos"))]
 pub fn prevent_app_nap() {}
 
+/// A desktop notification. `osascript` needs no app bundle or permission
+/// entitlement, so it works for the bare binary too.
+// ponytail: clicking it opens Script Editor, not Roxaruu; UNUserNotificationCenter
+// fixes that but only works from a signed .app bundle.
+#[cfg(all(target_os = "macos", not(test)))]
+pub fn notify(title: &str, body: &str) {
+    let spawned = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "on run argv",
+            "-e",
+            "display notification (item 2 of argv) with title (item 1 of argv) sound name \"Glass\"",
+            "-e",
+            "end run",
+            title,
+            body,
+        ])
+        .spawn();
+    if let Ok(mut child) = spawned {
+        std::thread::spawn(move || child.wait());
+    }
+}
+
+/// Tests record notifications instead of showing them.
+#[cfg(test)]
+pub static NOTIFIED: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub fn notify(title: &str, body: &str) {
+    NOTIFIED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((title.into(), body.into()));
+}
+
+#[cfg(all(not(target_os = "macos"), not(test)))]
+pub fn notify(_title: &str, _body: &str) {}
+
 /// Bring the windows of process `pid` to the front.
 #[cfg(target_os = "macos")]
 pub fn activate(pid: i32) -> bool {
