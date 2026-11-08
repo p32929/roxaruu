@@ -1183,8 +1183,9 @@ fn headless_extras_walkthrough() {
     std::fs::write(root.join(".oxru/settings.json"), "{ wordWrap: true }\n").unwrap();
     std::fs::write(root.join("a.rs"), "alpha\nbeta\n").unwrap();
     let cfg = home.join(".config/oxru");
-    // Shared with Oxru: the to-do list and the open-window markers.
+    // Shared with Oxru: the to-do list. The open-window markers are Roxaruu's own.
     let state = dirs::config_dir().unwrap().join("oxru");
+    let running = dirs::config_dir().unwrap().join("roxaruu/running");
     let read = |p: PathBuf| std::fs::read_to_string(p).unwrap_or_default();
     let _ = std::fs::remove_file(state.join("todos.md")); // start from an empty list
 
@@ -1196,7 +1197,7 @@ fn headless_extras_walkthrough() {
     );
     assert_eq!(app(&h).config.project_keys, ["wordWrap"]);
     // This window says which folder it has open.
-    let marker = read(state.join("running").join(std::process::id().to_string()));
+    let marker = read(running.join(std::process::id().to_string()));
     assert_eq!(marker, root.to_string_lossy());
 
     // Toasts.
@@ -1282,7 +1283,7 @@ fn headless_extras_walkthrough() {
 
     // Keyboard Shortcuts: rebind, see a clash, reset.
     press(&mut h, CMD_SHIFT, Key::P);
-    type_text(&mut h, "keyboard shortcuts");
+    type_text(&mut h, "edit keyboard shortcuts");
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert_eq!(
         app(&h).palette.as_ref().map(|p| p.mode),
@@ -1355,13 +1356,14 @@ fn headless_extras_walkthrough() {
     // A folder open in another window is marked and not opened twice.
     let other = base.join("other");
     std::fs::create_dir_all(&other).unwrap();
-    // A live process named like Oxru (a symlink: a copied system binary is
-    // killed by code signing).
-    let fake = base.join("fake-oxru");
+    // A live process named like Roxaruu (a symlink: a copied system binary
+    // is killed by code signing).
+    let fake = base.join("fake-roxaruu");
     std::os::unix::fs::symlink("/bin/sleep", &fake).unwrap();
     let mut child = std::process::Command::new(&fake).arg("30").spawn().unwrap();
+    std::fs::create_dir_all(&running).unwrap();
     std::fs::write(
-        state.join("running").join(child.id().to_string()),
+        running.join(child.id().to_string()),
         other.to_string_lossy().as_bytes(),
     )
     .unwrap();
@@ -1494,6 +1496,33 @@ fn headless_every_shortcut() {
 /// Step 10: how long a window takes to show a project, and what the app
 /// costs while nobody touches it. Frames here are laid out but not drawn by
 /// a GPU, so the CPU number is the app's own share.
+#[test]
+#[ignore]
+fn headless_status_hint_click_opens_palette() {
+    // The click that opens the palette ends outside it; that release must
+    // not count as "clicked away".
+    let mut h = harness(None);
+    h.run();
+    assert!(app(&h).palette.is_none());
+    let hint = egui::pos2(155.0, 807.0); // "⌥O recent"
+    click_at(&mut h, hint, egui::PointerButton::Primary);
+    assert!(
+        app(&h).palette.is_some(),
+        "clicking a status-bar hint opens it"
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(app(&h).palette.is_some(), "and it stays open");
+    // A real click elsewhere (outside its 70% box) still closes it.
+    click_at(
+        &mut h,
+        egui::pos2(1220.0, 760.0),
+        egui::PointerButton::Primary,
+    );
+    assert!(app(&h).palette.is_none());
+}
+
 #[test]
 #[ignore]
 fn headless_idle_and_startup() {
@@ -1642,6 +1671,11 @@ fn headless_sidebar_walkthrough() {
     assert!(saved.contains("\"sidebar\": false"), "{saved}");
     press(&mut h, CMD, Key::B);
     assert!(app(&h).config.settings.sidebar);
+    // Showing it hands it the keyboard, on the open file.
+    assert_eq!(app(&h).focus, Focus::Sidebar);
+    assert_eq!(selected(&h).as_deref(), Some("src/cart/tax.rs"));
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert_eq!(app(&h).focus, Focus::Editor);
 
     // The titlebar button toggles it too. ⇥ in the shell (completing
     // `./env.sh`) must not hand it egui focus for ↵ to "click".
@@ -1657,6 +1691,7 @@ fn headless_sidebar_walkthrough() {
     assert!(!app(&h).config.settings.sidebar);
     click_at(&mut h, button, egui::PointerButton::Primary);
     assert!(app(&h).config.settings.sidebar);
+    assert_eq!(app(&h).focus, Focus::Sidebar);
     press(&mut h, ALT, Key::T);
     assert!(app(&h).terminal_focused());
     for _ in 0..4 {
@@ -1775,4 +1810,61 @@ fn headless_sidebar_walkthrough() {
             .any(|e| e.name == "target" && e.ignored)
     );
     shot(&mut h, "d4-final");
+}
+
+/// A folder open with no file: the quiet page, not the launcher. Go to
+/// File fills most of the window and its selected row says what ↵ → ← do.
+#[test]
+#[ignore]
+fn headless_project_home_and_file_browser() {
+    use crate::palette::Mode;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    for d in [".git", "src/cart", "docs"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    for f in [
+        "src/main.rs",
+        "src/cart/mod.rs",
+        "docs/guide.md",
+        "README.md",
+    ] {
+        std::fs::write(root.join(f), "x\n").unwrap();
+    }
+    let mut h = harness(Some(root.clone()));
+    h.state_mut().0.config.settings.sidebar = false;
+    shot(&mut h, "k0-project-home");
+    assert!(app(&h).active_tab().is_none());
+
+    // Its keys work from the page: ⌥F browses the tree.
+    press(&mut h, ALT, Key::F);
+    shot(&mut h, "k1-files");
+    assert_eq!(app(&h).palette.as_ref().map(|p| p.mode), Some(Mode::Files));
+    let label = |h: &Harness<'static, Root>| {
+        let p = app(h).palette.as_ref().unwrap();
+        p.items[p.selected].label.clone()
+    };
+    while label(&h) != "src" {
+        press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    }
+    shot(&mut h, "k2-folder-selected");
+    press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    shot(&mut h, "k3-folder-expanded");
+    let p = app(&h).palette.as_ref().unwrap();
+    assert!(p.items.iter().any(|i| i.label == "main.rs" && i.depth == 1));
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    shot(&mut h, "k4-file-selected");
+    assert_eq!(label(&h), "main.rs");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(app(&h).palette.is_none());
+    assert!(
+        app(&h)
+            .tab_rel(app(&h).active_tab().unwrap())
+            .ends_with("main.rs")
+    );
+
+    // The welcome launcher is for no folder only.
+    let mut h = harness(None);
+    shot(&mut h, "k5-no-folder");
 }

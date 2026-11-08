@@ -311,8 +311,11 @@ struct Btn {
     primary: bool,
 }
 
-/// Rows shown at once in the palette.
+/// Rows shown at once in a compact palette (pickers, Go to Line).
 const PALETTE_ROWS: usize = 10;
+
+/// A key hint: the keycaps, then what they do ("" for bare caps).
+type Hint = (Vec<String>, &'static str);
 
 /// Colours + scale: everything the shared widgets need. Holding a copy (not a
 /// borrow of `App`) lets them draw while app state is mutably borrowed.
@@ -357,6 +360,7 @@ impl Paint {
         label: LayoutJob,
         detail: &str,
         caps: &[String],
+        hints: &[Hint],
         indent: f32,
     ) {
         let (c, s) = (&self.c, self.s);
@@ -379,7 +383,13 @@ impl Paint {
             label,
             c.text,
         );
-        let caps_w = self.keycaps(ui, p, caps, pos2(row.right() - 12.0 * s, row.center().y));
+        let caps_w = if hints.is_empty() {
+            self.keycaps(ui, p, caps, pos2(row.right() - 12.0 * s, row.center().y))
+        } else {
+            let w = self.key_hints(ui, None, hints, 12.0, Pos2::ZERO);
+            let at = pos2(row.right() - 12.0 * s - w, row.center().y);
+            self.key_hints(ui, Some(p), hints, 12.0, at)
+        };
         if !detail.is_empty() {
             // One line, ending in "…" if it would run into the keycaps.
             let dx = lx + label_w + 10.0 * s;
@@ -455,6 +465,66 @@ impl Paint {
             x -= w + 4.0 * s;
         }
         right_center.x - x
+    }
+
+    /// Key hints left to right from `left_center`: each one's caps, then
+    /// what they do, in `size` text. Without a painter it only measures.
+    /// Returns the width.
+    fn key_hints(
+        &self,
+        ui: &egui::Ui,
+        p: Option<&egui::Painter>,
+        hints: &[Hint],
+        size: f32,
+        left_center: Pos2,
+    ) -> f32 {
+        let (c, s) = (&self.c, self.s);
+        let h = (size + 9.0) * s;
+        let mut x = left_center.x;
+        for (n, (caps, what)) in hints.iter().enumerate() {
+            if n > 0 {
+                x += 14.0 * s;
+            }
+            for cap in caps {
+                let g = ui.fonts_mut(|f| {
+                    f.layout_no_wrap(cap.clone(), fonts::keycap((size - 0.5) * s), c.text_muted)
+                });
+                let w = (g.size().x + 10.0 * s).max(h);
+                let r = Rect::from_min_size(pos2(x, left_center.y - h / 2.0), vec2(w, h));
+                if let Some(p) = p {
+                    p.rect(
+                        r,
+                        5.0 * s,
+                        c.background,
+                        Stroke::new(1.0, c.border),
+                        StrokeKind::Inside,
+                    );
+                    p.galley(r.center() - g.size() / 2.0, g, c.text_muted);
+                }
+                x += w + 3.0 * s;
+            }
+            if !what.is_empty() {
+                let g = ui.fonts_mut(|f| {
+                    f.layout_no_wrap(
+                        what.to_string(),
+                        self.font(size, Weight::Regular),
+                        c.text_muted,
+                    )
+                });
+                x += 3.0 * s;
+                if let Some(p) = p {
+                    p.galley(
+                        pos2(x, left_center.y - g.size().y / 2.0),
+                        g.clone(),
+                        c.text_muted,
+                    );
+                }
+                x += g.size().x;
+            } else {
+                x -= 3.0 * s;
+            }
+        }
+        x - left_center.x
     }
 }
 
@@ -1228,7 +1298,12 @@ impl App {
             None => push("Roxaruu", c.text_muted, Weight::Medium),
         }
         let g = ui.fonts_mut(|f| f.layout_job(job));
-        p.galley(rect.center() - g.size() / 2.0, g, c.text);
+        let text = Rect::from_center_size(rect.center(), g.size());
+        p.galley(text.min, g, c.text);
+        if let Some(tip) = self.folder_tip() {
+            ui.interact(text, egui::Id::unique("titlebar-folder"), Sense::hover())
+                .on_hover_text(tip);
+        }
 
         if resp.drag_started() {
             ui.send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -1271,7 +1346,7 @@ impl App {
             .map(|k| format!("  {}", k.caps().concat()))
             .unwrap_or_default();
         b.on_hover_text(format!(
-            "{} Sidebar{keys}",
+            "{} File Tree{keys}",
             if on { "Hide" } else { "Show" }
         ))
         .clicked()
@@ -1285,58 +1360,87 @@ impl App {
             km.combo_for(c).map(|k| (k.caps().concat(), what, Some(c)))
         };
         let raw = |keys: &str, what: &'static str| Some((keys.to_string(), what, None));
+        // Each label says what it acts on, and follows the state ("show
+        // terminal" while it's hidden, "hide terminal" while it's shown).
+        let terminal_shown = self.terminal_open && !self.terminals.is_empty();
+        let show_hide = if terminal_shown {
+            "hide terminal"
+        } else {
+            "show terminal"
+        };
         let list = if self.palette.is_some() || self.modal_open() {
             vec![]
         } else if self.terminal_focused() {
             vec![
-                cmd(Command::SwitchFocus, "editor"),
-                cmd(Command::NewTerminal, "new"),
-                cmd(Command::SwitchTerminal, "switch"),
-                cmd(Command::ClearTerminal, "clear"),
-                cmd(Command::MaximizeTerminal, "maximize"),
-                cmd(Command::ToggleTerminal, "hide"),
+                cmd(Command::SwitchFocus, "back to editor"),
+                cmd(Command::NewTerminal, "new terminal"),
+                cmd(Command::SwitchTerminal, "switch terminal"),
+                cmd(Command::ClearTerminal, "clear terminal"),
+                cmd(
+                    Command::MaximizeTerminal,
+                    if self.terminal_max {
+                        "restore terminal"
+                    } else {
+                        "maximize terminal"
+                    },
+                ),
+                cmd(Command::ToggleTerminal, show_hide),
             ]
         } else if self.focus == Focus::Sidebar && self.sidebar_shown() {
             vec![
-                raw("↵", "open"),
-                raw("space", "peek"),
-                cmd(Command::NewFile, "new"),
+                raw("↵", "open file"),
+                raw("space", "preview file"),
+                cmd(Command::NewFile, "new file"),
                 cmd(Command::RenameFile, "rename"),
-                cmd(Command::DeleteFile, "trash"),
-                raw("esc", "editor"),
+                cmd(Command::DeleteFile, "move to trash"),
+                raw("esc", "back to editor"),
             ]
         } else if self.focus == Focus::Find {
             vec![
-                raw("↵", "next"),
-                raw("⇧↵", "previous"),
-                raw("⇥", "replace field"),
-                raw("esc", "close"),
+                raw("↵", "next match"),
+                raw("⇧↵", "previous match"),
+                raw("⇥", "go to replace"),
+                raw("esc", "close find"),
             ]
         } else if self.active.is_some() {
             vec![
-                cmd(Command::GoToFile, "files"),
-                cmd(Command::Palette, "commands"),
-                cmd(Command::GoToLine, "line"),
-                cmd(Command::FocusSidebar, "tree"),
-                cmd(Command::SwitchFocus, "terminal"),
+                cmd(Command::GoToFile, "go to file"),
+                cmd(Command::Palette, "all commands"),
+                cmd(Command::GoToLine, "go to line"),
+                cmd(Command::FocusSidebar, "file tree"),
+                cmd(
+                    Command::SwitchFocus,
+                    if terminal_shown {
+                        "focus terminal"
+                    } else {
+                        "open terminal"
+                    },
+                ),
             ]
         } else if self.project.is_some() {
             vec![
-                cmd(Command::GoToFile, "files"),
-                cmd(Command::SearchInFiles, "search"),
-                cmd(Command::FocusSidebar, "tree"),
-                cmd(Command::ToggleTerminal, "terminal"),
+                cmd(Command::GoToFile, "go to file"),
+                cmd(Command::SearchInFiles, "search in files"),
+                cmd(Command::FocusSidebar, "file tree"),
+                cmd(
+                    Command::SwitchFocus,
+                    if terminal_shown {
+                        "focus terminal"
+                    } else {
+                        "open terminal"
+                    },
+                ),
             ]
         } else {
             vec![
                 cmd(Command::OpenFolder, "open folder"),
-                cmd(Command::RecentFolders, "recent"),
-                cmd(Command::Palette, "commands"),
+                cmd(Command::RecentFolders, "recent folders"),
+                cmd(Command::Palette, "all commands"),
             ]
         };
         let mut out: Vec<_> = list.into_iter().flatten().collect();
         if !out.is_empty() {
-            out.extend(cmd(Command::Help, "all keys"));
+            out.extend(cmd(Command::Help, "all shortcuts"));
         }
         out
     }
@@ -1352,12 +1456,77 @@ impl App {
         p.hline(rect.x_range(), rect.top() + 0.5, Stroke::new(1.0, c.border));
         let font = pt.font(12.0, Weight::Regular);
 
+        let mut picked = None;
+        let position = self.active_tab().map(|t| {
+            let b = &t.buf;
+            let selected = b
+                .selection()
+                .map(|(a, e)| format!("  ({} selected)", e - a))
+                .unwrap_or_default();
+            format!(
+                "Ln {}, Col {}{selected}",
+                b.cursor_row() + 1,
+                b.cursor_col() + 1
+            )
+        });
+        let lang = self
+            .active_tab()
+            .map(|t| t.buf.lang.map_or("Plain Text", |l| l.name).to_string());
+        let stats = [
+            self.mem_kb
+                .map(|kb| format!("{}  {:.0} MB", icon::CHIP, kb as f64 / 1024.0)),
+            self.fps.map(|f| format!("{}  {f:.1} fps", icon::PULSE)),
+            lang,
+        ];
+        // Right to left. Only the position does something on click, so only
+        // it looks like a button.
+        let mut x = rect.right() - 12.0 * s;
+        for text in stats.into_iter().flatten() {
+            let r = p.text(
+                pos2(x, rect.center().y),
+                Align2::RIGHT_CENTER,
+                text,
+                font.clone(),
+                c.text_subtle,
+            );
+            x = r.left() - 20.0 * s;
+        }
+        if let Some(position) = position {
+            let g = ui.fonts_mut(|f| f.layout_no_wrap(position, font.clone(), c.text_subtle));
+            let r = Rect::from_min_size(
+                pos2(x - g.size().x - 6.0 * s, rect.top() + 3.0 * s),
+                vec2(g.size().x + 12.0 * s, rect.height() - 6.0 * s),
+            );
+            let keys = self
+                .config
+                .keymap
+                .combo_for(Command::GoToLine)
+                .map(|k| format!("  {}", k.caps().concat()))
+                .unwrap_or_default();
+            // Clicking "Ln 12, Col 4" is Go to Line, as in VS Code.
+            let go = ui.interact(r, egui::Id::unique("status-position"), Sense::click());
+            if go.hovered() {
+                ui.painter().rect_filled(r, 4.0 * s, c.hover);
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            ui.painter().galley(
+                pos2(r.left() + 6.0 * s, rect.center().y - g.size().y / 2.0),
+                g,
+                c.text_subtle,
+            );
+            if go.on_hover_text(format!("Go to Line{keys}")).clicked() {
+                picked = Some(Command::GoToLine);
+            }
+            x = r.left();
+        }
+        // The key hints get everything left of the stats.
+        let stats_left = x;
+
         let left = match self.status_line() {
             Some(msg) => Some((format!("{}  {msg}", icon::ERROR), c.error)),
             None if self.indexing() => Some(("Indexing files…".to_string(), c.text_subtle)),
             None => None,
         };
-        let mut picked = None;
         if let Some((text, color)) = left {
             p.text(
                 pos2(rect.left() + 12.0 * s, rect.center().y),
@@ -1381,8 +1550,8 @@ impl App {
                 });
                 let cap_w = kg.size().x + 10.0 * s;
                 let w = cap_w + 5.0 * s + wg.size().x;
-                if x + w > rect.center().x {
-                    break; // leave the right side to the position
+                if x + w > stats_left - 16.0 * s {
+                    break; // up to the stats on the right
                 }
                 let item = Rect::from_min_size(
                     pos2(x - 4.0 * s, rect.top() + 3.0 * s),
@@ -1424,56 +1593,6 @@ impl App {
             }
         }
 
-        let position = self.active_tab().map(|t| {
-            let b = &t.buf;
-            let selected = b
-                .selection()
-                .map(|(a, e)| format!("  ({} selected)", e - a))
-                .unwrap_or_default();
-            format!(
-                "Ln {}, Col {}{selected}",
-                b.cursor_row() + 1,
-                b.cursor_col() + 1
-            )
-        });
-        let lang = self
-            .active_tab()
-            .map(|t| t.buf.lang.map_or("Plain Text", |l| l.name).to_string());
-        let stats = [
-            position,
-            lang,
-            self.fps.map(|f| format!("{}  {f:.1} fps", icon::PULSE)),
-            self.mem_kb
-                .map(|kb| format!("{}  {:.0} MB", icon::CHIP, kb as f64 / 1024.0)),
-        ];
-        let right = stats
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("     ");
-        let r = p.text(
-            rect.right_center() - vec2(12.0 * s, 0.0),
-            Align2::RIGHT_CENTER,
-            right,
-            font,
-            c.text_subtle,
-        );
-        // Clicking "Ln 12, Col 4" is Go to Line, as in VS Code.
-        if self.active.is_some() {
-            let keys = self
-                .config
-                .keymap
-                .combo_for(Command::GoToLine)
-                .map(|k| format!("  {}", k.caps().concat()))
-                .unwrap_or_default();
-            let go = ui
-                .interact(r, egui::Id::unique("status-position"), Sense::click())
-                .on_hover_text(format!("Go to Line{keys}"));
-            if go.clicked() {
-                picked = Some(Command::GoToLine);
-            }
-        }
-
         // Hover lists every config problem, not just the first.
         if self.errors().next().is_some() {
             resp.on_hover_ui(|ui| {
@@ -1488,25 +1607,119 @@ impl App {
     /// The start screen: brand (or the open project) and a card of actions
     /// that works with the mouse and the keyboard (↑/↓, Enter). Returns the
     /// command to run, if one was chosen.
-    fn welcome(&mut self, ui: &mut egui::Ui) -> Option<Command> {
-        let actions: &[Command] = if self.project.is_some() {
-            &[
-                Command::GoToFile,
-                Command::SearchInFiles,
-                Command::ToggleTerminal,
-                Command::Palette,
-                Command::RecentFolders,
-                Command::Settings,
-            ]
+    /// A folder open, no file: a quiet page, the folder and the keys for
+    /// what usually comes next (the launcher card is for no folder).
+    fn project_home(&mut self, ui: &mut egui::Ui) -> Option<Command> {
+        let project = self.project.as_ref()?;
+        let pt = self.paint();
+        let (c, s) = (&pt.c, pt.s);
+        let terminal = if self.terminal_open && !self.terminals.is_empty() {
+            "focus terminal"
         } else {
-            &[
-                Command::OpenFolder,
-                Command::RecentFolders,
-                Command::Palette,
-                Command::Settings,
-                Command::Quit,
-            ]
+            "open terminal"
         };
+        let actions = [
+            (Command::GoToFile, "go to file"),
+            (Command::SearchInFiles, "search in files"),
+            (Command::FocusSidebar, "file tree"),
+            (Command::SwitchFocus, terminal),
+            (Command::Palette, "all commands"),
+            (Command::Help, "all shortcuts"),
+        ];
+        let rows: Vec<(Command, Vec<String>, &str)> = actions
+            .into_iter()
+            .filter_map(|(c, what)| {
+                Some((
+                    c,
+                    vec![self.config.keymap.combo_for(c)?.caps().concat()],
+                    what,
+                ))
+            })
+            .collect();
+        let area = ui.max_rect();
+        let p = ui.painter().clone();
+        let layout = |text: String, font: FontId, color: Color32| {
+            ui.fonts_mut(|f| f.layout_no_wrap(text, font, color))
+        };
+        let name = layout(
+            project.name.clone(),
+            pt.font(22.0, Weight::SemiBold),
+            c.text_muted,
+        );
+        let path = layout(
+            tilde(&project.root.to_string_lossy()),
+            pt.font(12.5, Weight::Regular),
+            c.text_subtle,
+        );
+        let row_h = 30.0 * s;
+        let total = name.size().y + 6.0 * s + path.size().y + 28.0 * s + row_h * rows.len() as f32;
+        let cx = area.center().x;
+        let mut y = (area.center().y - total / 2.0).max(area.top() + 16.0);
+        p.galley(
+            pos2(cx - name.size().x / 2.0, y),
+            name.clone(),
+            c.text_muted,
+        );
+        y += name.size().y + 6.0 * s;
+        p.galley(
+            pos2(cx - path.size().x / 2.0, y),
+            path.clone(),
+            c.text_subtle,
+        );
+        y += path.size().y + 28.0 * s;
+        // Two columns meeting in the middle: what it does | its keys.
+        let mut chosen = None;
+        for (command, caps, what) in rows {
+            let mid = pos2(cx, y + row_h / 2.0);
+            let label = layout(
+                what.to_string(),
+                pt.font(13.5, Weight::Regular),
+                c.text_muted,
+            );
+            let caps_w = pt.key_hints(ui, None, &[(caps.clone(), "")], 12.5, Pos2::ZERO);
+            let hit = Rect::from_min_max(
+                pos2(cx - 12.0 * s - label.size().x, y),
+                pos2(cx + 12.0 * s + caps_w, y + row_h),
+            );
+            let resp = ui.interact(hit, ui.scope_id().with(("home", what)), Sense::click());
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                chosen = Some(command);
+            }
+            let color = if resp.hovered() { c.text } else { c.text_muted };
+            p.galley(
+                pos2(
+                    mid.x - 12.0 * s - label.size().x,
+                    mid.y - label.size().y / 2.0,
+                ),
+                label,
+                color,
+            );
+            pt.key_hints(
+                ui,
+                Some(&p),
+                &[(caps, "")],
+                12.5,
+                pos2(mid.x + 12.0 * s, mid.y),
+            );
+            y += row_h;
+        }
+        chosen
+    }
+
+    fn welcome(&mut self, ui: &mut egui::Ui) -> Option<Command> {
+        if self.project.is_some() {
+            return self.project_home(ui);
+        }
+        let actions: &[Command] = &[
+            Command::OpenFolder,
+            Command::RecentFolders,
+            Command::Palette,
+            Command::Settings,
+            Command::Quit,
+        ];
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
         let n = actions.len();
@@ -1534,18 +1747,11 @@ impl App {
         let card_w = (440.0 * s).min(area.width() - 32.0);
         let card_h = row_h * n as f32 + pad * 2.0;
 
-        let (title, subtitle, tile_icon) = match &self.project {
-            Some(p) => (
-                p.name.clone(),
-                tilde(&p.root.to_string_lossy()),
-                icon::FOLDER_OPEN,
-            ),
-            None => (
-                "Roxaruu".into(),
-                "Your code and all its terminals, in one window.".into(),
-                icon::TERMINAL,
-            ),
-        };
+        let (title, subtitle, tile_icon): (String, String, _) = (
+            "Roxaruu".into(),
+            "Your code and all its terminals, in one window.".into(),
+            icon::TERMINAL,
+        );
         let layout = |text: String, font: FontId, color: Color32| {
             ui.fonts_mut(|f| f.layout_no_wrap(text, font, color))
         };
@@ -1642,6 +1848,7 @@ impl App {
                 pt.label(title, &[], c.text),
                 "",
                 &caps,
+                &[],
                 0.0,
             );
         }
@@ -3369,22 +3576,9 @@ impl App {
         let indexing = self.indexing();
         let searching = self.searching();
         let search_summary = self.search_summary();
-        // Go to File's footer: the file actions, with their current keys.
-        let file_hints = {
-            let key = |c: Command| self.config.keymap.combo_for(c).map(|k| k.caps().concat());
-            [
-                (Command::NewFile, "new"),
-                (Command::NewFolder, "folder"),
-                (Command::RenameFile, "rename"),
-                (Command::DeleteFile, "trash"),
-                (Command::RevealInFinder, "reveal"),
-            ]
-            .into_iter()
-            .filter_map(|(c, what)| Some(format!("{} {what}", key(c)?)))
-            .collect::<Vec<_>>()
-            .join("    ")
-        };
         let build = self.project.as_ref().is_some_and(|p| p.build);
+        let tree = mode == Mode::Files && self.palette.as_ref().is_some_and(|p| p.query.is_empty());
+        let footer = self.palette_footer(mode, tree, build);
         let no_match_hint = match self.config.keymap.combo_for(Command::ToggleBuildFolders) {
             Some(k) => format!(
                 "No matches — {} to include node_modules, target…",
@@ -3413,7 +3607,6 @@ impl App {
             .map(|i| i.title);
 
         // Navigation keys, taken before the search box can see them.
-        let tree = mode == Mode::Files && self.palette.as_ref().is_some_and(|p| p.query.is_empty());
         let (up, down, enter, esc, left, right) = ctx.input_mut(|i| {
             let mut k = |key| i.consume_key(Modifiers::NONE, key);
             (
@@ -3448,9 +3641,29 @@ impl App {
         let dim = Color32::from_black_alpha(if self.config.theme.dark { 90 } else { 40 });
         ctx.layer_painter(backdrop).rect_filled(screen, 0.0, dim);
 
-        let width = (620.0 * s).min(screen.width() - 32.0);
+        // Lists you browse get most of the window (70% each way); short
+        // pickers stay compact, so a theme or font previews around them.
+        let big = !matches!(
+            mode,
+            Mode::Themes | Mode::UiFonts | Mode::CodeFonts | Mode::Line | Mode::Terminals
+        );
         let row_h = 36.0 * s;
-        let pos = pos2(screen.center().x - width / 2.0, screen.top() + 64.0 * s);
+        let (bar_h, foot_h) = (48.0 * s, 36.0 * s);
+        let (width, top, rows) = if big {
+            let h = screen.height() * 0.7;
+            let rows = ((h - bar_h - foot_h * 1.8 - 12.0 * s) / row_h)
+                .floor()
+                .max(3.0) as usize;
+            (
+                (screen.width() * 0.7).max(620.0 * s),
+                screen.top() + (screen.height() - h) / 2.0,
+                rows,
+            )
+        } else {
+            (620.0 * s, screen.top() + 64.0 * s, PALETTE_ROWS)
+        };
+        let width = width.min(screen.width() - 32.0);
+        let pos = pos2(screen.center().x - width / 2.0, top);
         let (mut moved, mut accept, mut query_changed, mut toggle_row) =
             (false, false, false, None);
 
@@ -3474,7 +3687,7 @@ impl App {
                 let Some(pal) = &mut self.palette else { return };
 
                 // Search box.
-                let (bar, _) = ui.allocate_exact_size(vec2(width, 48.0 * s), Sense::hover());
+                let (bar, _) = ui.allocate_exact_size(vec2(width, bar_h), Sense::hover());
                 let icon_pos = pos2(bar.left() + 18.0 * s, bar.center().y);
                 ui.painter().text(
                     icon_pos,
@@ -3483,9 +3696,37 @@ impl App {
                     pt.font(16.0, Weight::Regular),
                     c.text_subtle,
                 );
+                // How many there are, at the search box's end.
+                let noun = if tree { "items" } else { "results" };
+                let count = if mode == Mode::Search && !pal.query.is_empty() && !searching {
+                    search_summary.clone()
+                } else if pal.items.len() > rows {
+                    format!("{} {noun}", pal.items.len())
+                } else {
+                    String::new()
+                };
+                let count = match mode {
+                    Mode::Files | Mode::Search if build => {
+                        format!("{count}  + build folders").trim().to_string()
+                    }
+                    Mode::Todos => todo_summary.clone(),
+                    Mode::Clipboard if !pal.ticked.is_empty() => {
+                        format!("{} ticked", pal.ticked.len())
+                    }
+                    Mode::Settings => "saved to settings.json".into(),
+                    Mode::Keybindings if conflicts > 0 => format!("{conflicts} clashing"),
+                    _ => count,
+                };
+                let count_r = ui.painter().text(
+                    pos2(bar.right() - 18.0 * s, bar.center().y),
+                    Align2::RIGHT_CENTER,
+                    count,
+                    pt.font(12.5, Weight::Regular),
+                    c.text_subtle,
+                );
                 let edit_rect = Rect::from_min_max(
                     pos2(bar.left() + 46.0 * s, bar.top()),
-                    pos2(bar.right() - 16.0 * s, bar.bottom()),
+                    pos2(count_r.left() - 16.0 * s, bar.bottom()),
                 );
                 let hint = egui::RichText::new(mode.placeholder())
                     .color(c.text_subtle)
@@ -3526,15 +3767,16 @@ impl App {
                 );
 
                 // Results.
-                pal.follow(PALETTE_ROWS);
-                let shown = pal.items.len().saturating_sub(pal.scroll).min(PALETTE_ROWS);
-                let list_h = shown.max(1) as f32 * row_h;
+                pal.follow(rows);
+                let shown = pal.items.len().saturating_sub(pal.scroll).min(rows);
+                // A big list keeps its size as results come and go.
+                let list_h = if big { rows } else { shown.max(1) } as f32 * row_h;
                 let (list, list_resp) =
                     ui.allocate_exact_size(vec2(width, list_h + 12.0 * s), Sense::hover());
                 let list = list.shrink(6.0 * s);
                 if list_resp.hovered() {
                     let dy = ui.input(|i| i.smooth_scroll_delta.y);
-                    let max = pal.items.len().saturating_sub(PALETTE_ROWS) as f32;
+                    let max = pal.items.len().saturating_sub(rows) as f32;
                     if dy.abs() > 0.5 {
                         pal.scroll =
                             (pal.scroll as f32 - (dy / row_h).round()).clamp(0.0, max) as usize;
@@ -3621,6 +3863,13 @@ impl App {
                     } else {
                         &item.caps[..]
                     };
+                    // The selected file or folder says what ↵ / → / ← do to it.
+                    let hints: Vec<Hint> = match (mode, item.expanded) {
+                        _ if mode != Mode::Files || idx != pal.selected => Vec::new(),
+                        (_, Some(false)) => vec![(vec!["→".into()], "expand")],
+                        (_, Some(true)) => vec![(vec!["←".into()], "collapse")],
+                        (_, None) => vec![(vec!["↵".into()], "open")],
+                    };
                     pt.row(
                         ui,
                         &painter,
@@ -3630,76 +3879,80 @@ impl App {
                         label,
                         &item.detail,
                         caps,
+                        &hints,
                         indent,
                     );
                 }
 
                 // Footer: key hints and the result count.
-                let (foot, _) = ui.allocate_exact_size(vec2(width, 30.0 * s), Sense::hover());
+                // The keys, in a grid spread over the full width: as many
+                // columns as fit, each as wide as its widest hint, the
+                // spare room shared out between them.
+                let hints: Vec<Hint> = footer.into_iter().filter(|h| h.1 != "│").collect();
+                let room = width - 36.0 * s;
+                let widths: Vec<f32> = hints
+                    .iter()
+                    .map(|h| pt.key_hints(ui, None, std::slice::from_ref(h), 12.0, Pos2::ZERO))
+                    .collect();
+                let col_widths = |cols: usize| -> Vec<f32> {
+                    (0..cols)
+                        .map(|c| {
+                            widths
+                                .iter()
+                                .skip(c)
+                                .step_by(cols)
+                                .fold(0.0, |a: f32, w| a.max(*w))
+                        })
+                        .collect()
+                };
+                let min_gap = 24.0 * s;
+                let cols = (1..=hints.len())
+                    .rev()
+                    .find(|&n| col_widths(n).iter().sum::<f32>() + min_gap * (n - 1) as f32 <= room)
+                    .unwrap_or(1);
+                // Balanced rows: 6 hints that fit 5 across go 3 and 3, not 5 and 1.
+                let lines = hints.len().div_ceil(cols).max(1);
+                let cols = hints.len().div_ceil(lines).max(1);
+                let col_w = col_widths(cols);
+                let used: f32 = col_w.iter().sum();
+                let gap = if cols > 1 {
+                    ((room - used) / (cols - 1) as f32).min(96.0 * s)
+                } else {
+                    0.0
+                };
+                let x0 = 18.0 * s + (room - used - gap * (cols - 1) as f32) / 2.0;
+                let line_h = 28.0 * s;
+                let (foot, _) = ui.allocate_exact_size(
+                    vec2(width, foot_h + line_h * (lines - 1) as f32),
+                    Sense::hover(),
+                );
                 ui.painter()
                     .hline(foot.x_range(), foot.top() + 0.5, Stroke::new(1.0, c.border));
-                let hints = match mode {
-                    Mode::Files => format!("↵ open    {file_hints}"),
-                    Mode::Themes | Mode::UiFonts | Mode::CodeFonts => {
-                        "↑↓ preview    ↵ save    esc cancel".into()
-                    }
-                    Mode::Todos => {
-                        "↵ add · tick    ⌘⌫ delete    ⇧⌘⌫ clear finished    ⌘E edit as text".into()
-                    }
-                    Mode::Clipboard => {
-                        "↵ paste    ⇥ tick to paste several    ⌘⌫ clear history".into()
-                    }
-                    Mode::Settings => {
-                        "← → change    ↵ next value · open picker    esc close".into()
-                    }
-                    Mode::Keybindings if capture_title.is_some() => {
-                        "Press any key combination    esc cancel".into()
-                    }
-                    Mode::Keybindings => {
-                        "↵ change shortcut    ⌘⌫ back to default    esc close".into()
-                    }
-                    _ => "↑↓ move    ↵ select    esc close".into(),
-                };
-                let noun = if tree { "items" } else { "results" };
-                let count = if mode == Mode::Search && !pal.query.is_empty() && !searching {
-                    search_summary.clone()
-                } else if pal.items.len() > PALETTE_ROWS {
-                    format!("{} {noun}", pal.items.len())
-                } else {
-                    String::new()
-                };
-                let count = match mode {
-                    Mode::Files | Mode::Search if build => {
-                        format!("{count}  + build folders").trim().to_string()
-                    }
-                    Mode::Todos => todo_summary.clone(),
-                    Mode::Clipboard if !pal.ticked.is_empty() => {
-                        format!("{} ticked", pal.ticked.len())
-                    }
-                    Mode::Settings => "saved to settings.json".into(),
-                    Mode::Keybindings if conflicts > 0 => format!("{conflicts} clashing"),
-                    _ => count,
-                };
-                let f = pt.font(11.5, Weight::Regular);
-                ui.painter().text(
-                    pos2(foot.left() + 18.0 * s, foot.center().y),
-                    Align2::LEFT_CENTER,
-                    hints,
-                    f.clone(),
-                    c.text_subtle,
-                );
-                ui.painter().text(
-                    pos2(foot.right() - 18.0 * s, foot.center().y),
-                    Align2::RIGHT_CENTER,
-                    count,
-                    f,
-                    c.text_subtle,
-                );
+                for (i, h) in hints.iter().enumerate() {
+                    let (row, col) = (i / cols, i % cols);
+                    let x = foot.left() + x0 + col_w[..col].iter().sum::<f32>() + gap * col as f32;
+                    pt.key_hints(
+                        ui,
+                        Some(ui.painter()),
+                        std::slice::from_ref(h),
+                        12.0,
+                        pos2(x, foot.top() + foot_h / 2.0 + line_h * row as f32),
+                    );
+                }
             });
         });
 
         // A click outside closes (and cancels any preview).
-        let outside = ctx.input(|i| i.pointer.any_click())
+        let armed = match &mut self.palette {
+            Some(p) => {
+                p.armed |=
+                    ctx.cumulative_pass_nr() > p.opened && ctx.input(|i| i.pointer.any_pressed());
+                p.armed
+            }
+            None => false,
+        };
+        let outside = armed
+            && ctx.input(|i| i.pointer.any_click())
             && ctx
                 .pointer_interact_pos()
                 .is_some_and(|p| !inner.response.rect.contains(p));
@@ -3716,6 +3969,99 @@ impl App {
             self.palette_accept(ctx);
         } else if outside {
             self.close_palette(false, ctx);
+        }
+    }
+}
+
+impl App {
+    /// The palette's footer: the keys that work here, with their current
+    /// bindings. For files, those on the selected item come first, then a
+    /// "│", then the ones that don't need one.
+    fn palette_footer(&self, mode: Mode, tree: bool, build: bool) -> Vec<Hint> {
+        let k = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        let esc = (k("esc"), "close");
+        match mode {
+            Mode::Files => {
+                let key = |c: Command| {
+                    self.config
+                        .keymap
+                        .combo_for(c)
+                        .map(|k| vec![k.caps().concat()])
+                };
+                let mut v = vec![(k("↵"), "open")];
+                if tree {
+                    v.push((k("→ ←"), "expand / collapse"));
+                }
+                v.extend(
+                    [
+                        (Command::RenameFile, "rename"),
+                        (Command::DeleteFile, "move to trash"),
+                        (Command::RevealInFinder, "reveal in Finder"),
+                    ]
+                    .into_iter()
+                    .filter_map(|(c, what)| Some((key(c)?, what))),
+                );
+                v.push((Vec::new(), "│"));
+                v.extend(
+                    [
+                        (Command::NewFile, "new file"),
+                        (Command::NewFolder, "new folder"),
+                        (
+                            Command::ToggleBuildFolders,
+                            if build {
+                                "skip build folders"
+                            } else {
+                                "include build folders"
+                            },
+                        ),
+                    ]
+                    .into_iter()
+                    .filter_map(|(c, what)| Some((key(c)?, what))),
+                );
+                v.push(esc);
+                v
+            }
+            Mode::Themes | Mode::UiFonts | Mode::CodeFonts => {
+                vec![
+                    (k("↑ ↓"), "preview"),
+                    (k("↵"), "save"),
+                    (k("esc"), "cancel"),
+                ]
+            }
+            Mode::Todos => vec![
+                (k("↵"), "add · tick"),
+                (k("⌘⌫"), "delete"),
+                (k("⇧⌘⌫"), "clear finished"),
+                (k("⌘E"), "edit as text"),
+                esc,
+            ],
+            Mode::Clipboard => vec![
+                (k("↵"), "paste"),
+                (k("⇥"), "tick to paste several"),
+                (k("⌘⌫"), "clear history"),
+                esc,
+            ],
+            Mode::Settings => vec![
+                (k("← →"), "change"),
+                (k("↵"), "next value · open picker"),
+                esc,
+            ],
+            Mode::Keybindings if self.capturing() => {
+                vec![
+                    (Vec::new(), "Press any key combination"),
+                    (k("esc"), "cancel"),
+                ]
+            }
+            Mode::Keybindings => vec![
+                (k("↵"), "change shortcut"),
+                (k("⌘⌫"), "back to default"),
+                esc,
+            ],
+            Mode::Commands => vec![(k("↑ ↓"), "move"), (k("↵"), "run"), esc],
+            Mode::Recent => vec![(k("↑ ↓"), "move"), (k("↵"), "open folder"), esc],
+            Mode::Search => vec![(k("↑ ↓"), "move"), (k("↵"), "open at match"), esc],
+            Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to it"), esc],
+            Mode::Line => vec![(k("↵"), "go"), esc],
         }
     }
 }
@@ -3791,6 +4137,27 @@ fn help_rows(ui: &mut egui::Ui, pt: &Paint, rows: &[(String, Vec<String>)]) {
         } else {
             pt.keycaps(ui, p, caps, rect.right_center());
         }
+    }
+}
+
+impl App {
+    /// Where the open folder is, and how to change it: the title bar's and
+    /// the sidebar header's tooltip.
+    pub(crate) fn folder_tip(&self) -> Option<String> {
+        let p = self.project.as_ref()?;
+        let key = |c: Command| {
+            self.config
+                .keymap
+                .combo_for(c)
+                .map(|k| k.caps().concat())
+                .unwrap_or_default()
+        };
+        Some(format!(
+            "Folder open in this window:\n{}\n\n{}  recent folders   {}  open another (new window)",
+            tilde(&p.root.to_string_lossy()),
+            key(Command::RecentFolders),
+            key(Command::OpenFolder),
+        ))
     }
 }
 

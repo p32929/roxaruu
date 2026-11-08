@@ -727,10 +727,13 @@ impl App {
         if self.project.as_ref().is_some_and(|p| p.root == dir) {
             return;
         }
-        if self.open_elsewhere(&dir) {
+        if let Some(pid) = self.open_elsewhere(&dir) {
+            // One window per folder: go to the one that has it.
+            let shown = crate::sys::activate(pid);
             return self.notify(format!(
-                "{} is already open in another window",
-                display_name(&dir)
+                "{} is already open in another window{}",
+                display_name(&dir),
+                if shown { ", switched to it" } else { "" }
             ));
         }
         if self.project.is_some() {
@@ -1490,6 +1493,7 @@ impl App {
     pub fn open_palette(&mut self, mode: Mode, ctx: &egui::Context) {
         self.close_palette(false, ctx);
         let mut p = Palette::new(mode);
+        p.opened = ctx.cumulative_pass_nr();
         p.revert = match mode {
             Mode::Themes => Some(Revert::Theme(self.config.theme.clone())),
             Mode::UiFonts | Mode::CodeFonts => Some(Revert::Settings(self.config.settings.clone())),
@@ -1786,8 +1790,11 @@ impl App {
                     Some(rest) if !home.is_empty() => format!("~{rest}"),
                     _ => full.into_owned(),
                 };
-                let elsewhere = self.open_elsewhere(&dir);
-                let detail = if elsewhere {
+                let here = self.project.as_ref().is_some_and(|p| p.root == dir);
+                let elsewhere = self.open_elsewhere(&dir).is_some();
+                let detail = if here {
+                    format!("open in this window  ·  {detail}")
+                } else if elsewhere {
                     format!("open in another window  ·  {detail}")
                 } else {
                     detail

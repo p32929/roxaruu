@@ -91,7 +91,7 @@ impl Setting {
             Setting::WordWrap => "Word wrap",
             Setting::CurrentLine => "Highlight the current line",
             Setting::IndentGuides => "Indent guides",
-            Setting::Sidebar => "File tree sidebar",
+            Setting::Sidebar => "Show file tree",
         }
     }
 
@@ -608,12 +608,13 @@ impl App {
     // ---- other windows ----------------------------------------------------
 
     /// Whether another Oxru window has `dir` open.
-    pub fn open_elsewhere(&self, dir: &Path) -> bool {
+    pub fn open_elsewhere(&self, dir: &Path) -> Option<i32> {
         let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
         let dir = canon(dir);
         crate::instances::open_folders()
-            .iter()
-            .any(|o| canon(o) == dir)
+            .into_iter()
+            .find(|(_, o)| canon(o) == dir)
+            .map(|(pid, _)| pid)
     }
 }
 

@@ -23,9 +23,14 @@ impl App {
 
     pub fn toggle_sidebar(&mut self, ctx: &egui::Context) {
         let on = !self.config.settings.sidebar;
-        self.config.settings.sidebar = on;
-        if !on && self.focus == Focus::Sidebar {
-            self.focus = Focus::Editor;
+        if on {
+            // Showing the tree is asking to use it: the keyboard goes there.
+            self.focus_sidebar();
+        } else {
+            self.config.settings.sidebar = false;
+            if self.focus == Focus::Sidebar {
+                self.focus = Focus::Editor;
+            }
         }
         self.save_choice_quietly("sidebar", on, ctx);
     }
@@ -131,6 +136,7 @@ impl App {
 
     pub(super) fn sidebar_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        let tip = self.folder_tip();
         // ponytail: polls the open folders every 2s; a file watcher if trees get huge.
         if self
             .sidebar
@@ -175,7 +181,7 @@ impl App {
                 let buttons = [
                     (
                         icon::SIDEBAR,
-                        format!("Hide Sidebar{}", caps(Command::ToggleSidebar)),
+                        format!("Hide File Tree{}", caps(Command::ToggleSidebar)),
                         Act::Run(Command::ToggleSidebar),
                     ),
                     (
@@ -212,11 +218,13 @@ impl App {
                     overflow_character: Some('…'),
                 };
                 let g = ui.fonts_mut(|f| f.layout_job(job));
-                ui.painter().galley(
-                    pos2(head.left() + 16.0 * s, head.center().y - g.size().y / 2.0),
-                    g,
-                    c.text_muted,
-                );
+                let at = pos2(head.left() + 16.0 * s, head.center().y - g.size().y / 2.0);
+                let name = Rect::from_min_size(at, g.size());
+                ui.painter().galley(at, g, c.text_muted);
+                if let Some(tip) = tip {
+                    ui.interact(name, egui::Id::unique("sidebar-folder"), Sense::hover())
+                        .on_hover_text(tip);
+                }
             },
         );
 

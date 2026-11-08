@@ -192,6 +192,20 @@ pub fn prevent_app_nap() {
 #[cfg(not(target_os = "macos"))]
 pub fn prevent_app_nap() {}
 
+/// Bring the windows of process `pid` to the front.
+#[cfg(target_os = "macos")]
+pub fn activate(pid: i32) -> bool {
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+    NSRunningApplication::runningApplicationWithProcessIdentifier(pid).is_some_and(|app| {
+        app.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows)
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn activate(_pid: i32) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

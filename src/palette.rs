@@ -132,6 +132,11 @@ pub struct Palette {
     pub ticked: Vec<usize>,
     /// Keyboard Shortcuts: waiting for the new key for this command.
     pub capture: Option<Command>,
+    /// A mouse button went down while it was open. Until then a release
+    /// outside is the end of the click that opened it, not a click away.
+    pub armed: bool,
+    /// The egui pass it opened in; presses from that pass don't arm it.
+    pub opened: u64,
 }
 
 impl Palette {
@@ -145,6 +150,8 @@ impl Palette {
             revert: None,
             ticked: Vec::new(),
             capture: None,
+            armed: false,
+            opened: 0,
         }
     }
 

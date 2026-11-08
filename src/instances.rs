@@ -10,9 +10,10 @@
 
 use std::path::{Path, PathBuf};
 
-/// `<config_dir>/oxru/running/` — Oxru's, so each app sees the other's windows.
+/// `<config_dir>/roxaruu/running/`: Roxaruu's own. (It once shared Oxru's,
+/// which made folders open in Oxru look "already open" here.)
 fn running_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("oxru").join("running"))
+    dirs::config_dir().map(|d| d.join("roxaruu").join("running"))
 }
 
 /// Whether process `pid` is still alive (so its marker isn't stale).
@@ -28,6 +29,16 @@ fn pid_alive(pid: i32) -> bool {
 /// instances that died without cleaning up and needs the exact same "is this
 /// PID still an Oxru?" question answered.
 pub(crate) fn pid_is_oxru(pid: i32) -> bool {
+    pid_runs(pid, &["oxru", "roxaruu"])
+}
+
+/// Whether `pid` is a live Roxaruu window.
+fn pid_is_roxaruu(pid: i32) -> bool {
+    pid_runs(pid, &["roxaruu"])
+}
+
+/// Whether `pid` is alive and its binary's name contains one of `names`.
+fn pid_runs(pid: i32, names: &[&str]) -> bool {
     if !pid_alive(pid) {
         return false;
     }
@@ -41,8 +52,7 @@ pub(crate) fn pid_is_oxru(pid: i32) -> bool {
     };
     let comm = String::from_utf8_lossy(&out.stdout);
     let comm = comm.trim().rsplit('/').next().unwrap_or("").to_lowercase();
-    // Roxaruu or Oxru: they share the folder and see each other's windows.
-    comm.contains("oxru") || comm.contains("roxaruu")
+    names.iter().any(|n| comm.contains(n))
 }
 
 /// Mark this process as having `folder` open.
@@ -62,8 +72,9 @@ pub fn unregister() {
     }
 }
 
-/// Folders open in any other live Oxru window (stale markers pruned in passing).
-pub fn open_folders() -> Vec<PathBuf> {
+/// Folders open in other live Roxaruu windows, with each window's pid
+/// (stale markers pruned in passing).
+pub fn open_folders() -> Vec<(i32, PathBuf)> {
     running_dir()
         .map(|d| open_folders_in(&d, std::process::id()))
         .unwrap_or_default()
@@ -79,7 +90,7 @@ fn register_in(dir: &Path, pid: u32, folder: &Path) {
     );
 }
 
-fn open_folders_in(dir: &Path, me: u32) -> Vec<PathBuf> {
+fn open_folders_in(dir: &Path, me: u32) -> Vec<(i32, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -91,14 +102,14 @@ fn open_folders_in(dir: &Path, me: u32) -> Vec<PathBuf> {
         if pid as u32 == me {
             continue;
         }
-        if !pid_is_oxru(pid) {
+        if !pid_is_roxaruu(pid) {
             let _ = std::fs::remove_file(e.path()); // prune dead/stale window
             continue;
         }
         if let Ok(content) = std::fs::read_to_string(e.path()) {
             let p = PathBuf::from(content.trim());
             if !p.as_os_str().is_empty() {
-                out.push(p);
+                out.push((pid, p));
             }
         }
     }
@@ -115,7 +126,10 @@ mod tests {
         let folder = tmp.path().join("proj");
         std::fs::create_dir(&folder).unwrap();
         register_in(tmp.path(), std::process::id(), &folder);
-        assert_eq!(open_folders_in(tmp.path(), 0), vec![folder]);
+        assert_eq!(
+            open_folders_in(tmp.path(), 0),
+            vec![(std::process::id() as i32, folder)]
+        );
         assert!(
             open_folders_in(tmp.path(), std::process::id()).is_empty(),
             "not this window's own"
