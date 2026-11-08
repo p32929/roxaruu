@@ -1,0 +1,25 @@
+{
+  "name": "Midnight",
+  "type": "dark",
+  "colors": {
+    "background": "#0e1220",
+    "surface": "#121729",
+    "elevated": "#181e33",
+    "border": "#232b45",
+    "text": "#e2e7f3",
+    "textMuted": "#8f9ab5",
+    "textSubtle": "#5a6482",
+    "accent": "#7c9cff",
+    "accentText": "#0b1020",
+    "error": "#ff7b8a",
+    "tokenComment": "#56607c",
+    "tokenKeyword": "#8fa8ff",
+    "tokenString": "#a3e4b0",
+    "tokenFunction": "#7dd3fc",
+    "tokenType": "#c4a7ff",
+    "tokenConstant": "#ffb38a",
+    "tokenProperty": "#c9d4ef",
+    "tokenAttribute": "#f5d58a",
+    "tokenPunctuation": "#8590ad"
+  }
+}

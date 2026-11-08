@@ -1,0 +1,25 @@
+{
+  "name": "Moss",
+  "type": "dark",
+  "colors": {
+    "background": "#111513",
+    "surface": "#151a17",
+    "elevated": "#1b211e",
+    "border": "#26302b",
+    "text": "#e1e8e3",
+    "textMuted": "#92a399",
+    "textSubtle": "#5e6d64",
+    "accent": "#7bd49a",
+    "accentText": "#0c1a11",
+    "error": "#ff7b72",
+    "tokenComment": "#5a6a61",
+    "tokenKeyword": "#7bd49a",
+    "tokenString": "#c5d98c",
+    "tokenFunction": "#9fd0e8",
+    "tokenType": "#e3c78a",
+    "tokenConstant": "#e8a0b4",
+    "tokenProperty": "#c6d3cb",
+    "tokenAttribute": "#e3c78a",
+    "tokenPunctuation": "#87978e"
+  }
+}
