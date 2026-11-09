@@ -2,7 +2,9 @@
 //! and running commands. Drawing lives in `ui`.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
@@ -69,6 +71,8 @@ pub struct Project {
 pub struct Prompt {
     pub queue: Vec<PathBuf>,
     pub after: After,
+    /// "Save All" / "Discard All": the answer for every file left.
+    pub all: Option<Answer>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -112,6 +116,8 @@ pub enum Answer {
     Save,
     Discard,
     Cancel,
+    SaveAll,
+    DiscardAll,
 }
 
 pub const TAB_WIDTH: usize = 4;
@@ -121,6 +127,9 @@ pub struct App {
     /// Config file mtimes at the last load, polled to reload on save.
     fingerprint: Vec<(PathBuf, Option<SystemTime>)>,
     last_poll: Instant,
+    /// Set by a watcher thread when a shared config file changes (another
+    /// window saved a setting), which also wakes this window right away.
+    config_changed: Arc<AtomicBool>,
     /// The (UI, code) fonts installed in egui, and any errors loading them.
     applied_fonts: Option<(String, String)>,
     font_errors: Vec<String>,
@@ -136,6 +145,8 @@ pub struct App {
     /// The F1 shortcuts sheet is up.
     pub help: bool,
     pub welcome_selected: usize,
+    /// The app icon as a texture, loaded the first time it's drawn.
+    pub(crate) app_icon: Option<egui::TextureHandle>,
     pub project: Option<Project>,
     pub tabs: Vec<Tab>,
     pub active: Option<usize>,
@@ -191,6 +202,7 @@ impl App {
             config: config::load(None, None),
             fingerprint: config::fingerprint(None),
             last_poll: Instant::now(),
+            config_changed: watch_config(ctx),
             applied_fonts: None,
             font_errors: Vec::new(),
             toasts: Vec::new(),
@@ -199,6 +211,7 @@ impl App {
             todos: Vec::new(),
             help: false,
             welcome_selected: 0,
+            app_icon: None,
             project: None,
             tabs: Vec::new(),
             active: None,
@@ -275,7 +288,9 @@ impl App {
     }
 
     fn poll_config(&mut self, ctx: &egui::Context) {
-        if self.last_poll.elapsed() < Duration::from_secs(1) {
+        if !self.config_changed.swap(false, Ordering::Relaxed)
+            && self.last_poll.elapsed() < Duration::from_secs(1)
+        {
             return;
         }
         self.last_poll = Instant::now();
@@ -490,6 +505,7 @@ impl App {
             Command::SearchInFiles => Some(Mode::Search),
             Command::GoToLine => Some(Mode::Line),
             Command::SwitchTerminal => Some(Mode::Terminals),
+            Command::OpenTerminalLink => Some(Mode::Links),
             Command::Settings => Some(Mode::Settings),
             Command::Keybindings => Some(Mode::Keybindings),
             Command::ClipboardHistory => Some(Mode::Clipboard),
@@ -527,6 +543,10 @@ impl App {
                 self.begin_close(path.into_iter().collect(), After::Nothing, ctx);
             }
             Command::CloseAllTabs => self.begin_close(self.tab_paths(), After::Nothing, ctx),
+            Command::CloseOtherTabs
+            | Command::CloseTabsToRight
+            | Command::CloseTabsToLeft
+            | Command::CloseSavedTabs => self.close_around(command, ctx),
             Command::ReopenTab => {
                 if let Some(path) = self.closed.pop() {
                     self.open_file(&path);
@@ -615,6 +635,20 @@ impl App {
                 }
             }
             Command::FocusSidebar => self.focus_sidebar(),
+            Command::CollapseFolders => self.collapse_folders(),
+            Command::ZoomIn => self.zoom(Some(1.0), ctx),
+            Command::ZoomOut => self.zoom(Some(-1.0), ctx),
+            Command::ResetZoom => self.zoom(None, ctx),
+            Command::FullScreen => {
+                let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
+            }
+            Command::MaximizeWindow => toggle_maximized(ctx),
+            Command::FormatDocument => {
+                if let Some(i) = self.active {
+                    self.format_tab(i, true);
+                }
+            }
             Command::ToggleWordWrap => {
                 let wrap = !self.config.settings.word_wrap;
                 self.config.settings.word_wrap = wrap;
@@ -637,6 +671,7 @@ impl App {
                 self.show_terminals(ctx);
             }
             Command::SwitchTerminal => self.open_palette(Mode::Terminals, ctx),
+            Command::OpenTerminalLink => self.open_palette(Mode::Links, ctx),
             Command::JumpTerminal(n) => {
                 let i = n as usize - 1;
                 if i < self.terminals.len() {
@@ -703,6 +738,7 @@ impl App {
             | Command::Paste
             | Command::SelectAll => self.active.is_some() || self.terminal_focused(),
             Command::Find
+            | Command::FormatDocument
             | Command::Replace
             | Command::AddNextOccurrence
             | Command::AddCursorAbove
@@ -729,13 +765,30 @@ impl App {
             Command::SearchInFiles => self.project.is_some(),
             Command::ToggleSplit => self.tabs.len() > 1,
             Command::SaveAll => self.tabs.iter().any(|t| t.buf.modified),
-            Command::NextTab | Command::PrevTab | Command::MoveTabLeft | Command::MoveTabRight => {
+            Command::CloseSavedTabs => self.tabs.iter().any(|t| !t.buf.modified),
+            // ⌘← is the tree's only where a tree has the keyboard; in the
+            // editor it stays "line start".
+            Command::CollapseFolders => {
+                self.project.is_some()
+                    && match &self.palette {
+                        Some(p) => p.mode == Mode::Files && p.query.is_empty(),
+                        None => self.focus == Focus::Sidebar && self.sidebar_shown(),
+                    }
+            }
+            Command::NextTab
+            | Command::PrevTab
+            | Command::MoveTabLeft
+            | Command::MoveTabRight
+            | Command::CloseOtherTabs
+            | Command::CloseTabsToRight
+            | Command::CloseTabsToLeft => {
                 self.tabs.len() > 1 || (self.terminal_focused() && self.terminals.len() > 1)
             }
             Command::CloseTerminal | Command::ToggleTerminalGrid | Command::MaximizeTerminal => {
                 !self.terminals.is_empty()
             }
             Command::SwitchTerminal => self.terminals.len() > 1,
+            Command::OpenTerminalLink => self.terminal_open && self.terminal().is_some(),
             Command::JumpTerminal(n) => (n as usize) <= self.terminals.len(),
             Command::ReopenTab => !self.closed.is_empty(),
             _ => true,
@@ -878,6 +931,52 @@ impl App {
         self.tabs.iter().filter_map(|t| t.path().cloned()).collect()
     }
 
+    /// Text size: one step bigger / smaller (`Some(±1)`), or back to the
+    /// defaults (`None`). UI and code text move together, saved like any
+    /// setting so every window follows.
+    fn zoom(&mut self, step: Option<f32>, ctx: &egui::Context) {
+        let (now, d) = (&self.config.settings, config::Settings::default());
+        let (ui, code) = match step {
+            Some(s) => (
+                (now.ui_font_size + s).clamp(9.0, 32.0),
+                (now.code_font_size + s).clamp(9.0, 40.0),
+            ),
+            None => (d.ui_font_size, d.code_font_size),
+        };
+        self.save_choice_quietly("uiFontSize", ui, ctx);
+        self.save_choice_quietly("codeFontSize", code, ctx);
+        self.notify(format!("Text size {ui} · code {code}"));
+    }
+
+    /// Format tab `i` with its language's formatter (`format.rs`); its
+    /// failures are shown, never applied. `asked`: also say when there's
+    /// nothing to format with, or nothing changed.
+    fn format_tab(&mut self, i: usize, asked: bool) {
+        let Some(tab) = self.tabs.get(i) else { return };
+        let Some(path) = tab.path().cloned() else {
+            return;
+        };
+        let Some(cmd) = crate::format::command_for(&self.config.settings.formatters, &path) else {
+            if asked {
+                self.notify(format!(
+                    "No formatter for {} — add one under \"formatters\" in settings",
+                    tab.buf.name()
+                ));
+            }
+            return;
+        };
+        let text = tab.buf.rope.to_string();
+        match crate::format::run(&cmd, &path, &text) {
+            Ok(out) => {
+                let changed = self.tabs[i].buf.replace_all(&out);
+                if asked {
+                    self.notify(if changed { "Formatted" } else { "Already formatted" });
+                }
+            }
+            Err(e) => self.warn(e),
+        }
+    }
+
     pub fn save_session(&self) {
         if let Some(p) = &self.project {
             crate::session::save(&p.root, &self.tab_paths(), self.active.unwrap_or(0));
@@ -890,12 +989,17 @@ impl App {
     }
 
     fn save_tab(&mut self, i: usize) -> bool {
+        if self.config.settings.format_on_save {
+            self.format_tab(i, false);
+        }
         let Some(tab) = self.tabs.get_mut(i) else {
             return false;
         };
         let name = tab.buf.name();
         match tab.buf.save() {
             Ok(()) => {
+                tab.gone = false; // saved back
+                tab.disk_news = None;
                 self.notify(format!("Saved {name}"));
                 true
             }
@@ -1088,28 +1192,18 @@ impl App {
         let b = &mut t.buf;
         match command {
             Command::ToggleComment => {
-                let token = match b.lang.map(|l| l.name) {
-                    Some("Python" | "Shell" | "TOML") => Some("#"),
-                    Some("Rust" | "JavaScript" | "TypeScript" | "TSX" | "Go" | "C" | "JSON") => {
-                        Some("//")
-                    }
-                    Some(_) => None,
-                    // No language: guess from the extension.
+                let token = match b.lang {
+                    Some(l) => l.comment,
+                    // Not highlighted: guess from the extension.
                     None => match b
                         .path
                         .as_ref()
                         .and_then(|p| p.extension())
                         .and_then(|e| e.to_str())
                     {
-                        Some(
-                            "yml" | "yaml" | "rb" | "sh" | "zsh" | "conf" | "ini" | "env" | "r"
-                            | "pl",
-                        ) => Some("#"),
-                        Some(
-                            "java" | "kt" | "swift" | "cs" | "cpp" | "hpp" | "cc" | "dart"
-                            | "scala" | "php" | "jsonc" | "json5" | "zig",
-                        ) => Some("//"),
-                        Some("sql" | "lua" | "hs") => Some("--"),
+                        Some("conf" | "ini" | "env" | "r" | "pl" | "mk") => Some("#"),
+                        Some("kt" | "dart" | "scala" | "zig") => Some("//"),
+                        Some("hs") => Some("--"),
                         _ => None,
                     },
                 };
@@ -1198,11 +1292,21 @@ impl App {
     }
 
     /// Notice files changed by something else (a `git checkout`, a formatter,
-    /// vim in a terminal): a clean tab just reloads; one with unsaved edits
-    /// asks. A deleted file keeps its text and is marked unsaved, so saving
+    /// vim in a terminal): a clean tab just reloads. One with unsaved edits,
+    /// or whose file was deleted, gets a question — when that tab is in front
+    /// and the editor has the keyboard, never by jumping to it. A deleted
+    /// file keeps its text, struck through and marked unsaved, so saving
     /// brings it back. A cheap `stat` per tab, once a second.
     fn poll_file_changes(&mut self) {
         use crate::buffer::DiskStatus;
+        if !self.modal_open()
+            && self.palette.is_none()
+            && self.focus == Focus::Editor
+            && let Some(t) = self.active_tab()
+            && t.disk_news.is_some()
+        {
+            self.conflict = t.path().cloned();
+        }
         if self.prompt.is_some()
             || self.conflict.is_some()
             || self.last_file_check.elapsed() < Duration::from_secs(1)
@@ -1213,17 +1317,34 @@ impl App {
         for i in 0..self.tabs.len() {
             let tab = &mut self.tabs[i];
             let name = tab.buf.name();
+            if tab.gone {
+                // Back again (git checkout, put back from the Trash)?
+                if tab.path().is_some_and(|p| p.exists()) {
+                    tab.gone = false;
+                    tab.disk_news = None;
+                    tab.buf.rebaseline_disk();
+                    if !tab.buf.is_clean() {
+                        tab.disk_news = Some(DiskStatus::Modified);
+                    } else if let Err(e) = tab.reload() {
+                        self.warn(format!("Couldn't reload {name}: {e:#}"));
+                    }
+                }
+                continue;
+            }
+            if tab.disk_news.is_some() {
+                continue; // still waiting for an answer
+            }
             match tab.buf.disk_status() {
                 DiskStatus::Unchanged => {}
                 DiskStatus::Deleted => {
+                    tab.gone = true;
                     tab.buf.modified = true;
                     tab.buf.forget_disk(); // report once
-                    self.notify(format!("{name} was deleted on disk — save to restore it"));
+                    tab.disk_news = Some(DiskStatus::Deleted);
+                    self.warn(format!("{name} was deleted on disk"));
                 }
                 DiskStatus::Modified if tab.buf.modified => {
-                    self.conflict = tab.path().cloned();
-                    self.active = Some(i);
-                    return; // one question at a time
+                    tab.disk_news = Some(DiskStatus::Modified);
                 }
                 DiskStatus::Modified => match tab.reload() {
                     Ok(()) => self.notify(format!("Reloaded {name} (changed on disk)")),
@@ -1233,16 +1354,26 @@ impl App {
         }
     }
 
-    /// The answer to "changed on disk": take the disk version, or keep ours
-    /// (and stop asking about that change).
-    pub fn answer_conflict(&mut self, reload: bool) {
+    /// The answer to a change on disk. Changed: take the disk version
+    /// (`first`), or keep ours and stop asking about that change. Deleted:
+    /// close the tab (`first`), or keep it open to save back.
+    pub fn answer_conflict(&mut self, first: bool) {
+        use crate::buffer::DiskStatus;
         let Some(path) = self.conflict.take() else {
             return;
         };
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.path() == Some(&path)) else {
+        let Some(i) = self.tabs.iter().position(|t| t.path() == Some(&path)) else {
             return;
         };
-        if !reload {
+        let tab = &mut self.tabs[i];
+        let news = tab.disk_news.take();
+        if news == Some(DiskStatus::Deleted) {
+            if first {
+                self.close_tab_now(i);
+            }
+            return;
+        }
+        if !first {
             return tab.buf.rebaseline_disk();
         }
         let name = tab.buf.name();
@@ -1360,6 +1491,36 @@ impl App {
         }
     }
 
+    /// Close Others / to the Right / to the Left / Saved, around the active
+    /// tab: the terminal's when one is focused (all but Saved).
+    fn close_around(&mut self, command: Command, ctx: &egui::Context) {
+        let hit = |i: usize, a: usize| match command {
+            Command::CloseOtherTabs => i != a,
+            Command::CloseTabsToRight => i > a,
+            Command::CloseTabsToLeft => i < a,
+            _ => false,
+        };
+        if self.terminal_focused() && command != Command::CloseSavedTabs {
+            let a = self.active_terminal;
+            for i in (0..self.terminals.len()).rev().filter(|&i| hit(i, a)) {
+                self.close_terminal(i);
+            }
+            return;
+        }
+        let a = self.active.unwrap_or(0);
+        let paths = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| match command {
+                Command::CloseSavedTabs => !t.buf.modified,
+                _ => hit(*i, a),
+            })
+            .filter_map(|(_, t)| t.path().cloned())
+            .collect();
+        self.begin_close(paths, After::Nothing, ctx);
+    }
+
     fn after_terminal_removed(&mut self) {
         if self.terminals.is_empty() {
             self.terminal_open = false;
@@ -1406,6 +1567,7 @@ impl App {
         self.prompt = Some(Prompt {
             queue: paths,
             after,
+            all: None,
         });
         self.advance_close(ctx);
     }
@@ -1424,6 +1586,9 @@ impl App {
             match idx {
                 Some(i) if self.tabs[i].buf.modified => {
                     self.active = Some(i);
+                    if let Some(all) = self.prompt.as_ref().and_then(|p| p.all) {
+                        return self.answer_prompt(all, ctx);
+                    }
                     return; // wait for the answer
                 }
                 Some(i) if after == After::Nothing => self.close_tab_now(i),
@@ -1469,13 +1634,32 @@ impl App {
             return;
         };
         let idx = self.tabs.iter().position(|t| t.path() == Some(&path));
+        let answer = match answer {
+            Answer::SaveAll | Answer::DiscardAll => {
+                let each = if answer == Answer::SaveAll {
+                    Answer::Save
+                } else {
+                    Answer::Discard
+                };
+                if let Some(p) = &mut self.prompt {
+                    p.all = Some(each);
+                }
+                each
+            }
+            a => a,
+        };
         match (answer, idx) {
             (Answer::Cancel, _) => {
                 self.prompt = None;
                 return;
             }
-            // A failed save keeps the tab (and the prompt): never lose work.
-            (Answer::Save, Some(i)) if !self.save_tab(i) => return,
+            // A failed save keeps the tab (and the prompt, asking again): never lose work.
+            (Answer::Save, Some(i)) if !self.save_tab(i) => {
+                if let Some(p) = &mut self.prompt {
+                    p.all = None;
+                }
+                return;
+            }
             (_, Some(i)) if after == After::Nothing => self.close_tab_now(i),
             _ => {}
         }
@@ -1577,6 +1761,7 @@ impl App {
             ),
             Mode::Recent => self.recent_items(&query),
             Mode::Terminals => self.terminal_items(&query),
+            Mode::Links => self.link_items(&query),
             Mode::Search => {
                 if query != self.search.query {
                     self.search.changed = Some(Instant::now());
@@ -1759,6 +1944,22 @@ impl App {
             plural(n, "result"),
             plural(files, "file")
         )
+    }
+
+    /// The links on the active terminal's screen, newest first.
+    fn link_items(&self, query: &str) -> Vec<Item> {
+        let urls = self
+            .terminal()
+            .map(|t| crate::terminalpane::urls_on_screen(&t.pane.screen()))
+            .unwrap_or_default();
+        urls.into_iter()
+            .filter(|u| fuzzy::score(query, u).is_some())
+            .map(|u| {
+                let mut it = Item::new(icon::LINK, u.clone(), Pick::Url(u.clone()));
+                it.matched = fuzzy::positions(query, &u);
+                it
+            })
+            .collect()
     }
 
     fn terminal_items(&self, query: &str) -> Vec<Item> {
@@ -2009,6 +2210,13 @@ impl App {
                 self.close_palette(true, ctx);
                 self.go_to(line, col);
             }
+            Pick::Url(url) => {
+                self.close_palette(true, ctx);
+                // Chosen by name from the list: no "open this link?" step.
+                if !files::os_open(&[url.as_ref()]) {
+                    self.warn("Couldn't open your browser");
+                }
+            }
             Pick::Terminal(i) => {
                 self.close_palette(true, ctx);
                 self.active_terminal = i.min(self.terminals.len().saturating_sub(1));
@@ -2150,6 +2358,37 @@ fn pick_folder() -> Option<PathBuf> {
 #[cfg(any(not(target_os = "macos"), test))]
 fn pick_folder() -> Option<PathBuf> {
     None
+}
+
+/// Maximize the window, or restore it (the title bar's double-click).
+pub fn toggle_maximized(ctx: &egui::Context) {
+    let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+}
+
+/// Watch the config files every window shares (settings, keybindings,
+/// themes): on a change, flag it and wake the window, so a setting saved in
+/// one window shows in the others at once, even idle ones in the background.
+fn watch_config(ctx: &egui::Context) -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    let (ctx, out) = (ctx.clone(), flag.clone());
+    // If no thread can start, the 1s check in `poll_config` still catches it.
+    let _ = std::thread::Builder::new()
+        .name("config-watch".into())
+        .spawn(move || {
+            let mut last = config::fingerprint(None);
+            // Ends with the window (the flag's only other owner).
+            while Arc::strong_count(&out) > 1 {
+                std::thread::sleep(Duration::from_millis(400));
+                let now = config::fingerprint(None);
+                if now != last {
+                    last = now;
+                    out.store(true, Ordering::Relaxed);
+                    ctx.request_repaint();
+                }
+            }
+        });
+    flag
 }
 
 #[cfg(test)]

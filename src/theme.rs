@@ -50,6 +50,11 @@ colors! {
     token_property = "tokenProperty",
     token_attribute = "tokenAttribute",
     token_punctuation = "tokenPunctuation",
+    token_variable = "tokenVariable",
+    token_number = "tokenNumber",
+    token_operator = "tokenOperator",
+    token_tag = "tokenTag",
+    token_heading = "tokenHeading",
     ansi_0 = "ansiBlack",
     ansi_1 = "ansiRed",
     ansi_2 = "ansiGreen",
@@ -81,6 +86,11 @@ impl Colors {
             Token::Property => self.token_property,
             Token::Attribute => self.token_attribute,
             Token::Punctuation => self.token_punctuation,
+            Token::Variable => self.token_variable,
+            Token::Number => self.token_number,
+            Token::Operator => self.token_operator,
+            Token::Tag => self.token_tag,
+            Token::Heading => self.token_heading,
         }
     }
 }
@@ -243,6 +253,19 @@ mod tests {
         assert_eq!(names, ["Oxide", "Oxide Light", "Midnight", "Moss"]);
         assert!(Theme::parse(BUILTIN[0], None).is_ok());
         assert!(Theme::parse(BUILTIN[1], None).is_ok());
+    }
+
+    /// A syntax colour added to `colors!` must be set in every built-in
+    /// theme, not quietly borrowed from Oxide's palette.
+    #[test]
+    fn builtins_set_every_syntax_colour() {
+        for src in BUILTIN {
+            let v: serde_json::Value = json5::from_str(src).unwrap();
+            let colors = v["colors"].as_object().unwrap();
+            for key in Colors::KEYS.iter().filter(|k| k.starts_with("token")) {
+                assert!(colors.contains_key(*key), "{} lacks {key}", v["name"]);
+            }
+        }
     }
 
     #[test]

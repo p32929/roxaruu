@@ -24,6 +24,7 @@ pub enum Mode {
     Settings,
     Keybindings,
     Line,
+    Links,
 }
 
 impl Mode {
@@ -42,6 +43,7 @@ impl Mode {
             Mode::Clipboard => "Filter what you've copied…",
             Mode::Settings => "Search settings…",
             Mode::Keybindings => "Search shortcuts by name…",
+            Mode::Links => "Open a link from the terminal…",
         }
     }
 }
@@ -69,6 +71,8 @@ pub enum Pick {
     Binding(Command),
     /// Go to Line: line and column, from 0.
     Line(usize, usize),
+    /// A link printed in the terminal.
+    Url(String),
 }
 
 pub struct Item {

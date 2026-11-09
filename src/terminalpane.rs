@@ -253,6 +253,12 @@ pub struct TerminalPane {
     /// Bytes the reader thread has parsed since the last [`pump`] — lets the UI
     /// know a redraw is warranted without re-draining anything itself.
     pending: Arc<AtomicU64>,
+    /// Line feeds among those bytes: at most this many rows (plus wraps) can
+    /// have scrolled into history since the last pump.
+    newlines: Arc<AtomicU64>,
+    /// The rows on screen at the last pump or scroll, to find them again once
+    /// the history is full (see [`TerminalPane::pump`]).
+    view: Vec<String>,
     /// Latency probe: the reader stamps the first chunk of a fresh output burst
     /// here; [`pump`] takes it and logs if that output waited too long for a
     /// frame (i.e. the UI loop was parked) — the freeze, quantified.
@@ -447,11 +453,13 @@ impl TerminalPane {
             thread::spawn(move || self::watch(p, a, w, waker));
         }
         let pending = Arc::new(AtomicU64::new(0));
+        let newlines = Arc::new(AtomicU64::new(0));
         let stamp: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
         {
             let parser = parser.clone();
             let activity = activity.clone();
             let pending = pending.clone();
+            let newlines = newlines.clone();
             let stamp = stamp.clone();
             thread::spawn(move || {
                 let mut buf = [0u8; 8192];
@@ -481,6 +489,8 @@ impl TerminalPane {
                                 }
                                 a.last = Some(now);
                             }
+                            let lf = buf[..n].iter().filter(|b| **b == b'\n').count();
+                            newlines.fetch_add(lf as u64, Ordering::Release);
                             pending.fetch_add(n as u64, Ordering::Release);
                             // Stamp the first chunk of a burst so pump() can measure
                             // how long it waited to be shown (the freeze probe).
@@ -518,6 +528,8 @@ impl TerminalPane {
             watch,
             attention: false,
             pending,
+            newlines,
+            view: Vec::new(),
             stamp,
             writer,
             master: pair.master,
@@ -565,7 +577,17 @@ impl TerminalPane {
             // pane is following the bottom and should keep following it.
             let mut p = self.parser.lock().unwrap_or_else(|e| e.into_inner());
             let len = Self::history_len(&mut p);
-            let arrived = len.saturating_sub(self.history_len);
+            let mut arrived = len.saturating_sub(self.history_len);
+            let newlines = self.newlines.swap(0, Ordering::Acquire) as usize;
+            // Once the history is full, each new row pushes the oldest out
+            // and the length stops growing, so it can't say how much arrived.
+            // Find where the rows we were showing went instead (at most one
+            // per line feed, plus wrapped lines).
+            if len >= SCROLLBACK && !self.view.is_empty() {
+                let most = newlines + bytes / self.cols.max(1) as usize + 2;
+                arrived = Self::find_shift(&mut p, self.scroll, &self.view, newlines, most)
+                    .unwrap_or(arrived.max(newlines));
+            }
             if self.scroll > 0 {
                 self.scroll = (self.scroll + arrived).min(len);
             }
@@ -588,6 +610,7 @@ impl TerminalPane {
             }
             p.screen_mut().set_scrollback(self.scroll);
             self.scroll = p.screen().scrollback();
+            self.view = if len >= SCROLLBACK { Self::rows_text(&p) } else { Vec::new() };
             self.cwd_dirty = true;
         }
         self.refresh_foreground();
@@ -620,6 +643,7 @@ impl TerminalPane {
     /// Jump back to the live bottom of the terminal.
     pub fn scroll_to_bottom(&mut self) {
         self.scroll = 0;
+        self.view.clear();
         self.parser
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -674,6 +698,33 @@ impl TerminalPane {
     ///
     /// vt100 has no getter for this, but `set_scrollback` clamps to it — so ask
     /// for an impossible offset and read back what you were given, then restore.
+    /// The text of each row on screen (at the current scroll offset).
+    fn rows_text(p: &vt100::Parser<Alerts>) -> Vec<String> {
+        let (_, cols) = p.screen().size();
+        p.screen().rows(0, cols).collect()
+    }
+
+    /// How many rows `view` (last seen at offset `scroll`) has moved up into
+    /// history: the smallest shift, up to `most`, at which those rows are on
+    /// screen again. `None` when they're gone (pushed out of the history, or
+    /// the screen was cleared).
+    fn find_shift(
+        p: &mut vt100::Parser<Alerts>,
+        scroll: usize,
+        view: &[String],
+        likely: usize,
+        most: usize,
+    ) -> Option<usize> {
+        // Usually one row per line feed: try that first, then the rest.
+        let candidates = std::iter::once(likely.min(most)).chain((0..=most).filter(|k| *k != likely));
+        let found = candidates.into_iter().find(|k| {
+            p.screen_mut().set_scrollback(scroll + k);
+            p.screen().scrollback() == scroll + k && Self::rows_text(p) == view
+        });
+        p.screen_mut().set_scrollback(scroll);
+        found
+    }
+
     fn history_len(p: &mut vt100::Parser<Alerts>) -> usize {
         let current = p.screen().scrollback();
         p.screen_mut().set_scrollback(usize::MAX);
@@ -693,6 +744,7 @@ impl TerminalPane {
         // "arrived while scrolled up" and the view jumps by however much had
         // landed *before* the user scrolled.
         self.history_len = Self::history_len(&mut p);
+        self.view = if self.history_len >= SCROLLBACK { Self::rows_text(&p) } else { Vec::new() };
     }
 
     /// Scroll so `lineid` is on screen; returns it clamped to reachable history.
@@ -1318,6 +1370,26 @@ fn wrapped_line(screen: &vt100::Screen, row: u16) -> (String, Vec<(u16, std::ops
 /// method that locks its own screen, so a caller already holding a
 /// [`ScreenGuard`] (as the renderer does, for every row) can call it without
 /// re-entering the same mutex.
+/// Every link on screen, newest (lowest) first, each once — wrapped ones
+/// whole. What "Open a Link from the Terminal…" offers.
+pub fn urls_on_screen(screen: &vt100::Screen) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for row in (0..screen.size().0).rev() {
+        let (joined, ranges) = wrapped_line(screen, row);
+        let Some(start) = ranges.iter().find(|(r, _)| *r == row).map(|(_, r)| r.start) else {
+            continue;
+        };
+        for span in url_cols_in_row(screen, row) {
+            if let Some(url) = url_span_at(&joined, start + span.start as usize)
+                && !out.contains(&url)
+            {
+                out.push(url);
+            }
+        }
+    }
+    out
+}
+
 pub fn url_cols_in_row(screen: &vt100::Screen, row: u16) -> Vec<std::ops::Range<u16>> {
     let (rows, _) = screen.size();
     if row >= rows {
@@ -1406,7 +1478,8 @@ fn starts_scheme(rest: &[char]) -> bool {
 /// A URL ends at whitespace, or at a character a terminal would never carry
 /// inside one (quotes and angle brackets, which shells and logs wrap URLs in).
 fn is_url_terminator(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | '|')
+    // A backslash is never part of a URL: it's an escape (`…/two\n`).
+    c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | '|' | '\\')
 }
 
 /// Drop trailing punctuation that belongs to the surrounding prose rather than
@@ -1636,6 +1709,24 @@ mod tests {
     }
 
     #[test]
+    fn urls_on_screen_newest_first_once_and_whole() {
+        let mut parser = vt100::Parser::new(6, 20, 0);
+        parser.process(b"old https://a.com/1\r\n");
+        // Wraps past 20 columns: still one link.
+        parser.process(b"https://example.com/a/long/path\r\n");
+        parser.process(b"again https://a.com/1 ftp://no\r\n");
+        assert_eq!(
+            urls_on_screen(parser.screen()),
+            ["https://a.com/1", "https://example.com/a/long/path"]
+        );
+        let mut echoed = vt100::Parser::new(3, 40, 0);
+        echoed.process(b"printf 'https://a.com/x\\n'\r\n");
+        assert_eq!(urls_on_screen(echoed.screen()), ["https://a.com/x"]);
+        let empty = vt100::Parser::new(3, 20, 0);
+        assert!(urls_on_screen(empty.screen()).is_empty());
+    }
+
+    #[test]
     fn url_cols_in_row_is_empty_for_plain_text() {
         let mut parser = vt100::Parser::new(3, 80, 0);
         parser.process(b"nothing to see here\r\n");
@@ -1823,6 +1914,36 @@ mod tests {
             term.scroll_offset() > offset_before,
             "the offset must grow as history arrives, or the text can't have held still"
         );
+    }
+
+    /// Same, once the history is full (a long agent session): old lines
+    /// then fall off the top as new ones arrive, so the history stops
+    /// growing — the view must still hold the text still.
+    #[test]
+    fn scroll_lock_holds_with_a_full_history() {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut cmd = CommandBuilder::new(&shell);
+        cmd.cwd(std::env::temp_dir());
+        let mut term = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
+        let fill = SCROLLBACK + 200;
+        term.send_input(format!("for i in $(seq 1 {fill}); do echo \"LINE-$i\"; done\n").as_bytes());
+        let last = format!("LINE-{fill}");
+        let deadline = Instant::now() + SHELL_WAIT * 4;
+        while Instant::now() < deadline && !screen_contains(&term, &last) {
+            term.pump();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(screen_contains(&term, &last), "seed output never arrived");
+
+        term.scroll_lines(15);
+        let before = visible_text(&term);
+        term.send_input(b"for i in $(seq 1 80); do echo \"NOISE-$i\"; done\n");
+        let deadline = Instant::now() + SHELL_WAIT;
+        while Instant::now() < deadline {
+            term.pump();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(visible_text(&term), before, "the view moved with a full history");
     }
 
     /// …and at the bottom it must still follow, or the terminal would freeze.

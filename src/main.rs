@@ -15,6 +15,7 @@ mod config;
 mod editor;
 mod find;
 mod fonts;
+mod format;
 mod fstree;
 mod fuzzy;
 #[cfg(test)]
@@ -37,22 +38,39 @@ mod wrap;
 
 use eframe::egui;
 
-const ICON: &[u8] = include_bytes!("../assets/icon.png");
+/// This build's version (Cargo.toml), shown in the status bar, on the
+/// welcome screen and by `--version`, so an update is easy to confirm.
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The app icon (`assets/icon.svg`, rendered): the window and Dock icon, and
+/// the mark on the welcome screen.
+pub(crate) const ICON: &[u8] = include_bytes!("../assets/icon.png");
 
 fn main() -> eframe::Result {
-    // `roxaruu [folder | file]`. Bare `roxaruu` (or `rox`) in a terminal opens
-    // the folder you're in, same as `roxaruu .`; from the Dock or Finder there's
-    // no terminal, and it opens empty.
-    let target = std::env::args_os()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            use std::io::IsTerminal;
-            std::io::stdin()
-                .is_terminal()
-                .then(std::env::current_dir)
-                .and_then(Result::ok)
-        });
+    use std::io::IsTerminal;
+    let from_shell = std::io::stdin().is_terminal();
+    let launch = Launch::parse(std::env::args_os().skip(1), from_shell);
+    match &launch.info {
+        Some(Info::Help) => {
+            println!("{}", help());
+            return Ok(());
+        }
+        Some(Info::Version) => {
+            println!("roxaruu {VERSION}");
+            return Ok(());
+        }
+        Some(Info::Unknown(flag)) => {
+            eprintln!("roxaruu: unknown option {flag}\n\n{}", help());
+            std::process::exit(2);
+        }
+        None => {}
+    }
+    // Started from a shell: hand the window to a copy that isn't tied to it
+    // and give the prompt back, so closing that terminal leaves the window.
+    if from_shell && !launch.foreground && detach(&launch.target) {
+        return Ok(());
+    }
+    let target = launch.target.clone();
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Roxaruu")
@@ -76,7 +94,14 @@ fn main() -> eframe::Result {
             viewport,
             ..Default::default()
         },
-        Box::new(|cc| Ok(Box::new(Root(app::App::new(&cc.egui_ctx, target))))),
+        Box::new(move |cc| {
+            // The detached copy's launcher has already exited: come to the
+            // front ourselves rather than open behind the terminal.
+            if launch.foreground {
+                cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            Ok(Box::new(Root(app::App::new(&cc.egui_ctx, target))))
+        }),
     );
     // Remove this window's terminal-bridge shims and its open-folder marker.
     termbridge::cleanup();
@@ -84,10 +109,166 @@ fn main() -> eframe::Result {
     result
 }
 
+/// `roxaruu --help`.
+fn help() -> String {
+    format!(
+        "Roxaruu {} — a keyboard-first editor with terminals.
+
+Usage:
+  rox                  Open the folder you're in (same as `rox .`).
+  rox <folder>         Open a folder; if it's already open, go to its window.
+  rox <file>           Open the file, in its project (the git repo it's in).
+  rox --foreground ... Stay attached to this terminal (logs show here).
+                       Otherwise the window detaches: you get the prompt
+                       back, and closing the terminal leaves it open.
+  rox -h | --help      Show this help.
+  rox -V | --version   Show the version.
+
+`rox` is short for `roxaruu`; both work.
+
+Inside: F1 shows every keyboard shortcut for where you are, ⇧⌘P runs any
+command by name. Settings, keys and themes are JSON in ~/.config/oxru/.",
+        VERSION
+    )
+}
+
+/// Asked for something other than a window.
+#[derive(Debug, PartialEq)]
+enum Info {
+    Help,
+    Version,
+    Unknown(String),
+}
+
+/// What the command line asked for.
+#[derive(Debug, PartialEq)]
+struct Launch {
+    /// `--help`, `--version`, or an option we don't know: print, no window.
+    info: Option<Info>,
+    /// `--foreground`: stay attached to the terminal (the detached copy is
+    /// started with it; handy for seeing logs too).
+    foreground: bool,
+    /// `roxaruu [folder | file]`. Bare `roxaruu` (or `rox`) in a terminal
+    /// opens the folder you're in, same as `roxaruu .`; from the Dock or
+    /// Finder there's no terminal, and it opens empty.
+    target: Option<std::path::PathBuf>,
+}
+
+impl Launch {
+    fn parse(args: impl Iterator<Item = std::ffi::OsString>, from_shell: bool) -> Launch {
+        let mut args = args.peekable();
+        let info = args.peek().and_then(|a| match a.to_str() {
+            Some("-h" | "--help") => Some(Info::Help),
+            Some("-V" | "--version") => Some(Info::Version),
+            Some(f) if f.starts_with('-') && f != "-" && f != "--foreground" => {
+                Some(Info::Unknown(f.to_string()))
+            }
+            _ => None,
+        });
+        let foreground = args.next_if(|a| a == "--foreground").is_some();
+        let target = args
+            .next()
+            .map(std::path::PathBuf::from)
+            .or_else(|| from_shell.then(std::env::current_dir).and_then(Result::ok))
+            // Absolute, so the copy opens the same thing wherever it starts.
+            .map(|t| std::path::absolute(&t).unwrap_or(t));
+        Launch { info, foreground, target }
+    }
+}
+
+/// Start this program again, detached: its own process group, no terminal
+/// for input or output. Returns whether it started.
+fn detach(target: &Option<std::path::PathBuf>) -> bool {
+    match std::env::current_exe() {
+        Ok(exe) => spawn_detached(&exe, target.iter().map(|t| t.as_os_str())).is_ok(),
+        Err(_) => false,
+    }
+}
+
+fn spawn_detached<'a>(
+    exe: &std::path::Path,
+    args: impl Iterator<Item = &'a std::ffi::OsStr>,
+) -> std::io::Result<std::process::Child> {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new(exe);
+    cmd.arg("--foreground")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    cmd.spawn()
+}
+
 struct Root(app::App);
 
 impl eframe::App for Root {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.frame(ui);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn parse(args: &[&str], from_shell: bool) -> Launch {
+        Launch::parse(args.iter().map(OsString::from), from_shell)
+    }
+
+    #[test]
+    fn bare_rox_in_a_terminal_opens_the_folder_youre_in() {
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(parse(&[], true).target, Some(here.clone()));
+        assert_eq!(parse(&["."], true).target.map(|t| t.canonicalize().unwrap()), Some(here.canonicalize().unwrap()));
+        assert_eq!(parse(&[], false).target, None, "from the Dock: empty");
+        assert_eq!(parse(&["/x/y.rs"], false).target, Some("/x/y.rs".into()));
+        assert!(parse(&["src"], true).target.unwrap().is_absolute());
+    }
+
+    #[test]
+    fn help_version_and_unknown_options_open_no_window() {
+        assert_eq!(parse(&["-h"], true).info, Some(Info::Help));
+        assert_eq!(parse(&["--help"], true).info, Some(Info::Help));
+        assert_eq!(parse(&["--version"], true).info, Some(Info::Version));
+        assert_eq!(parse(&["-V"], true).info, Some(Info::Version));
+        assert_eq!(parse(&["--nope"], true).info, Some(Info::Unknown("--nope".into())));
+        assert_eq!(parse(&["src"], true).info, None);
+        assert_eq!(parse(&["--foreground"], true).info, None);
+        let h = help();
+        for flag in ["--help", "--version", "--foreground", "rox <folder>"] {
+            assert!(h.contains(flag), "{flag}");
+        }
+    }
+
+    #[test]
+    fn foreground_flag_comes_first_and_keeps_the_target() {
+        let l = parse(&["--foreground", "/x"], true);
+        assert!(l.foreground);
+        assert_eq!(l.target, Some("/x".into()));
+        assert!(!parse(&["/x"], true).foreground);
+    }
+
+    /// The detached copy gets `--foreground`, its own process group, and no
+    /// terminal: `sleep` stands in for the app.
+    #[cfg(unix)]
+    #[test]
+    fn the_detached_copy_has_its_own_group_and_no_terminal() {
+        let script = std::env::temp_dir().join(format!("detach-probe-{}", std::process::id()));
+        std::fs::write(&script, "#!/bin/sh\n[ \"$1\" = --foreground ] && [ ! -t 0 ] && sleep 5\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let mut child = spawn_detached(&script, std::iter::empty()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(child.try_wait().unwrap().is_none(), "got --foreground and no terminal");
+        let pgid = std::process::Command::new("ps")
+            .args(["-o", "pgid=", "-p", &child.id().to_string()])
+            .output()
+            .unwrap();
+        let pgid: u32 = String::from_utf8_lossy(&pgid.stdout).trim().parse().unwrap();
+        assert_eq!(pgid, child.id(), "leads its own process group");
+        let _ = child.kill();
+        let _ = std::fs::remove_file(&script);
     }
 }

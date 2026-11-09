@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Event, Key, Modifiers};
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 
 use crate::Root;
 use crate::app::App;
@@ -68,6 +69,8 @@ const CMD_SHIFT: Modifiers = Modifiers {
 fn headless_welcome() {
     let mut h = harness(None);
     shot(&mut h, "01-welcome");
+    // The real app icon is the welcome mark, not a stand-in.
+    assert!(app(&h).app_icon.is_some(), "the app icon loaded");
 }
 
 /// `PROJECT` = a file inside a git repo (the walkthrough opens its repo).
@@ -420,7 +423,7 @@ fn headless_terminal_walkthrough() {
     press(&mut h, Modifiers::NONE, Key::Enter);
     wait_for(&mut h, "vim to save", |_| {
         std::fs::read_to_string(root.join("notes.txt"))
-            .unwrap()
+            .unwrap_or_default() // not written yet: keep waiting
             .starts_with("typed in vim\n")
     });
     wait_for(&mut h, "vim to exit", |app| {
@@ -684,6 +687,11 @@ echo run.sh-done
 
     run(&mut h, "bash run.sh");
     wait_for(&mut h, "five new terminals", |app| app.terminals.len() == 6);
+    // The last call (a notification) runs after the last terminal opens:
+    // wait for the script to finish before checking what got through.
+    wait_for(&mut h, "run.sh to finish", |app| {
+        app.terminals[0].pane.screen().contents().contains("run.sh-done")
+    });
     wait_for(&mut h, "the commands to run", |app| {
         let all: String = app
             .terminals
@@ -1144,6 +1152,15 @@ fn headless_files_walkthrough() {
         term.left() + 10.0 * s + (col as f32 + 0.5) * char_w,
         term.top() + 6.0 * s + (row as f32 + 0.5) * row_h,
     );
+    // Resting on a link without ⌘ says how to open it.
+    h.event(Event::PointerMoved(at));
+    h.step();
+    assert!(h.query_by_label_contains("-click to open this link").is_none());
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    h.step();
+    h.step();
+    shot(&mut h, "a7-link-hint");
+    assert!(h.query_by_label_contains("-click to open this link").is_some());
     h.event(Event::ModifiersChanged(CMD));
     h.event(Event::PointerMoved(at));
     shot(&mut h, "a8-link-hover");
@@ -1471,6 +1488,19 @@ fn headless_every_shortcut() {
         }
     }
     eprintln!("{from_editor} work from the editor, {from_terminal} from a terminal");
+
+    // From the file tree: its own keys (⌘← collapse all) get through.
+    h.state_mut().0.focus_sidebar();
+    h.step();
+    for &(command, title, (key, mods)) in &sheet {
+        if done.contains(&command) || !app(&h).available(command) {
+            continue;
+        }
+        crate::app::dry_run(true);
+        press(&mut h, mods, key);
+        assert_eq!(crate::app::dry_run(false), [command], "from the tree, {title}");
+        done.push(command);
+    }
     h.state_mut().0.focus = crate::app::Focus::Editor;
 
     // Move to Trash, from Go to File.
@@ -2016,4 +2046,658 @@ fn headless_focus_keys() {
     press(&mut h, ALT, Key::F);
     press(&mut h, ALT, Key::F);
     assert!(app(&h).palette.is_none(), "so does ⌥F");
+}
+
+/// Right-click a tab: close others / to the right / to the left / saved,
+/// for editor tabs and terminal tabs alike.
+#[test]
+#[ignore]
+fn headless_tab_menus() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"];
+    for f in files {
+        std::fs::write(root.join(f), "fn x() {}\n").unwrap();
+    }
+    let mut h = harness(Some(root.join("a.rs")));
+    no_sidebar(&mut h);
+    for f in &files[1..] {
+        h.state_mut().0.open_file(&root.join(f));
+    }
+    let names = |h: &Harness<'static, Root>| -> Vec<String> {
+        app(h).tabs.iter().map(|t| t.buf.name()).collect()
+    };
+    let tab = |i: usize| egui::pos2(45.0 + 92.0 * i as f32, 49.0);
+    let pick = |h: &mut Harness<'static, Root>, label: &str| {
+        h.get_by_label_contains(label).click();
+        h.step();
+        h.step();
+    };
+
+    click_at(&mut h, tab(3), egui::PointerButton::Secondary);
+    shot(&mut h, "t1-tab-menu");
+    assert_eq!(app(&h).active, Some(3));
+    pick(&mut h, "Close to the Right");
+    assert_eq!(names(&h), ["a.rs", "b.rs", "c.rs", "d.rs"]);
+
+    click_at(&mut h, tab(1), egui::PointerButton::Secondary);
+    pick(&mut h, "Close to the Left");
+    assert_eq!(names(&h), ["b.rs", "c.rs", "d.rs"]);
+
+    h.state_mut().0.tabs[1].buf.modified = true; // c.rs
+    click_at(&mut h, tab(0), egui::PointerButton::Secondary);
+    pick(&mut h, "Close Saved");
+    assert_eq!(names(&h), ["c.rs"]);
+
+    h.state_mut().0.open_file(&root.join("a.rs"));
+    h.state_mut().0.open_file(&root.join("e.rs"));
+    click_at(&mut h, tab(1), egui::PointerButton::Secondary);
+    pick(&mut h, "Close Others");
+    // c.rs is unsaved: asked first, nothing lost.
+    assert!(app(&h).prompt.is_some());
+    h.state_mut().0.answer_prompt(crate::app::Answer::Discard, &egui::Context::default());
+    h.step();
+    assert_eq!(names(&h), ["a.rs"]);
+    // Reopen brings the last one closed back.
+    click_at(&mut h, tab(0), egui::PointerButton::Secondary);
+    pick(&mut h, "Reopen Closed Tab");
+    assert_eq!(names(&h).len(), 2);
+
+    // Terminal tabs: the same menu, on terminals.
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "first prompt", screen_has("$ "));
+    for _ in 0..3 {
+        press(&mut h, ALT, Key::N);
+        wait_for(&mut h, "new prompt", screen_has("$ "));
+    }
+    assert_eq!(app(&h).terminals.len(), 4);
+    let terms = |h: &Harness<'static, Root>| -> Vec<String> {
+        app(h).terminals.iter().map(|t| t.pane.display_name()).collect()
+    };
+    let before = terms(&h);
+    press(&mut h, CMD, Key::J); // back to the editor: the menu still acts on terminals
+    assert_eq!(app(&h).focus, crate::app::Focus::Editor);
+    click_at(&mut h, egui::pos2(228.0, 490.0), egui::PointerButton::Secondary);
+    shot(&mut h, "t2-terminal-menu");
+    assert_eq!(app(&h).active_terminal, 2);
+    pick(&mut h, "Close to the Right");
+    assert_eq!(terms(&h), before[..3]);
+    assert_eq!(names(&h).len(), 2, "editor tabs untouched");
+    click_at(&mut h, egui::pos2(128.0, 490.0), egui::PointerButton::Secondary);
+    pick(&mut h, "Close to the Left");
+    assert_eq!(terms(&h), before[1..3]);
+    click_at(&mut h, egui::pos2(40.0, 490.0), egui::PointerButton::Secondary);
+    pick(&mut h, "Close Others");
+    assert_eq!(terms(&h), before[1..2]);
+    assert_eq!(names(&h).len(), 2);
+    shot(&mut h, "t3-final");
+
+    // Side by side: each terminal's title bar has the same menu.
+    press(&mut h, ALT, Key::N);
+    wait_for(&mut h, "new prompt", screen_has("$ "));
+    press(&mut h, ALT, Key::G);
+    h.step();
+    let second = app(&h).terminal_rects.iter().find(|(i, _)| *i == 1).unwrap().1;
+    click_at(
+        &mut h,
+        egui::pos2(second.left() + 40.0, second.top() - 12.0),
+        egui::PointerButton::Secondary,
+    );
+    shot(&mut h, "t4-grid-title-menu");
+    assert_eq!(app(&h).active_terminal, 1);
+    pick(&mut h, "Close Others");
+    assert_eq!(app(&h).terminals.len(), 1);
+
+    // Editor split view: the tiles' title bars too.
+    press(&mut h, ALT, Key::T); // hide the terminal
+    h.state_mut().0.open_file(&root.join("c.rs"));
+    let ctx = h.ctx.clone();
+    h.state_mut().0.run(crate::keymap::Command::ToggleSplit, &ctx);
+    shot(&mut h, "t5-split");
+    click_at(&mut h, egui::pos2(700.0, 87.0), egui::PointerButton::Secondary); // e.rs's title
+    assert_eq!(names(&h)[app(&h).active.unwrap()], "e.rs");
+    pick(&mut h, "Close to the Right");
+    assert_eq!(names(&h), ["a.rs", "e.rs"]);
+}
+
+/// Every dialog — palettes, pickers, shortcuts sheet, confirmations — stays
+/// within 70% of the window both ways, at any window size.
+#[test]
+#[ignore]
+fn headless_dialogs_fit() {
+    use crate::keymap::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    for i in 0..60 {
+        std::fs::write(root.join(format!("file{i:02}.rs")), "fn x() {}\n").unwrap();
+    }
+    // A very long name makes the delete dialog's body long.
+    let deep = "a_rather_long_folder_name_here/".repeat(10);
+    std::fs::create_dir_all(root.join(&deep)).unwrap();
+    let long = format!("{deep}{}.rs", "very_long_name_".repeat(15));
+    std::fs::write(root.join(&long), "").unwrap();
+    let mut h = harness(Some(root.join("file00.rs")));
+    let opens = [
+        Command::Palette,
+        Command::GoToFile,
+        Command::RecentFolders,
+        Command::SearchInFiles,
+        Command::GoToLine,
+        Command::Settings,
+        Command::Keybindings,
+        Command::ClipboardHistory,
+        Command::Todos,
+        Command::SelectTheme,
+        Command::SelectUiFont,
+        Command::SelectCodeFont,
+        Command::Help,
+    ];
+    let check = |h: &mut Harness<'static, Root>, what: &str, size: egui::Vec2| {
+        for _ in 0..3 {
+            h.step();
+        }
+        let rect = ["palette", "help", "modal"]
+            .iter()
+            .find_map(|id| h.ctx.memory(|m| m.area_rect(egui::Id::unique(*id))))
+            .unwrap_or_else(|| panic!("{what}: no dialog"));
+        assert!(
+            rect.width() <= size.x * 0.7 + 1.0 && rect.height() <= size.y * 0.7 + 1.0,
+            "{what} at {size:?} is {:?}",
+            rect.size()
+        );
+        assert!(rect.min.y >= 0.0 && rect.max.y <= size.y, "{what} off screen: {rect:?}");
+    };
+    for size in [
+        egui::vec2(1280.0, 820.0),
+        egui::vec2(760.0, 460.0),
+        egui::vec2(2400.0, 1500.0),
+    ] {
+        h.set_size(size);
+        h.step();
+        for c in opens {
+            let ctx = h.ctx.clone();
+            h.state_mut().0.run(c, &ctx);
+            check(&mut h, &format!("{c:?}"), size);
+            if size.y < 500.0 {
+                shot(&mut h, &format!("fit-{c:?}"));
+            }
+            // Fresh areas each time: forget the last one's rect.
+            let ctx = h.ctx.clone();
+            let app = &mut h.state_mut().0;
+            app.palette = None;
+            app.help = false;
+            ctx.memory_mut(|m| *m.areas_mut() = Default::default());
+            h.step();
+        }
+        // Confirmations: delete (long name), then save-changes.
+        let ctx = h.ctx.clone();
+        h.state_mut().0.ask = Some(crate::app::Ask::Delete { path: root.join(&long) });
+        check(&mut h, "delete", size);
+        if size.y < 500.0 {
+            shot(&mut h, "fit-delete");
+        }
+        h.state_mut().0.ask = None;
+        ctx.memory_mut(|m| *m.areas_mut() = Default::default());
+        h.state_mut().0.tabs[0].buf.modified = true;
+        h.state_mut().0.run(Command::CloseTab, &ctx);
+        check(&mut h, "save changes", size);
+        h.state_mut().0.prompt = None;
+        h.state_mut().0.tabs[0].buf.modified = false;
+        ctx.memory_mut(|m| *m.areas_mut() = Default::default());
+        h.step();
+    }
+}
+
+/// Files deleted or changed by something else: a deleted file's tab is
+/// struck through and kept; the question comes when you switch to the tab,
+/// never by jumping to it.
+#[test]
+#[ignore]
+fn headless_disk_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    for f in ["a.rs", "b.rs", "c.rs"] {
+        std::fs::write(root.join(f), format!("// {f}\n")).unwrap();
+    }
+    let wait_disk = |h: &mut Harness<'static, Root>| {
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        h.step();
+        h.step();
+    };
+    let mut h = harness(Some(root.join("a.rs")));
+    no_sidebar(&mut h);
+    h.state_mut().0.open_file(&root.join("b.rs"));
+    h.state_mut().0.open_file(&root.join("c.rs"));
+    press(&mut h, CMD, Key::ArrowDown);
+    type_text(&mut h, "// mine"); // c.rs has unsaved edits
+    h.state_mut().0.select_tab(0);
+    h.step();
+    assert_eq!(app(&h).focus, crate::app::Focus::Editor);
+
+    std::fs::remove_file(root.join("b.rs")).unwrap();
+    std::fs::write(root.join("c.rs"), "// changed elsewhere\n").unwrap();
+    wait_disk(&mut h);
+    assert!(app(&h).tabs[1].gone, "b.rs is marked deleted");
+    assert_eq!(app(&h).active, Some(0), "no jumping to the changed tabs");
+    assert!(app(&h).conflict.is_none(), "nothing asked about other tabs");
+    shot(&mut h, "x0-struck-through");
+
+    // Switch to the deleted one: asked; keep it.
+    h.state_mut().0.select_tab(1);
+    h.step();
+    h.step();
+    shot(&mut h, "x1-deleted-dialog");
+    assert!(app(&h).conflict.is_some());
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(app(&h).conflict.is_none() && app(&h).tabs.len() == 3);
+    assert!(app(&h).tabs[1].gone && app(&h).tabs[1].buf.modified);
+    wait_disk(&mut h);
+    assert!(app(&h).conflict.is_none(), "asked once");
+
+    // The changed one with unsaved edits: asked; reload.
+    h.state_mut().0.select_tab(2);
+    h.step();
+    h.step();
+    shot(&mut h, "x2-changed-dialog");
+    assert!(app(&h).conflict.is_some());
+    press(&mut h, Modifiers::NONE, Key::R);
+    assert_eq!(text_of(&h), "// changed elsewhere\n");
+
+    // Saving the deleted one brings it back.
+    h.state_mut().0.select_tab(1);
+    h.step();
+    press(&mut h, CMD, Key::S);
+    assert!(root.join("b.rs").exists() && !app(&h).tabs[1].gone);
+
+    // Deleted while you're looking at it: asked right away; close the tab.
+    std::fs::remove_file(root.join("b.rs")).unwrap();
+    wait_disk(&mut h);
+    h.step();
+    assert!(app(&h).conflict.is_some());
+    press(&mut h, Modifiers::NONE, Key::C);
+    assert_eq!(app(&h).tabs.len(), 2);
+
+    // Deleted, then put back (a git checkout): a clean tab just follows it.
+    h.state_mut().0.select_tab(1);
+    h.step();
+    std::fs::remove_file(root.join("a.rs")).unwrap();
+    wait_disk(&mut h);
+    assert!(app(&h).tabs[0].gone);
+    std::fs::write(root.join("a.rs"), "// restored\n").unwrap();
+    wait_disk(&mut h);
+    let a = &app(&h).tabs[0];
+    assert!(!a.gone && a.disk_news.is_none() && !a.buf.modified);
+    h.state_mut().0.select_tab(0);
+    h.step();
+    h.step();
+    assert!(app(&h).conflict.is_none());
+    assert_eq!(text_of(&h), "// restored\n");
+}
+
+/// A setting changed in one window reaches every other open window.
+#[test]
+#[ignore]
+fn headless_settings_reach_all_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let (one, two) = (dir.path().join("one"), dir.path().join("two"));
+    for d in [&one, &two] {
+        std::fs::create_dir_all(d.join(".git")).unwrap();
+        std::fs::write(d.join("main.rs"), "fn main() {}\n").unwrap();
+    }
+    let mut a = harness(Some(one.join("main.rs")));
+    let mut b = harness(Some(two.join("main.rs")));
+    let _restore = keep_settings();
+    let theme = |h: &Harness<'static, Root>| app(h).config.theme.name.clone();
+    let start = theme(&b);
+    // The idle window is woken as soon as the file changes, not on a timer.
+    let woken: std::sync::Arc<std::sync::Mutex<Vec<std::time::Duration>>> = Default::default();
+    {
+        let woken = woken.clone();
+        b.ctx
+            .set_request_repaint_callback(move |info| woken.lock().unwrap().push(info.delay));
+    }
+    b.step();
+    woken.lock().unwrap().clear();
+    let other = if start == "Moss" { "Midnight" } else { "Moss" };
+    let ctx = a.ctx.clone();
+    a.state_mut().0.run(crate::keymap::Command::SelectTheme, &ctx);
+    a.step();
+    type_text(&mut a, other);
+    press(&mut a, Modifiers::NONE, Key::Enter);
+    assert_eq!(theme(&a), other);
+    let ctx = a.ctx.clone();
+    a.state_mut().0.run(crate::keymap::Command::ToggleWordWrap, &ctx);
+    let wrap = app(&a).config.settings.word_wrap;
+    std::thread::sleep(std::time::Duration::from_millis(900));
+    assert!(
+        woken.lock().unwrap().iter().any(|d| d.is_zero()),
+        "the other window was woken right away: {:?}",
+        woken.lock().unwrap()
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    while theme(&b) != other || app(&b).config.settings.word_wrap != wrap {
+        assert!(std::time::Instant::now() < deadline, "the other window never caught up");
+        b.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Closing several unsaved files: Save All / Discard All settle the rest
+/// in one go.
+#[test]
+#[ignore]
+fn headless_save_all_discard_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let files = ["a.rs", "b.rs", "c.rs"];
+    let edit_all = |h: &mut Harness<'static, Root>| {
+        for f in files {
+            h.state_mut().0.open_file(&root.join(f));
+            h.step();
+            press(h, CMD, Key::ArrowDown);
+            type_text(h, "// edited");
+        }
+    };
+    for f in files {
+        std::fs::write(root.join(f), "// start\n").unwrap();
+    }
+    let mut h = harness(Some(root.join("a.rs")));
+    no_sidebar(&mut h);
+    edit_all(&mut h);
+    press(&mut h, CMD_SHIFT, Key::W);
+    shot(&mut h, "s0-save-all");
+    assert!(h.query_by_label_contains("All 3 files").is_some());
+    press(&mut h, Modifiers::NONE, Key::A);
+    assert!(app(&h).prompt.is_none() && app(&h).tabs.is_empty());
+    for f in files {
+        assert_eq!(std::fs::read_to_string(root.join(f)).unwrap(), "// start\n// edited");
+    }
+
+    for f in files {
+        std::fs::write(root.join(f), "// start\n").unwrap();
+    }
+    edit_all(&mut h);
+    press(&mut h, CMD_SHIFT, Key::W);
+    // Answer the first one by itself, then discard the rest.
+    press(&mut h, Modifiers::NONE, Key::S);
+    assert!(h.query_by_label_contains("All 2 files").is_some());
+    press(&mut h, Modifiers::NONE, Key::X);
+    assert!(app(&h).prompt.is_none() && app(&h).tabs.is_empty());
+    let saved: Vec<String> = files
+        .iter()
+        .map(|f| std::fs::read_to_string(root.join(f)).unwrap())
+        .collect();
+    assert_eq!(saved.iter().filter(|t| t.ends_with("edited")).count(), 1);
+}
+
+/// ⇧⌥F formats with the language's tool (rustfmt here), as one undo step;
+/// `"formatters"` adds or replaces tools, `"formatOnSave"` runs it on ⌘S,
+/// and a missing tool says how to install it.
+#[test]
+#[ignore]
+fn headless_format_document() {
+    const SHIFT_ALT: Modifiers = Modifiers {
+        shift: true,
+        alt: true,
+        ..Modifiers::NONE
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".oxru")).unwrap();
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let messy = "fn  main(){let x=1;println!(\"{}\",x);}\n";
+    std::fs::write(root.join("main.rs"), messy).unwrap();
+    std::fs::write(root.join("notes.txt"), "shout\n").unwrap();
+    std::fs::write(root.join("a.md"), "# hi\n").unwrap();
+    std::fs::write(
+        root.join(".oxru/settings.json"),
+        r#"{ "formatters": { "txt": "tr a-z A-Z", "md": "no-such-formatter-xyz" }, "formatOnSave": true }"#,
+    )
+    .unwrap();
+    let last_toast = |h: &Harness<'static, Root>| {
+        app(h).toasts.last().map(|t| (t.msg.clone(), t.error)).unwrap_or_default()
+    };
+    let mut h = harness(Some(root.join("main.rs")));
+
+    if which("rustfmt") {
+        press(&mut h, SHIFT_ALT, Key::F);
+        assert_eq!(
+            text_of(&h),
+            "fn main() {\n    let x = 1;\n    println!(\"{}\", x);\n}\n",
+            "{:?}",
+            last_toast(&h)
+        );
+        shot(&mut h, "f0-formatted");
+        press(&mut h, CMD, Key::Z);
+        assert_eq!(text_of(&h), messy, "one undo step");
+    } else {
+        eprintln!("rustfmt not installed: skipped the real-tool step");
+    }
+
+    // Your own formatter, and format on save.
+    h.state_mut().0.open_file(&root.join("notes.txt"));
+    h.step();
+    press(&mut h, CMD, Key::ArrowDown);
+    type_text(&mut h, "more");
+    press(&mut h, CMD, Key::S);
+    assert_eq!(std::fs::read_to_string(root.join("notes.txt")).unwrap(), "SHOUT\nMORE");
+    assert!(!app(&h).active_tab().unwrap().buf.modified, "saved what was formatted");
+
+    // A tool that isn't there: told, text untouched.
+    h.state_mut().0.open_file(&root.join("a.md"));
+    h.step();
+    press(&mut h, SHIFT_ALT, Key::F);
+    let (msg, error) = last_toast(&h);
+    assert!(error && msg.contains("isn't installed"), "{msg}");
+    assert_eq!(text_of(&h), "# hi\n");
+    shot(&mut h, "f1-missing-tool");
+}
+
+fn which(tool: &str) -> bool {
+    std::process::Command::new("sh")
+        .args(["-c", &format!("command -v {tool}")])
+        .env("PATH", format!("{}:/opt/homebrew/bin:{}/.cargo/bin", std::env::var("PATH").unwrap_or_default(), std::env::var("HOME").unwrap_or_default()))
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// Highlighting across languages: a look at variables, numbers, operators,
+/// Markdown headings and code fences in the real editor.
+#[test]
+#[ignore]
+fn headless_highlighting() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("langs");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(
+        root.join("main.rs"),
+        "use std::collections::HashMap;\n\n/// Counts words.\n#[derive(Debug)]\nstruct Counter {\n    seen: HashMap<String, usize>,\n}\n\nfn count(text: &str, limit: usize) -> usize {\n    let mut total = 0;\n    for word in text.split_whitespace() {\n        if total >= limit * 2 + 1 {\n            break;\n        }\n        total += word.len();\n    }\n    println!(\"{total} words\");\n    total\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("notes.md"),
+        "# Release notes\n\nSome *emphasis*, **strong**, `inline code` and a [link](https://example.com).\n\n- one\n- two\n\n```python\ndef area(radius):\n    return 3.14 * radius ** 2\n```\n",
+    )
+    .unwrap();
+    let mut h = harness(Some(root.join("main.rs")));
+    no_sidebar(&mut h);
+    shot(&mut h, "h0-rust");
+    h.state_mut().0.open_file(&root.join("notes.md"));
+    shot(&mut h, "h1-markdown");
+    assert_eq!(app(&h).active_tab().unwrap().buf.lang.map(|l| l.name), Some("Markdown"));
+}
+
+/// Put the shared settings.json back when this goes out of scope, pass or
+/// fail: for tests that change settings.
+fn keep_settings() -> impl Drop {
+    struct Restore(PathBuf, String);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, &self.1);
+        }
+    }
+    let path = crate::config::settings_path();
+    let before = std::fs::read_to_string(&path).unwrap_or_default();
+    Restore(path, before)
+}
+
+/// The keys for what used to need the mouse: collapse the tree, text size,
+/// links in the terminal, and "Change shortcuts…" on the F1 sheet.
+#[test]
+#[ignore]
+fn headless_keyboard_for_everything() {
+    use crate::app::Focus;
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let _restore = keep_settings();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    for d in [".git", "src/cart", "docs"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    std::fs::write(root.join("src/cart/tax.rs"), "fn tax() {}\n").unwrap();
+    let mut h = harness(Some(root.join("src/cart/tax.rs")));
+    let open_dirs = |h: &Harness<'static, Root>| {
+        let tree = &app(h).project.as_ref().unwrap().tree;
+        tree.entries.iter().filter(|e| e.is_dir && e.expanded).count()
+    };
+
+    // ⌘← collapses the tree only while the tree has the keyboard.
+    assert!(open_dirs(&h) > 0, "the open file's folders start expanded");
+    press(&mut h, CMD, Key::ArrowLeft); // in the editor: line start, tree untouched
+    assert!(open_dirs(&h) > 0);
+    press(&mut h, CMD_SHIFT, Key::E);
+    assert_eq!(app(&h).focus, Focus::Sidebar);
+    shot(&mut h, "k0-tree-hints");
+    press(&mut h, CMD, Key::ArrowLeft);
+    assert_eq!(open_dirs(&h), 0);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+
+    // Text size: bigger, smaller, back to the default — saved, so every
+    // window follows.
+    let sizes = |h: &Harness<'static, Root>| {
+        let s = &app(h).config.settings;
+        (s.ui_font_size, s.code_font_size)
+    };
+    let start = sizes(&h);
+    press(&mut h, CMD, Key::Equals);
+    assert_eq!(sizes(&h), (start.0 + 1.0, start.1 + 1.0));
+    press(&mut h, CMD, Key::Minus);
+    press(&mut h, CMD, Key::Minus);
+    assert_eq!(sizes(&h), (start.0 - 1.0, start.1 - 1.0));
+    press(&mut h, CMD, Key::Num0);
+    let d = crate::config::Settings::default();
+    assert_eq!(sizes(&h), (d.ui_font_size, d.code_font_size));
+    assert!(std::fs::read_to_string(crate::config::settings_path()).unwrap().contains("uiFontSize"));
+
+    // Links in the terminal: ⇧⌘O lists them, newest first; ↵ opens one.
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "a prompt", screen_has("$ "));
+    run(&mut h, "printf 'docs https://example.com/one and https://example.com/two\\n'");
+    wait_for(&mut h, "the links", screen_has("example.com/two"));
+    press(&mut h, CMD_SHIFT, Key::O);
+    shot(&mut h, "k1-links");
+    let labels: Vec<String> = app(&h).palette.as_ref().unwrap().items.iter().map(|i| i.label.clone()).collect();
+    assert!(labels.contains(&"https://example.com/two".to_string()), "{labels:?}");
+    App::take_launched();
+    type_text(&mut h, "two");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(App::take_launched(), [vec!["https://example.com/two".to_string()]]);
+
+    // F1, then ↵: straight to changing shortcuts.
+    press(&mut h, Modifiers::NONE, Key::F1);
+    assert!(app(&h).help);
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(!app(&h).help);
+    assert_eq!(app(&h).palette.as_ref().map(|p| p.mode), Some(crate::palette::Mode::Keybindings));
+}
+
+/// The closing keys, for real: ⌥⌘] right, ⌥⌘[ left, ⌥⌘S saved, ⌥⌘T others.
+#[test]
+#[ignore]
+fn headless_close_keys() {
+    const CMD_ALT: Modifiers = Modifiers {
+        mac_cmd: true,
+        command: true,
+        alt: true,
+        ..Modifiers::NONE
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs", "f.rs"];
+    for f in files {
+        std::fs::write(root.join(f), "\n").unwrap();
+    }
+    let mut h = harness(Some(root.join("a.rs")));
+    for f in &files[1..] {
+        h.state_mut().0.open_file(&root.join(f));
+    }
+    let names = |h: &Harness<'static, Root>| -> Vec<String> {
+        app(h).tabs.iter().map(|t| t.buf.name()).collect()
+    };
+    h.state_mut().0.select_tab(4); // e.rs
+    h.step();
+    // The tab keys are on show where the tabs are.
+    let hints = app(&h).tab_hints(false);
+    assert!(hints.contains(&(vec!["⌥⌘[".into(), "⌥⌘]".into()], "close left / right")), "{hints:?}");
+    assert!(hints.iter().any(|(_, w)| *w == "close others"));
+    shot(&mut h, "z0-tab-hints");
+    h.set_size(egui::vec2(900.0, 600.0));
+    shot(&mut h, "z1-tab-hints-narrow");
+    for _ in 0..3 {
+        // Many tabs, narrow window: the hints keep their room.
+        for f in ["g.rs", "h.rs", "i.rs", "j.rs"] {
+            std::fs::write(root.join(f), "\n").unwrap();
+            h.state_mut().0.open_file(&root.join(f));
+        }
+    }
+    h.state_mut().0.select_tab(1);
+    shot(&mut h, "z1b-many-tabs");
+    for f in ["g.rs", "h.rs", "i.rs", "j.rs"] {
+        let i = app(&h).tabs.iter().position(|t| t.buf.name() == f).unwrap();
+        h.state_mut().0.tabs.remove(i);
+    }
+    h.state_mut().0.select_tab(4);
+    h.set_size(egui::vec2(1280.0, 820.0));
+    press(&mut h, CMD_ALT, Key::CloseBracket);
+    assert_eq!(names(&h), ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"]);
+    h.state_mut().0.select_tab(1); // b.rs
+    h.step();
+    press(&mut h, CMD_ALT, Key::OpenBracket);
+    assert_eq!(names(&h), ["b.rs", "c.rs", "d.rs", "e.rs"]);
+    h.state_mut().0.tabs[2].buf.modified = true; // d.rs unsaved
+    press(&mut h, CMD_ALT, Key::S);
+    assert_eq!(names(&h), ["d.rs"]);
+    h.state_mut().0.tabs[0].buf.modified = false;
+    h.state_mut().0.open_file(&root.join("a.rs"));
+    press(&mut h, CMD_ALT, Key::T);
+    assert_eq!(names(&h), ["a.rs"]);
+}
+
+/// A terminal's tab keys show on its tab bar while it has the keyboard.
+#[test]
+#[ignore]
+fn headless_terminal_tab_hints() {
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("a.rs"), "\n").unwrap();
+    let mut h = harness(Some(root.join("a.rs")));
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "a prompt", screen_has("$ "));
+    press(&mut h, ALT, Key::N);
+    wait_for(&mut h, "a prompt", screen_has("$ "));
+    let hints = app(&h).tab_hints(true);
+    assert!(hints.iter().any(|(c, w)| *w == "close" && c == &vec!["⌥W".to_string()]), "{hints:?}");
+    assert!(hints.iter().any(|(_, w)| *w == "close left / right"));
+    shot(&mut h, "z2-terminal-tab-hints");
 }

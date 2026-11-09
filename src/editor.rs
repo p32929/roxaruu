@@ -40,6 +40,10 @@ pub struct Tab {
     pub drag_from: Option<usize>,
     /// Word-wrap layout for (revision, width).
     wrap: Option<(u64, usize, Vec<Row>)>,
+    /// The file was deleted on disk (the tab shows it struck through).
+    pub gone: bool,
+    /// A change on disk not answered yet: asked when this tab is in front.
+    pub disk_news: Option<buffer::DiskStatus>,
 }
 
 impl Tab {
@@ -61,6 +65,8 @@ impl Tab {
             caret_epoch: 0.0,
             drag_from: None,
             wrap: None,
+            gone: false,
+            disk_news: None,
         };
         tab.refresh(None);
         Ok(tab)

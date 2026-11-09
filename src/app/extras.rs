@@ -48,10 +48,11 @@ pub enum Setting {
     CurrentLine,
     IndentGuides,
     Sidebar,
+    FormatOnSave,
 }
 
 impl Setting {
-    pub const ALL: [Setting; 10] = [
+    pub const ALL: [Setting; 11] = [
         Setting::Theme,
         Setting::UiFont,
         Setting::CodeFont,
@@ -62,6 +63,7 @@ impl Setting {
         Setting::CurrentLine,
         Setting::IndentGuides,
         Setting::Sidebar,
+        Setting::FormatOnSave,
     ];
 
     /// Its key in `settings.json`.
@@ -77,6 +79,7 @@ impl Setting {
             Setting::CurrentLine => "currentLine",
             Setting::IndentGuides => "indentGuides",
             Setting::Sidebar => "sidebar",
+            Setting::FormatOnSave => "formatOnSave",
         }
     }
 
@@ -92,6 +95,7 @@ impl Setting {
             Setting::CurrentLine => "Highlight the current line",
             Setting::IndentGuides => "Indent guides",
             Setting::Sidebar => "Show file tree",
+            Setting::FormatOnSave => "Format on save",
         }
     }
 
@@ -103,7 +107,7 @@ impl Setting {
             }
             Setting::TerminalFps => icon::PULSE,
             Setting::WordWrap => icon::WRAP,
-            Setting::CurrentLine | Setting::IndentGuides => icon::EDIT,
+            Setting::CurrentLine | Setting::IndentGuides | Setting::FormatOnSave => icon::EDIT,
             Setting::Sidebar => icon::SIDEBAR,
         }
     }
@@ -454,6 +458,7 @@ impl App {
             Setting::CurrentLine => on(st.current_line),
             Setting::IndentGuides => on(st.indent_guides),
             Setting::Sidebar => on(st.sidebar),
+            Setting::FormatOnSave => on(st.format_on_save),
         }
     }
 
@@ -496,6 +501,7 @@ impl App {
             Setting::CurrentLine => (!st.current_line).into(),
             Setting::IndentGuides => (!st.indent_guides).into(),
             Setting::Sidebar => (!st.sidebar).into(),
+            Setting::FormatOnSave => (!st.format_on_save).into(),
         };
         self.save_choice_quietly(s.key(), value, ctx);
         self.refresh_items();
@@ -674,6 +680,21 @@ mod tests {
     fn previews_are_one_squeezed_line() {
         assert_eq!(preview("\n   fn  main() {\n}\n"), "fn main() {");
         assert!(preview(&"x".repeat(300)).ends_with('…'));
+    }
+
+    /// Every row of the Settings screen is a real settings.json key, and the
+    /// starter settings.json documents it.
+    #[test]
+    fn every_setting_is_a_real_documented_key() {
+        let template = crate::config::settings_template();
+        for s in Setting::ALL {
+            let one = format!("{{ \"{}\": null }}", s.key());
+            let parsed: Result<crate::config::Settings, _> = json5::from_str(&one);
+            // `null` is the wrong type for every key; an unknown key says so.
+            let err = parsed.err().map(|e| e.to_string()).unwrap_or_default();
+            assert!(!err.contains("unknown field"), "{}: {err}", s.key());
+            assert!(template.contains(&format!("\"{}\"", s.key())), "{} isn't in the template", s.key());
+        }
     }
 
     #[test]

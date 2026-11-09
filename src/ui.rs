@@ -215,6 +215,24 @@ pub mod icon {
         (glyph, rgb(hex))
     }
 
+    /// The shortcuts sheet lists every command that has a key, once.
+    #[test]
+    fn shortcuts_sheet_lists_every_bound_command_once() {
+        use crate::keymap::{COMMANDS, Command, Keymap};
+        let (km, _) = Keymap::new(&[]);
+        let listed: Vec<Command> = crate::ui::help_sections(&km)
+            .into_iter()
+            .flat_map(|(_, rows)| rows.into_iter().map(|(c, _)| c))
+            .collect();
+        for c in COMMANDS {
+            let numbered = matches!(c.command, Command::JumpTerminal(n) | Command::GoToTab(n) if n > 1);
+            if km.combo_for(c.command).is_some() && !numbered {
+                let n = listed.iter().filter(|l| **l == c.command).count();
+                assert_eq!(n, 1, "{} is listed {n} times", c.id);
+            }
+        }
+    }
+
     #[test]
     fn file_icons_by_name_then_extension() {
         for name in [
@@ -253,7 +271,11 @@ pub mod icon {
             Command::Save => SAVE,
             Command::SaveAll => SAVE_ALL,
             Command::CloseTab => CLOSE,
-            Command::CloseAllTabs => CLOSE_ALL,
+            Command::CloseAllTabs
+            | Command::CloseOtherTabs
+            | Command::CloseTabsToRight
+            | Command::CloseTabsToLeft
+            | Command::CloseSavedTabs => CLOSE_ALL,
             Command::ReopenTab => HISTORY,
             Command::NewFile => NEW_FILE,
             Command::NewFolder => NEW_FOLDER,
@@ -279,6 +301,11 @@ pub mod icon {
             Command::ToggleSidebar => SIDEBAR,
             Command::GoToLine => GO_TO_LINE,
             Command::ToggleComment => COMMENT,
+            Command::FormatDocument => EDIT,
+            Command::CollapseFolders => COLLAPSE_ALL,
+            Command::OpenTerminalLink => LINK,
+            Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => FONT,
+            Command::FullScreen | Command::MaximizeWindow => MAXIMIZE,
             Command::MoveLineUp
             | Command::MoveLineDown
             | Command::DuplicateLineUp
@@ -304,6 +331,33 @@ pub mod icon {
     }
 }
 
+/// Menu entries in separated groups: the command, its label, and whether
+/// it can run now.
+type MenuGroups = Vec<Vec<(Command, &'static str, bool)>>;
+
+/// A right-click menu of commands in separated groups, each with its
+/// shortcut; returns the one picked.
+fn command_menu(
+    ui: &mut egui::Ui,
+    groups: &[Vec<(Command, &'static str, bool)>],
+    key: &dyn Fn(Command) -> Option<String>,
+) -> Option<Command> {
+    let mut pick = None;
+    for (g, group) in groups.iter().enumerate() {
+        if g > 0 {
+            ui.separator();
+        }
+        for &(c, title, enabled) in group {
+            let button = egui::Button::new(title).shortcut_text(key(c).unwrap_or_default());
+            if ui.add_enabled(enabled, button).clicked() {
+                pick = Some(c);
+                ui.close();
+            }
+        }
+    }
+    pick
+}
+
 /// A dialog button: its label, the key hint shown on it, and the keys that press it.
 struct Btn {
     label: &'static str,
@@ -316,7 +370,7 @@ struct Btn {
 const PALETTE_ROWS: usize = 10;
 
 /// A key hint: the keycaps, then what they do ("" for bare caps).
-type Hint = (Vec<String>, &'static str);
+pub(crate) type Hint = (Vec<String>, &'static str);
 
 /// Colours + scale: everything the shared widgets need. Holding a copy (not a
 /// borrow of `App`) lets them draw while app state is mutably borrowed.
@@ -466,6 +520,17 @@ impl Paint {
             x -= w + 4.0 * s;
         }
         right_center.x - x
+    }
+
+    /// As many of `hints` as fit in `room`, right-aligned, keeping their
+    /// order: put the most useful first, so a narrow window drops the rest.
+    fn hints_in(&self, ui: &egui::Ui, p: &egui::Painter, room: Rect, hints: &[Hint], size: f32) {
+        let width = |n: usize| self.key_hints(ui, None, &hints[..n], size, Pos2::ZERO);
+        let n = (0..=hints.len()).rev().find(|&n| width(n) <= room.width()).unwrap_or(0);
+        if n > 0 {
+            let w = width(n);
+            self.key_hints(ui, Some(p), &hints[..n], size, pos2(room.right() - w, room.center().y));
+        }
     }
 
     /// Key hints left to right from `left_center`: each one's caps, then
@@ -707,9 +772,24 @@ impl App {
                 .x
                 + 68.0 * s
         };
+        // In the editor, the tab keys get the strip's right end: room for at
+        // least the first few is kept, however many tabs are open.
+        let hints = if self.focus == Focus::Editor && self.palette.is_none() {
+            self.tab_hints(false)
+        } else {
+            Vec::new()
+        };
+        let reserve = if hints.is_empty() {
+            0.0
+        } else {
+            let first = &hints[..hints.len().min(3)];
+            (pt.key_hints(ui, None, first, 11.5, Pos2::ZERO) + 32.0 * s).min(bar.width() * 0.45)
+        };
+        let limit = bar.right() - reserve;
+        let marker_w = 56.0 * s; // "‹ N" / "N ›"
         let mut start = 0;
         if let Some(a) = self.active {
-            let room = bar.width() - 56.0 * s; // with the "‹ N" marker
+            let room = limit - bar.left() - 2.0 * marker_w;
             while start < a && (start..=a).map(&tab_w).sum::<f32>() > room {
                 start += 1;
             }
@@ -753,7 +833,8 @@ impl App {
             x = r.right();
         }
         let (mut select, mut close, mut menu_pick) = (None, None, None);
-        let key = |c: Command| self.config.keymap.combo_for(c).map(|k| k.caps().concat());
+        let mut hidden_right = 0;
+        let key = |c: Command| self.shortcut(c);
         for (i, tab) in self.tabs.iter().enumerate().skip(start) {
             // Same-named files get their folder alongside, to tell them apart.
             let dup = names.iter().filter(|n| **n == names[i]).count() > 1;
@@ -769,11 +850,14 @@ impl App {
             };
             let active = self.active == Some(i);
             let mut job = LayoutJob::default();
-            job.append(
-                &names[i],
-                0.0,
-                egui::TextFormat::simple(font.clone(), if active { c.text } else { c.text_muted }),
-            );
+            let mut fmt =
+                egui::TextFormat::simple(font.clone(), if active { c.text } else { c.text_muted });
+            if tab.gone {
+                // Deleted on disk: struck through until saved back or closed.
+                fmt.color = c.error.gamma_multiply(0.85);
+                fmt.strikethrough = Stroke::new(1.5 * s, c.error.gamma_multiply(0.85));
+            }
+            job.append(&names[i], 0.0, fmt);
             if !detail.is_empty() {
                 job.append(
                     &format!("  {detail}"),
@@ -785,8 +869,10 @@ impl App {
             let (glyph, tint) = icon::for_file(&names[i]);
             let w = 14.0 * s + 20.0 * s + g.size().x + 34.0 * s;
             let rect = Rect::from_min_size(pos2(x, bar.top()), vec2(w, height - 1.0));
-            if rect.left() > bar.right() {
-                break; // past the edge; ⌃Tab still reaches them
+            let last = i + 1 == self.tabs.len();
+            if !active && rect.right() > limit - if last { 0.0 } else { marker_w } {
+                hidden_right = self.tabs.len() - i; // ⌃Tab and "N ›" reach them
+                break;
             }
             let resp = ui.interact(rect, ui.scope_id().with(("tab", i)), Sense::click());
             let close_rect = Rect::from_center_size(
@@ -830,30 +916,22 @@ impl App {
                 } else {
                     names[i].clone()
                 };
+                let gone = if tab.gone {
+                    format!(
+                        "\ndeleted on disk — {} saves it back",
+                        key(Command::Save).unwrap_or_default()
+                    )
+                } else {
+                    String::new()
+                };
                 match jump {
-                    Some(k) => format!("{path}\n{k} to switch here · right-click for more"),
-                    None => format!("{path}\nright-click for more"),
+                    Some(k) => format!("{path}{gone}\n{k} to switch here · right-click for more"),
+                    None => format!("{path}{gone}\nright-click for more"),
                 }
             };
             let resp = resp.on_hover_text(tip);
             resp.context_menu(|ui| {
-                for (c, title) in [
-                    (Command::CloseTab, "Close"),
-                    (Command::CloseAllTabs, "Close All"),
-                    (Command::ReopenTab, "Reopen Closed Tab"),
-                    (Command::FocusSidebar, "Show in Sidebar"),
-                    (Command::CopyPath, "Copy Path"),
-                    (Command::CopyRelativePath, "Copy Relative Path"),
-                    (Command::RevealInFinder, "Reveal in Finder"),
-                ] {
-                    if ui
-                        .add(egui::Button::new(title).shortcut_text(key(c).unwrap_or_default()))
-                        .clicked()
-                    {
-                        menu_pick = Some(c);
-                        ui.close();
-                    }
-                }
+                menu_pick = menu_pick.or(command_menu(ui, &self.tab_menu(i), &key));
             });
             if active {
                 p.rect_filled(rect, 0.0, c.background);
@@ -913,6 +991,38 @@ impl App {
             }
             x += w;
         }
+        if hidden_right > 0 {
+            // "3 ›": tabs past the right end; click for the next one.
+            let g = ui.fonts_mut(|f| {
+                f.layout_no_wrap(
+                    format!("{hidden_right} {}", icon::CHEVRON_RIGHT),
+                    pt.font(12.0, Weight::Medium),
+                    c.text_subtle,
+                )
+            });
+            let r = Rect::from_min_size(pos2(x, bar.top()), vec2(g.size().x + 12.0 * s, height - 1.0));
+            let resp = ui.interact(r, egui::Id::unique("tabs-hidden-right"), Sense::click());
+            if resp.hovered() {
+                p.rect_filled(r, 0.0, c.hover);
+            }
+            p.galley(pos2(r.left() + 6.0 * s, r.center().y - g.size().y / 2.0), g, c.text_subtle);
+            let keys = key(Command::NextTab).unwrap_or_default();
+            if resp
+                .on_hover_text(format!("{hidden_right} more tabs to the right · {keys} goes on"))
+                .clicked()
+            {
+                select = Some(self.tabs.len() - hidden_right);
+            }
+            x = r.right();
+        }
+        // The tab keys, in the room kept for them (and any left over).
+        if !hints.is_empty() {
+            let room = Rect::from_min_max(
+                pos2(x + 20.0 * s, bar.top()),
+                pos2(bar.right() - 12.0 * s, bar.bottom()),
+            );
+            pt.hints_in(ui, &p, room, &hints, 11.5);
+        }
         if let Some(i) = select {
             self.select_tab(i);
         }
@@ -948,16 +1058,11 @@ impl App {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let more = if left > 1 {
-            format!(" ({left} files with unsaved changes)")
-        } else {
-            String::new()
-        };
         let picked = self.modal(
             ctx,
             icon::WARNING,
             &format!("Save changes to {name}?"),
-            &format!("Your changes will be lost if you don't save them.{more}"),
+            "Your changes will be lost if you don't save them.",
             &[
                 Btn {
                     label: "Don't Save",
@@ -979,31 +1084,83 @@ impl App {
                 },
             ],
             None,
+            // Several unsaved: settle them all at once.
+            (left > 1).then_some((
+                &format!("All {left} files:") as &str,
+                &[
+                    Btn {
+                        label: "Discard All",
+                        hint: "X",
+                        keys: &[Key::X],
+                        primary: false,
+                    },
+                    Btn {
+                        label: "Save All",
+                        hint: "A",
+                        keys: &[Key::A],
+                        primary: false,
+                    },
+                ][..],
+            )),
         );
-        let answer = picked.map(|i| [Answer::Discard, Answer::Cancel, Answer::Save][i]);
+        let answer = picked.map(|i| {
+            [
+                Answer::Discard,
+                Answer::Cancel,
+                Answer::Save,
+                Answer::DiscardAll,
+                Answer::SaveAll,
+            ][i]
+        });
         if let Some(a) = answer {
             self.answer_prompt(a, ctx);
         }
     }
 
-    /// A file with unsaved edits here changed on disk: reload it, or keep ours.
+    /// This tab's file changed on disk (and it has unsaved edits): reload
+    /// it, or keep ours. Or it was deleted: close the tab, or keep it.
     fn conflict_ui(&mut self, ctx: &egui::Context) {
         let Some(path) = &self.conflict else { return };
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let picked = self.modal(
-            ctx,
-            icon::WARNING,
-            &format!("{name} changed on disk"),
-            "You have unsaved changes here. Reload the version on disk (your changes are discarded), or keep yours?",
-            &[
-                Btn { label: "Reload from Disk", hint: "R", keys: &[Key::R], primary: false },
-                Btn { label: "Keep Mine", hint: "↵", keys: &[Key::Enter, Key::K, Key::Escape], primary: true },
-            ],
-            None,
-        );
+        let deleted = self.tabs.iter().any(|t| {
+            t.path() == Some(path) && t.disk_news == Some(crate::buffer::DiskStatus::Deleted)
+        });
+        let save = self
+            .config
+            .keymap
+            .combo_for(Command::Save)
+            .map(|k| k.caps().concat())
+            .unwrap_or_default();
+        let picked = if deleted {
+            self.modal(
+                ctx,
+                icon::TRASH,
+                &format!("{name} was deleted"),
+                &format!("Something outside Roxaruu deleted it. Keep the tab to go on reading or editing it ({save} saves it back), or close it."),
+                &[
+                    Btn { label: "Close Tab", hint: "C", keys: &[Key::C, Key::W], primary: false },
+                    Btn { label: "Keep Open", hint: "↵", keys: &[Key::Enter, Key::K, Key::Escape], primary: true },
+                ],
+                None,
+                None,
+            )
+        } else {
+            self.modal(
+                ctx,
+                icon::WARNING,
+                &format!("{name} changed on disk"),
+                "You have unsaved changes here. Reload the version on disk (your changes are discarded), or keep yours?",
+                &[
+                    Btn { label: "Reload from Disk", hint: "R", keys: &[Key::R], primary: false },
+                    Btn { label: "Keep Mine", hint: "↵", keys: &[Key::Enter, Key::K, Key::Escape], primary: true },
+                ],
+                None,
+                None,
+            )
+        };
         if let Some(i) = picked {
             self.answer_conflict(i == 0);
         }
@@ -1056,6 +1213,7 @@ impl App {
                     &body,
                     &[CANCEL, ok("Create")],
                     Some((name, 0)),
+                    None,
                 )
             }
             Ask::Rename { path, name } => {
@@ -1073,6 +1231,7 @@ impl App {
                     &body,
                     &[CANCEL, ok("Rename")],
                     Some((name, stem)),
+                    None,
                 )
             }
             Ask::Delete { path } => {
@@ -1090,6 +1249,7 @@ impl App {
                     &body,
                     &[CANCEL, ok("Move to Trash")],
                     None,
+                    None,
                 )
             }
             Ask::OpenUrl(url) => {
@@ -1100,6 +1260,7 @@ impl App {
                     "Open this link in your browser?",
                     &body,
                     &[CANCEL, ok("Open")],
+                    None,
                     None,
                 )
             }
@@ -1115,6 +1276,7 @@ impl App {
     /// Returns the index of the button chosen by click or key.
     /// With `input`, a text field sits under the body; `select` is the char
     /// range selected when it first appears.
+    #[allow(clippy::too_many_arguments)]
     fn modal(
         &self,
         ctx: &egui::Context,
@@ -1123,12 +1285,15 @@ impl App {
         body: &str,
         buttons: &[Btn],
         input: Option<(&mut String, usize)>,
+        more: Option<(&str, &[Btn])>,
     ) -> Option<usize> {
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
+        let extra = more.map_or(&[][..], |m| m.1);
         let by_key = ctx.input_mut(|i| {
             buttons
                 .iter()
+                .chain(extra)
                 .position(|b| b.keys.iter().any(|k| i.consume_key(Modifiers::NONE, *k)))
         });
         // Keys the dialog doesn't use must not reach anything behind it (with
@@ -1152,8 +1317,18 @@ impl App {
         ))
         .rect_filled(screen, 0.0, dim);
 
-        let width = (460.0 * s).min(screen.width() - 32.0);
-        let pos = pos2(screen.center().x - width / 2.0, screen.top() + 140.0 * s);
+        // At most 70% of the window either way; a long body scrolls.
+        let width = (460.0 * s).min(screen.width() * 0.7 - 2.0);
+        let pos = pos2(
+            screen.center().x - width / 2.0,
+            screen.top() + (140.0 * s).min(screen.height() * 0.15),
+        );
+        // Title, field, buttons, second row.
+        let chrome = (100.0
+            + if input.is_some() { 50.0 } else { 0.0 }
+            + if more.is_some() { 56.0 } else { 0.0 })
+            * s;
+        let body_max = (screen.height() * 0.7 - 40.0 * s - chrome).max(20.0 * s);
         let mut clicked = None;
         egui::Area::new(egui::Id::unique("modal"))
             .order(egui::Order::Foreground)
@@ -1173,24 +1348,32 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_width(width - 40.0 * s);
                         ui.spacing_mut().item_spacing = vec2(8.0 * s, 6.0 * s);
-                        ui.horizontal(|ui| {
+                        ui.horizontal_top(|ui| {
                             ui.label(
                                 egui::RichText::new(glyph)
                                     .font(pt.font(18.0, Weight::Regular))
                                     .color(c.accent),
                             );
-                            ui.label(
-                                egui::RichText::new(title)
-                                    .font(pt.font(16.0, Weight::SemiBold))
-                                    .color(c.text),
+                            // A long file name wraps; it never widens the dialog.
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(title)
+                                        .font(pt.font(16.0, Weight::SemiBold))
+                                        .color(c.text),
+                                )
+                                .wrap(),
                             );
                         });
                         if !body.is_empty() {
-                            ui.label(
-                                egui::RichText::new(body)
-                                    .font(pt.font(13.0, Weight::Regular))
-                                    .color(c.text_muted),
-                            );
+                            egui::ScrollArea::vertical()
+                                .max_height(body_max)
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(body)
+                                            .font(pt.font(13.0, Weight::Regular))
+                                            .color(c.text_muted),
+                                    );
+                                });
                         }
                         if let Some((text, select)) = input {
                             ui.add_space(6.0 * s);
@@ -1225,23 +1408,24 @@ impl App {
                                 }
                             });
                         }
+                        let button = |ui: &mut egui::Ui, b: &Btn| {
+                            let color = if b.primary { c.accent_text } else { c.text };
+                            let text = egui::RichText::new(format!("{}  {}", b.label, b.hint))
+                                .font(pt.font(13.0, Weight::Medium))
+                                .color(color);
+                            let widget = egui::Button::new(text)
+                                .fill(if b.primary { c.accent } else { c.surface })
+                                .stroke(Stroke::new(
+                                    1.0,
+                                    if b.primary { c.accent } else { c.border },
+                                ))
+                                .corner_radius(8.0 * s)
+                                .min_size(vec2(0.0, 32.0 * s));
+                            ui.add(widget).clicked()
+                        };
                         ui.add_space(12.0 * s);
                         ui.horizontal(|ui| {
-                            let button = |ui: &mut egui::Ui, b: &Btn| {
-                                let color = if b.primary { c.accent_text } else { c.text };
-                                let text = egui::RichText::new(format!("{}  {}", b.label, b.hint))
-                                    .font(pt.font(13.0, Weight::Medium))
-                                    .color(color);
-                                let widget = egui::Button::new(text)
-                                    .fill(if b.primary { c.accent } else { c.surface })
-                                    .stroke(Stroke::new(
-                                        1.0,
-                                        if b.primary { c.accent } else { c.border },
-                                    ))
-                                    .corner_radius(8.0 * s)
-                                    .min_size(vec2(0.0, 32.0 * s));
-                                ui.add(widget).clicked()
-                            };
+
                             if let Some(first) = buttons.first()
                                 && button(ui, first)
                             {
@@ -1258,6 +1442,25 @@ impl App {
                                 },
                             );
                         });
+                        // A second row for choices that cover more than this one.
+                        if let Some((caption, row)) = more {
+                            ui.add_space(8.0 * s);
+                            ui.separator();
+                            let row_layout = egui::Layout::left_to_right(egui::Align::Center)
+                                .with_main_wrap(true);
+                            ui.with_layout(row_layout, |ui| {
+                                ui.label(
+                                    egui::RichText::new(caption)
+                                        .font(pt.font(12.5, Weight::Regular))
+                                        .color(c.text_subtle),
+                                );
+                                for (j, b) in row.iter().enumerate() {
+                                    if button(ui, b) {
+                                        clicked = Some(buttons.len() + j);
+                                    }
+                                }
+                            });
+                        }
                     });
             });
         by_key.or(clicked)
@@ -1310,8 +1513,7 @@ impl App {
             ui.send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
         if resp.double_clicked() {
-            let max = ui.input(|i| i.viewport().maximized.unwrap_or(false));
-            ui.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+            crate::app::toggle_maximized(ui.ctx());
         }
 
         // The sidebar button, just right of the traffic lights.
@@ -1394,6 +1596,7 @@ impl App {
                 cmd(Command::NewFile, "new file"),
                 cmd(Command::RenameFile, "rename"),
                 cmd(Command::DeleteFile, "move to trash"),
+                cmd(Command::CollapseFolders, "collapse all"),
                 raw("esc", "back to editor"),
             ]
         } else if self.focus == Focus::Find {
@@ -1474,6 +1677,7 @@ impl App {
             .active_tab()
             .map(|t| t.buf.lang.map_or("Plain Text", |l| l.name).to_string());
         let stats = [
+            Some(format!("v{}", crate::VERSION)),
             self.mem_kb
                 .map(|kb| format!("{}  {:.0} MB", icon::CHIP, kb as f64 / 1024.0)),
             self.fps.map(|f| format!("{}  {f:.1} fps", icon::PULSE)),
@@ -1603,6 +1807,24 @@ impl App {
             });
         }
         picked
+    }
+
+    /// The app icon as a texture (decoded once), mipmapped so the 1024px
+    /// image stays crisp when drawn small. `None` if it can't be decoded.
+    fn app_icon_texture(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
+        if self.app_icon.is_none() {
+            let icon = eframe::icon_data::from_png_bytes(crate::ICON).ok()?;
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [icon.width as usize, icon.height as usize],
+                &icon.rgba,
+            );
+            let options = egui::TextureOptions {
+                mipmap_mode: Some(egui::TextureFilter::Linear),
+                ..egui::TextureOptions::LINEAR
+            };
+            self.app_icon = Some(ctx.load_texture("app-icon", image, options));
+        }
+        self.app_icon.as_ref().map(|t| t.id())
     }
 
     /// The start screen: brand (or the open project) and a card of actions
@@ -1742,7 +1964,7 @@ impl App {
             .then(|| actions[self.welcome_selected]);
 
         let area = ui.max_rect();
-        let mark = 44.0 * s;
+        let mark = 56.0 * s;
         let row_h = 40.0 * s;
         let pad = 6.0 * s;
         let card_w = (440.0 * s).min(area.width() - 32.0);
@@ -1765,8 +1987,9 @@ impl App {
             .map(|k| k.caps().concat())
             .unwrap_or_else(|| "F1".into());
         let footer_text = format!(
-            "{help} shows every shortcut   ·   {}  themes, fonts and keys live in ~/.config/oxru",
-            icon::GEAR
+            "{help} shows every shortcut   ·   {}  themes, fonts and keys live in ~/.config/oxru   ·   v{}",
+            icon::GEAR,
+            crate::VERSION
         );
         let footer = layout(footer_text, pt.font(12.0, Weight::Regular), c.text_subtle);
 
@@ -1782,14 +2005,25 @@ impl App {
             pos2(cx - (mark + gap + wordmark.size().x) / 2.0, y),
             vec2(mark, mark),
         );
-        p.rect_filled(tile, 12.0 * s, c.accent);
-        p.text(
-            tile.center(),
-            Align2::CENTER_CENTER,
-            tile_icon,
-            pt.font(22.0, Weight::Regular),
-            c.accent_text,
-        );
+        match self.app_icon_texture(ui.ctx()) {
+            // The icon's art fills 824 of its 1024 pixels (Apple's grid,
+            // with room for the shadow): scale so the art is `mark` wide.
+            Some(id) => {
+                let full = Rect::from_center_size(tile.center(), tile.size() * (1024.0 / 824.0));
+                let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                p.image(id, full, uv, Color32::WHITE);
+            }
+            None => {
+                p.rect_filled(tile, 12.0 * s, c.accent);
+                p.text(
+                    tile.center(),
+                    Align2::CENTER_CENTER,
+                    tile_icon,
+                    pt.font(22.0, Weight::Regular),
+                    c.accent_text,
+                );
+            }
+        }
         p.galley(
             pos2(
                 tile.right() + gap,
@@ -2237,6 +2471,104 @@ impl App {
         pressed
     }
 
+    /// The keys for tabs, shown on the strip they act on: editor tabs, or
+    /// (`terminal`) terminal tabs. Most useful first; only what applies.
+    pub(crate) fn tab_hints(&self, terminal: bool) -> Vec<Hint> {
+        let n = if terminal { self.terminals.len() } else { self.tabs.len() };
+        let caps = |cs: &[Command]| -> Vec<String> { cs.iter().filter_map(|c| self.shortcut(*c)).collect() };
+        let close = if terminal { Command::CloseTerminal } else { Command::CloseTab };
+        let mut v: Vec<(Vec<String>, &'static str, bool)> = vec![
+            (caps(&[close]), "close", n > 0),
+            (caps(&[Command::CloseTabsToLeft, Command::CloseTabsToRight]), "close left / right", n > 1),
+            (caps(&[Command::CloseOtherTabs]), "close others", n > 1),
+        ];
+        if terminal {
+            v.extend([
+                (caps(&[Command::NewTerminal]), "new", true),
+                (caps(&[Command::NextTab]), "next", n > 1),
+                (caps(&[Command::MoveTabLeft, Command::MoveTabRight]), "move", n > 1),
+                (caps(&[Command::ToggleTerminalGrid]), "side by side", n > 1),
+            ]);
+        } else {
+            v.extend([
+                (caps(&[Command::CloseAllTabs]), "close all", n > 1),
+                (caps(&[Command::CloseSavedTabs]), "close saved", self.available(Command::CloseSavedTabs) && n > 1),
+                (caps(&[Command::NextTab]), "next", n > 1),
+                (caps(&[Command::MoveTabLeft, Command::MoveTabRight]), "move", n > 1),
+                (caps(&[Command::ReopenTab]), "reopen", self.available(Command::ReopenTab)),
+            ]);
+        }
+        v.into_iter()
+            .filter(|(caps, _, applies)| *applies && !caps.is_empty())
+            .map(|(caps, what, _)| (caps, what))
+            .collect()
+    }
+
+    /// The right-click menu of editor tab `i` (on its tab, or its title in
+    /// split view). Right-click makes it the active tab, so these act on it.
+    fn tab_menu(&self, i: usize) -> MenuGroups {
+        let n = self.tabs.len();
+        let has_path = self.tabs.get(i).is_some_and(|t| t.path().is_some());
+        vec![
+            vec![
+                (Command::CloseTab, "Close", true),
+                (Command::CloseOtherTabs, "Close Others", n > 1),
+                (Command::CloseTabsToRight, "Close to the Right", i + 1 < n),
+                (Command::CloseTabsToLeft, "Close to the Left", i > 0),
+                (
+                    Command::CloseSavedTabs,
+                    "Close Saved",
+                    self.tabs.iter().any(|t| !t.buf.modified),
+                ),
+                (Command::CloseAllTabs, "Close All", true),
+            ],
+            vec![
+                (
+                    Command::ReopenTab,
+                    "Reopen Closed Tab",
+                    self.available(Command::ReopenTab),
+                ),
+                (Command::MoveTabLeft, "Move Left", i > 0),
+                (Command::MoveTabRight, "Move Right", i + 1 < n),
+            ],
+            vec![
+                (Command::CopyPath, "Copy Path", has_path),
+                (Command::CopyRelativePath, "Copy Relative Path", has_path),
+                (Command::RevealInFinder, "Reveal in Finder", has_path),
+                (Command::FocusSidebar, "Show in File Tree", has_path),
+            ],
+        ]
+    }
+
+    /// The right-click menu of terminal `i` (its tab, or its title side by
+    /// side). Right-click focuses that terminal, so these act on it.
+    fn terminal_menu(&self, i: usize) -> MenuGroups {
+        let n = self.terminals.len();
+        vec![
+            vec![(Command::NewTerminal, "New Terminal", true)],
+            vec![
+                (Command::CloseTerminal, "Close", true),
+                (Command::CloseOtherTabs, "Close Others", n > 1),
+                (Command::CloseTabsToRight, "Close to the Right", i + 1 < n),
+                (Command::CloseTabsToLeft, "Close to the Left", i > 0),
+            ],
+            vec![
+                (Command::MoveTabLeft, "Move Left", i > 0),
+                (Command::MoveTabRight, "Move Right", i + 1 < n),
+            ],
+            vec![
+                (Command::ClearTerminal, "Clear", true),
+                (Command::MaximizeTerminal, "Maximize / Restore", true),
+                (Command::ToggleTerminalGrid, "Side by Side / as Tabs", n > 1),
+            ],
+        ]
+    }
+
+    /// The key that runs `c`, as keycaps ("⇧⌘W").
+    fn shortcut(&self, c: Command) -> Option<String> {
+        self.config.keymap.combo_for(c).map(|k| k.caps().concat())
+    }
+
     /// The editor area: the active tab, or — in split view — every open tab
     /// tiled, the active one outlined. Returns the active tile's rect.
     fn editors(&mut self, ui: &mut egui::Ui) -> Rect {
@@ -2256,6 +2588,7 @@ impl App {
         let tiles = crate::terminal::grid_rects(area.shrink(6.0 * s), self.tabs.len(), 6.0 * s);
         let mut active_rect = area;
         let mut clicked = None;
+        let mut tile_pick = None;
         for (i, tile) in tiles.into_iter().enumerate() {
             let is_active = i == active;
             let border = if is_active && self.focus == Focus::Editor {
@@ -2276,6 +2609,13 @@ impl App {
                 title.bottom(),
                 Stroke::new(1.0, c.border),
             );
+            let title_resp = ui.interact(title, ui.scope_id().with(("tile-title", i)), Sense::click());
+            if title_resp.clicked() || title_resp.secondary_clicked() {
+                clicked = Some(i);
+            }
+            title_resp.context_menu(|ui| {
+                tile_pick = tile_pick.or(command_menu(ui, &self.tab_menu(i), &|c| self.shortcut(c)));
+            });
             let name = self.tabs[i].buf.name();
             let dot = if self.tabs[i].buf.modified {
                 "  ●"
@@ -2312,6 +2652,11 @@ impl App {
         if let Some(i) = clicked {
             self.active = Some(i);
             self.focus = Focus::Editor;
+        }
+        if let Some(c) = tile_pick {
+            self.focus = Focus::Editor; // the menu acts on the active tab
+            let ctx = ui.ctx().clone();
+            self.run(c, &ctx);
         }
         active_rect
     }
@@ -2609,8 +2954,21 @@ impl App {
             .collect();
         let labels = crate::terminal::labels(&names);
         let tabs_right = bx + 8.0 * s;
+        // While a terminal has the keyboard, its tab keys keep some room.
+        let hints = if focused && self.palette.is_none() {
+            self.tab_hints(true)
+        } else {
+            Vec::new()
+        };
+        let reserve = if hints.is_empty() {
+            0.0
+        } else {
+            let first = &hints[..hints.len().min(3)];
+            (pt.key_hints(ui, None, first, 11.5, Pos2::ZERO) + 28.0 * s)
+                .min((tabs_right - head.left()) * 0.45)
+        };
         let mut x = head.left() + 6.0 * s;
-        let (mut select, mut close) = (None, None);
+        let (mut select, mut close, mut menu_pick) = (None, None, None);
         for (i, label) in labels.iter().enumerate() {
             let active = i == self.active_terminal;
             let number = if i < 9 {
@@ -2638,7 +2996,7 @@ impl App {
                 pos2(x, head.top() + 4.0 * s),
                 vec2(w, head.height() - 8.0 * s),
             );
-            if rect.right() > tabs_right {
+            if rect.right() > tabs_right - reserve && i != self.active_terminal {
                 break; // more than fit; ⌥K and ⌥1-9 still reach them
             }
             let resp = ui.interact(rect, ui.scope_id().with(("term-tab", i)), Sense::click());
@@ -2662,7 +3020,10 @@ impl App {
             if resp.middle_clicked() {
                 close = Some(i);
             }
-            let key = |c: Command| self.config.keymap.combo_for(c).map(|k| k.caps().concat());
+            if resp.secondary_clicked() {
+                select = Some(i);
+            }
+            let key = |c: Command| self.shortcut(c);
             let tip = if over_close {
                 format!(
                     "Close terminal{}",
@@ -2691,6 +3052,10 @@ impl App {
                 }
             };
             let resp = resp.on_hover_text(tip);
+            // Right-click focuses the terminal, so these act on it.
+            resp.context_menu(|ui| {
+                menu_pick = menu_pick.or(command_menu(ui, &self.terminal_menu(i), &key));
+            });
             if active {
                 p.rect(
                     rect,
@@ -2743,10 +3108,19 @@ impl App {
             );
             x += w + 4.0 * s;
         }
+        // Its tab keys, between the tabs and the buttons.
+        if !hints.is_empty() {
+            let room = Rect::from_min_max(
+                pos2(x + 16.0 * s, head.top()),
+                pos2(tabs_right - 12.0 * s, head.bottom()),
+            );
+            pt.hints_in(ui, &p, room, &hints, 11.5);
+        }
 
         // Body.
         let (body, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         let mut clicked = None;
+        let mut tile_pick = None;
         if self.terminal_grid && self.terminals.len() > 1 {
             let tiles =
                 crate::terminal::grid_rects(body.shrink(6.0 * s), self.terminals.len(), 6.0 * s);
@@ -2770,6 +3144,15 @@ impl App {
                     title.bottom(),
                     Stroke::new(1.0, c.border),
                 );
+                let title_resp =
+                    ui.interact(title, ui.scope_id().with(("term-title", i)), Sense::click());
+                if title_resp.clicked() || title_resp.secondary_clicked() {
+                    clicked = Some(i);
+                }
+                title_resp.context_menu(|ui| {
+                    tile_pick =
+                        tile_pick.or(command_menu(ui, &self.terminal_menu(i), &|c| self.shortcut(c)));
+                });
                 let label = format!("{}  {}", i + 1, labels[i]);
                 p.with_clip_rect(title.shrink(4.0)).text(
                     pos2(title.left() + 10.0 * s, title.center().y),
@@ -2809,6 +3192,10 @@ impl App {
         if let Some(command) = run {
             self.run(command, &ctx);
         }
+        if let Some(command) = menu_pick.or(tile_pick) {
+            self.focus = Focus::Terminal; // the menu acts on the active terminal
+            self.run(command, &ctx);
+        }
     }
 
     /// One terminal's screen in `rect`: fits the PTY to it, takes input when
@@ -2822,6 +3209,11 @@ impl App {
         let row_h = (size * 1.4).round();
         let s = self.config.settings.ui_font_size / 14.0;
         self.terminal_rects.push((i, rect));
+        // For the hint on a link: the key that lists them all.
+        let all_links = self
+            .shortcut(Command::OpenTerminalLink)
+            .map(|k| format!("\n{k} lists every link here"))
+            .unwrap_or_default();
         let Some(term) = self.terminals.get_mut(i) else {
             return false;
         };
@@ -2879,12 +3271,17 @@ impl App {
         let mut clicked = false;
         let mut link = None;
         let mut hover_link = None;
+        let mut plain_link = None; // over a link without ⌘: say how to open it
         if let Some(ptr) = ptr {
             let (r, col) = cell_at(ptr);
             let pane = &mut term.pane;
-            if link_mod && resp.hovered() && pane.url_at(r, col).is_some() {
-                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                hover_link = Some((r, col));
+            if resp.hovered() && pane.url_at(r, col).is_some() {
+                if link_mod {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    hover_link = Some((r, col));
+                } else {
+                    plain_link = Some((r, col));
+                }
             }
             if pressed && resp.hovered() && hover_link.is_some() {
                 clicked = true;
@@ -3076,15 +3473,38 @@ impl App {
             );
             p.rect_stroke(r, 1.0, Stroke::new(1.5, c.accent), StrokeKind::Inside);
         }
-        if let Some((r, col)) = hover_link
-            && let Some(span) = crate::terminalpane::url_cols_in_row(&screen, r)
+        // A link: faint underline, then (once the pointer rests) how to open
+        // it; with ⌘ held, a bold one.
+        let link_mod_key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
+        for ((r, col), held) in [(hover_link, true), (plain_link, false)]
+            .into_iter()
+            .filter_map(|(at, held)| Some((at?, held)))
+        {
+            let Some(span) = crate::terminalpane::url_cols_in_row(&screen, r)
                 .into_iter()
                 .find(|s| s.contains(&col))
-        {
+            else {
+                continue;
+            };
             let y = inner.top() + (r + 1) as f32 * row_h - 2.0;
             let xs =
                 inner.left() + span.start as f32 * char_w..=inner.left() + span.end as f32 * char_w;
-            p.hline(xs, y, Stroke::new(1.5, c.accent));
+            if held {
+                p.hline(xs, y, Stroke::new(1.5, c.accent));
+            } else {
+                p.hline(xs, y, Stroke::new(1.0, c.accent.gamma_multiply(0.45)));
+                if ui.input(|i| i.pointer.time_since_last_movement()) > 0.4 {
+                    egui::Tooltip::always_open(
+                        ui.ctx().clone(),
+                        ui.layer_id(),
+                        ui.scope_id().with("link-hint"),
+                        egui::PopupAnchor::Pointer,
+                    )
+                    .show(|ui| ui.label(format!("{link_mod_key}-click to open this link{all_links}")));
+                } else {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(450));
+                }
+            }
         }
         drop(screen);
         if let Some(url) = link {
@@ -3303,14 +3723,20 @@ impl App {
                 }),
                 _ => false,
             });
+            let enter = i.key_pressed(Key::Enter);
             i.events.retain(|e| {
                 !matches!(
                     e,
                     egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_)
                 )
             });
-            hit
+            (hit, enter)
         });
+        let (close, customize_key) = close;
+        if customize_key {
+            self.help = false;
+            return self.open_palette(Mode::Keybindings, ctx);
+        }
         if close {
             self.help = false;
             return;
@@ -3337,9 +3763,13 @@ impl App {
             0.0,
             Color32::from_black_alpha(if self.config.theme.dark { 110 } else { 50 }),
         );
-        let width = (880.0 * s).min(screen.width() - 32.0);
-        let height = (screen.height() - 120.0 * s).max(240.0);
-        let pos = pos2(screen.center().x - width / 2.0, screen.top() + 56.0 * s);
+        // At most 70% of the window either way; the list scrolls.
+        let width = (880.0 * s).min(screen.width() * 0.7 - 2.0);
+        let height = screen.height() * 0.7 - 2.0 - 44.0 * s;
+        let pos = pos2(
+            screen.center().x - width / 2.0,
+            screen.top() + screen.height() * 0.15,
+        );
         let mut customize = false;
         egui::Area::new(egui::Id::unique("help"))
             .order(egui::Order::Foreground)
@@ -3380,7 +3810,7 @@ impl App {
                                             .color(c.text_subtle),
                                     );
                                     let b = egui::Button::new(
-                                        egui::RichText::new("Change shortcuts…")
+                                        egui::RichText::new("Change shortcuts…  ↵")
                                             .font(pt.font(12.5, Weight::Medium))
                                             .color(c.text),
                                     )
@@ -3648,24 +4078,28 @@ impl App {
         // pickers stay compact, so a theme or font previews around them.
         let big = !matches!(
             mode,
-            Mode::Themes | Mode::UiFonts | Mode::CodeFonts | Mode::Line | Mode::Terminals
+            Mode::Themes
+                | Mode::UiFonts
+                | Mode::CodeFonts
+                | Mode::Line
+                | Mode::Terminals
+                | Mode::Links
         );
         let row_h = 36.0 * s;
         let (bar_h, foot_h) = (48.0 * s, 36.0 * s);
-        let (width, top, rows) = if big {
-            let h = screen.height() * 0.7;
-            let rows = ((h - bar_h - foot_h * 1.8 - 12.0 * s) / row_h)
-                .floor()
-                .max(3.0) as usize;
+        // Never more than 70% of the window either way; the list scrolls.
+        let max_h = screen.height() * 0.7 - 2.0; // the border is outside
+        let (width, top) = if big {
             (
-                (screen.width() * 0.7).max(620.0 * s),
-                screen.top() + (screen.height() - h) / 2.0,
-                rows,
+                screen.width() * 0.7 - 2.0,
+                screen.top() + (screen.height() - max_h) / 2.0,
             )
         } else {
-            (620.0 * s, screen.top() + 64.0 * s, PALETTE_ROWS)
+            (
+                (620.0 * s).min(screen.width() * 0.7 - 2.0),
+                screen.top() + (64.0 * s).min(screen.height() * 0.15),
+            )
         };
-        let width = width.min(screen.width() - 32.0);
         let pos = pos2(screen.center().x - width / 2.0, top);
         let (mut moved, mut accept, mut query_changed, mut toggle_row) =
             (false, false, false, None);
@@ -3687,6 +4121,47 @@ impl App {
             frame.show(ui, |ui| {
                 ui.set_width(width);
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                // Footer layout first: its height sets how many rows fit.
+                // The keys, in a grid spread over the full width: as many
+                // columns as fit, each as wide as its widest hint, the
+                // spare room shared out between them.
+                let hints: Vec<Hint> = footer.into_iter().filter(|h| h.1 != "│").collect();
+                let room = width - 36.0 * s;
+                let widths: Vec<f32> = hints
+                    .iter()
+                    .map(|h| pt.key_hints(ui, None, std::slice::from_ref(h), 12.0, Pos2::ZERO))
+                    .collect();
+                let col_widths = |cols: usize| -> Vec<f32> {
+                    (0..cols)
+                        .map(|c| {
+                            widths
+                                .iter()
+                                .skip(c)
+                                .step_by(cols)
+                                .fold(0.0, |a: f32, w| a.max(*w))
+                        })
+                        .collect()
+                };
+                let min_gap = 24.0 * s;
+                let cols = (1..=hints.len())
+                    .rev()
+                    .find(|&n| col_widths(n).iter().sum::<f32>() + min_gap * (n - 1) as f32 <= room)
+                    .unwrap_or(1);
+                // Balanced rows: 6 hints that fit 5 across go 3 and 3, not 5 and 1.
+                let lines = hints.len().div_ceil(cols).max(1);
+                let cols = hints.len().div_ceil(lines).max(1);
+                let col_w = col_widths(cols);
+                let used: f32 = col_w.iter().sum();
+                let gap = if cols > 1 {
+                    ((room - used) / (cols - 1) as f32).min(96.0 * s)
+                } else {
+                    0.0
+                };
+                let x0 = 18.0 * s + (room - used - gap * (cols - 1) as f32) / 2.0;
+                let line_h = 28.0 * s;
+                let foot_total = foot_h + line_h * (lines - 1) as f32;
+                let fit = ((max_h - bar_h - foot_total - 12.0 * s) / row_h).floor().max(1.0) as usize;
+                let rows = if big { fit } else { fit.min(PALETTE_ROWS) };
                 let Some(pal) = &mut self.palette else { return };
 
                 // Search box.
@@ -3888,47 +4363,7 @@ impl App {
                 }
 
                 // Footer: key hints and the result count.
-                // The keys, in a grid spread over the full width: as many
-                // columns as fit, each as wide as its widest hint, the
-                // spare room shared out between them.
-                let hints: Vec<Hint> = footer.into_iter().filter(|h| h.1 != "│").collect();
-                let room = width - 36.0 * s;
-                let widths: Vec<f32> = hints
-                    .iter()
-                    .map(|h| pt.key_hints(ui, None, std::slice::from_ref(h), 12.0, Pos2::ZERO))
-                    .collect();
-                let col_widths = |cols: usize| -> Vec<f32> {
-                    (0..cols)
-                        .map(|c| {
-                            widths
-                                .iter()
-                                .skip(c)
-                                .step_by(cols)
-                                .fold(0.0, |a: f32, w| a.max(*w))
-                        })
-                        .collect()
-                };
-                let min_gap = 24.0 * s;
-                let cols = (1..=hints.len())
-                    .rev()
-                    .find(|&n| col_widths(n).iter().sum::<f32>() + min_gap * (n - 1) as f32 <= room)
-                    .unwrap_or(1);
-                // Balanced rows: 6 hints that fit 5 across go 3 and 3, not 5 and 1.
-                let lines = hints.len().div_ceil(cols).max(1);
-                let cols = hints.len().div_ceil(lines).max(1);
-                let col_w = col_widths(cols);
-                let used: f32 = col_w.iter().sum();
-                let gap = if cols > 1 {
-                    ((room - used) / (cols - 1) as f32).min(96.0 * s)
-                } else {
-                    0.0
-                };
-                let x0 = 18.0 * s + (room - used - gap * (cols - 1) as f32) / 2.0;
-                let line_h = 28.0 * s;
-                let (foot, _) = ui.allocate_exact_size(
-                    vec2(width, foot_h + line_h * (lines - 1) as f32),
-                    Sense::hover(),
-                );
+                let (foot, _) = ui.allocate_exact_size(vec2(width, foot_total), Sense::hover());
                 ui.painter()
                     .hline(foot.x_range(), foot.top() + 0.5, Stroke::new(1.0, c.border));
                 for (i, h) in hints.iter().enumerate() {
@@ -3994,6 +4429,9 @@ impl App {
                 let mut v = vec![(k("↵"), "open")];
                 if tree {
                     v.push((k("→ ←"), "expand / collapse"));
+                    if let Some(caps) = key(Command::CollapseFolders) {
+                        v.push((caps, "collapse all"));
+                    }
                 }
                 v.extend(
                     [
@@ -4071,6 +4509,7 @@ impl App {
             }
             Mode::Search => vec![(k("↑ ↓"), "move"), (k("↵"), "open at match"), esc],
             Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to it"), esc],
+            Mode::Links => vec![(k("↑ ↓"), "move"), (k("↵"), "open in browser"), esc],
             Mode::Line => vec![(k("↵"), "go"), esc],
         }
     }

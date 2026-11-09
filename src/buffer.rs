@@ -373,7 +373,7 @@ impl Buffer {
 
     /// Whether the buffer matches its last-saved content (cheap: lengths first,
     /// then a content compare only when they're equal).
-    fn is_clean(&self) -> bool {
+    pub fn is_clean(&self) -> bool {
         self.rope.len_bytes() == self.saved.len_bytes() && self.rope == self.saved
     }
 
@@ -1076,6 +1076,28 @@ impl Buffer {
         self.bump();
     }
 
+    /// Replace the whole text in one undo step (a formatter's output),
+    /// keeping the caret on its line and column where they still exist.
+    /// Returns whether anything changed.
+    pub fn replace_all(&mut self, text: &str) -> bool {
+        if self.rope == text {
+            return false;
+        }
+        let (row, col) = (self.cursor_row(), self.cursor_col());
+        self.last_kind = None; // its own step, never merged with typing
+        self.checkpoint(EditKind::Insert);
+        self.rope = Rope::from_str(text);
+        self.anchor = None;
+        self.carets.clear();
+        let row = row.min(self.rope.len_lines().saturating_sub(1));
+        self.cursor = self.rope.line_to_char(row) + col.min(self.line_len_chars(row));
+        self.goal_col = self.cursor_col();
+        self.last_kind = None;
+        self.last_edit_cursor = None;
+        self.bump();
+        true
+    }
+
     pub fn newline(&mut self) {
         self.insert_char('\n');
     }
@@ -1650,6 +1672,24 @@ mod tests {
             last_edit_cursor: None,
             indent_unit_cache: std::cell::Cell::new(None),
         }
+    }
+
+    #[test]
+    fn replace_all_is_one_undo_step_and_keeps_the_caret() {
+        let mut b = with("fn  a(){\n  let x=1;\n}\n", 1, 7);
+        b.insert_char('y'); // typing before formatting stays its own step
+        assert!(b.replace_all("fn a() {\n    let xy = 1;\n}\n"));
+        assert_eq!((b.cursor_row(), b.cursor_col()), (1, 8));
+        assert!(b.modified);
+        assert!(!b.replace_all("fn a() {\n    let xy = 1;\n}\n"), "no change, no step");
+        b.undo();
+        assert_eq!(b.rope.to_string(), "fn  a(){\n  let xy=1;\n}\n");
+        b.undo();
+        assert_eq!(b.rope.to_string(), "fn  a(){\n  let x=1;\n}\n");
+        // A caret past the new end is pulled back inside.
+        let mut b = with("a\nbbbbbb\nc\n", 1, 5);
+        b.replace_all("a\nb\n");
+        assert_eq!((b.cursor_row(), b.cursor_col()), (1, 1));
     }
 
     fn with(text: &str, line: usize, col: usize) -> Buffer {

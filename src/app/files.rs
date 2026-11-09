@@ -228,6 +228,12 @@ impl App {
         {
             self.close_tab_now(i);
         }
+        for t in &mut self.tabs {
+            if t.path().is_some_and(|p| p.starts_with(path)) {
+                t.gone = true; // struck through; no need to ask, you did it
+                t.buf.forget_disk();
+            }
+        }
         self.closed.retain(|p| !p.starts_with(path));
         self.files_changed(None, ctx);
         self.notify(format!("Moved {} to the Trash", display_name(path)));

@@ -1,6 +1,6 @@
 [package]
 name = "roxaruu"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 
 [dependencies]
@@ -32,6 +32,16 @@ tracing = "0.1.41"
 grep-searcher = "0.1.17"
 grep-regex = "0.1.14"
 grep-matcher = "0.1.9"
+tree-sitter-md = "0.5"
+tree-sitter-yaml = "0.7"
+tree-sitter-cpp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-lua = "0.5"
+tree-sitter-php = "0.25"
+tree-sitter-swift = "0.7"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-sequel = "0.3"
 
 # Native "Open Folder" panel. A folder picked there is granted by user intent,
 # which sidesteps the macOS Documents/Desktop permission prompt.

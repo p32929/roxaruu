@@ -7,6 +7,28 @@
 #                                     leaving the installed app and its windows alone
 set -eu
 
+case "${1:-}" in
+    -h | --help)
+        cat <<'HELP'
+Run Roxaruu from this checkout.
+
+Usage:
+  ./run.sh [folder|file]          Install (./install-local.sh), then open it.
+                                  No folder: the one you're in.
+  ./run.sh --temp [folder|file]   Build and run this checkout straight from
+                                  target/, installing nothing: the installed
+                                  app and its open windows are left alone.
+  ./run.sh -h | --help            Show this help.
+
+Either way the window detaches: you get the prompt back, and closing the
+terminal leaves the window open.
+
+See also: ./install-local.sh --help, and roxaruu --help once installed.
+HELP
+        exit 0
+        ;;
+esac
+
 TEMP=
 if [ "${1:-}" = "--temp" ]; then TEMP=1; shift; fi
 # Absolute, before we leave the caller's directory; none given means the

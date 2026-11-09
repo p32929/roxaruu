@@ -20,6 +20,11 @@
     "tokenConstant": "#e8a0b4",
     "tokenProperty": "#c6d3cb",
     "tokenAttribute": "#e3c78a",
-    "tokenPunctuation": "#87978e"
+    "tokenPunctuation": "#87978e",
+    "tokenVariable": "#b7cfc0",
+    "tokenNumber": "#f0b9c8",
+    "tokenOperator": "#a3b8a8",
+    "tokenTag": "#7bd49a",
+    "tokenHeading": "#9fd0e8"
   }
 }

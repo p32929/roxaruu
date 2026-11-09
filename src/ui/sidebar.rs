@@ -12,13 +12,12 @@ enum Act {
     /// Open the file; `true` moves the keyboard to it.
     Open(PathBuf, bool),
     Toggle(usize),
-    CollapseAll,
     Hide,
     Run(Command),
 }
 
 impl App {
-    pub(super) fn sidebar_shown(&self) -> bool {
+    pub(crate) fn sidebar_shown(&self) -> bool {
         self.project.is_some() && self.config.settings.sidebar
     }
 
@@ -48,6 +47,17 @@ impl App {
 
     /// ⇧⌘E: into the tree, on the active file (showing the sidebar if
     /// needed); again to go back to the editor.
+    /// Fold every folder in the tree (and Go to File's browser), keeping
+    /// the selection on a row that's still there.
+    pub fn collapse_folders(&mut self) {
+        let Some(p) = &mut self.project else { return };
+        p.tree.collapse_all();
+        self.sidebar.revealed = self.active_tab().and_then(|t| t.path().cloned());
+        if self.palette.as_ref().is_some_and(|p| p.mode == Mode::Files) {
+            self.refresh_items();
+        }
+    }
+
     pub fn focus_sidebar(&mut self) {
         if self.focus == Focus::Sidebar && self.config.settings.sidebar {
             self.focus = Focus::Editor;
@@ -197,8 +207,8 @@ impl App {
                     ),
                     (
                         icon::COLLAPSE_ALL,
-                        "Collapse Folders".to_string(),
-                        Act::CollapseAll,
+                        format!("Collapse Folders{}", caps(Command::CollapseFolders)),
+                        Act::Run(Command::CollapseFolders),
                     ),
                     (
                         icon::NEW_FOLDER,
@@ -432,12 +442,6 @@ impl App {
                     p.tree.toggle(i);
                 }
                 self.select_row(i);
-            }
-            Some(Act::CollapseAll) => {
-                if let Some(p) = &mut self.project {
-                    p.tree.collapse_all();
-                }
-                self.sidebar.revealed = self.active_tab().and_then(|t| t.path().cloned());
             }
             Some(Act::Hide) => self.toggle_sidebar(&ctx),
             Some(Act::Run(cmd)) => self.run(cmd, &ctx),

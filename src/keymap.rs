@@ -34,6 +34,10 @@ pub enum Command {
     SaveAll,
     CloseTab,
     CloseAllTabs,
+    CloseOtherTabs,
+    CloseTabsToRight,
+    CloseTabsToLeft,
+    CloseSavedTabs,
     ReopenTab,
     NewFile,
     NewFolder,
@@ -62,9 +66,16 @@ pub enum Command {
     ToggleSplit,
     ToggleWordWrap,
     ToggleSidebar,
+    CollapseFolders,
+    ZoomIn,
+    ZoomOut,
+    ResetZoom,
+    FullScreen,
+    MaximizeWindow,
     FocusSidebar,
     GoToLine,
     ToggleComment,
+    FormatDocument,
     MoveLineUp,
     MoveLineDown,
     DuplicateLineUp,
@@ -83,6 +94,7 @@ pub enum Command {
     ToggleTerminalGrid,
     MaximizeTerminal,
     SwitchTerminal,
+    OpenTerminalLink,
     JumpTerminal(u8),
     Quit,
 }
@@ -108,22 +120,26 @@ commands! {
     GoToFile, "file.goTo", "Go to File", ["alt+f", "ctrl+p"];
     OpenFolder, "folder.open", "Open Folder", ["ctrl+o"];
     RecentFolders, "folder.recent", "Recent Folders", ["alt+o"];
-    CloseFolder, "folder.close", "Close Folder", [];
-    SelectTheme, "theme.select", "Select Theme", [];
-    SelectUiFont, "font.selectUi", "Select UI Font", [];
-    SelectCodeFont, "font.selectCode", "Select Code Font", [];
+    CloseFolder, "folder.close", "Close Folder", ["ctrl+alt+shift+w"];
+    SelectTheme, "theme.select", "Select Theme", ["ctrl+alt+shift+t"];
+    SelectUiFont, "font.selectUi", "Select UI Font", ["ctrl+alt+shift+u"];
+    SelectCodeFont, "font.selectCode", "Select Code Font", ["ctrl+alt+shift+f"];
     Settings, "app.settings", "Settings", ["ctrl+,"];
-    Keybindings, "app.keybindings", "Edit Keyboard Shortcuts", [];
-    OpenSettings, "app.openSettings", "Open Settings (JSON)", [];
-    OpenKeybindings, "app.openKeybindings", "Open Keyboard Shortcuts (JSON)", [];
-    OpenProjectSettings, "app.openProjectSettings", "Open Project Settings (JSON)", [];
+    Keybindings, "app.keybindings", "Edit Keyboard Shortcuts", ["ctrl+alt+k"];
+    OpenSettings, "app.openSettings", "Open Settings (JSON)", ["ctrl+alt+,"];
+    OpenKeybindings, "app.openKeybindings", "Open Keyboard Shortcuts (JSON)", ["ctrl+alt+shift+k"];
+    OpenProjectSettings, "app.openProjectSettings", "Open Project Settings (JSON)", ["ctrl+alt+shift+,"];
     Todos, "todo.open", "To-do List", ["alt+d"];
     ClipboardHistory, "clipboard.history", "Clipboard History", ["alt+v"];
-    OpenConfigFolder, "app.openConfigFolder", "Open Config Folder", [];
+    OpenConfigFolder, "app.openConfigFolder", "Open Config Folder", ["ctrl+alt+shift+o"];
     Save, "file.save", "Save", ["ctrl+s"];
     SaveAll, "file.saveAll", "Save All", ["ctrl+shift+s"];
     CloseTab, "tab.close", "Close Tab", ["ctrl+w"];
     CloseAllTabs, "tab.closeAll", "Close All Tabs", ["ctrl+shift+w"];
+    CloseOtherTabs, "tab.closeOthers", "Close Other Tabs", ["ctrl+alt+t"];
+    CloseTabsToRight, "tab.closeRight", "Close Tabs to the Right", ["ctrl+alt+]"];
+    CloseTabsToLeft, "tab.closeLeft", "Close Tabs to the Left", ["ctrl+alt+["];
+    CloseSavedTabs, "tab.closeSaved", "Close Saved Tabs", ["ctrl+alt+s"];
     ReopenTab, "tab.reopen", "Reopen Closed Tab", ["ctrl+shift+t"];
     NewFile, "file.new", "New File…", ["ctrl+n"];
     NewFolder, "file.newFolder", "New Folder…", ["ctrl+shift+n"];
@@ -159,6 +175,7 @@ commands! {
     AddCursorBelow, "edit.addCursorBelow", "Add Cursor Below", ["ctrl+alt+down"];
     GoToLine, "edit.goToLine", "Go to Line…", ["ctrl+l"];
     ToggleComment, "edit.toggleComment", "Comment / Uncomment Line", ["ctrl+/"];
+    FormatDocument, "edit.format", "Format Document", ["shift+alt+f"];
     MoveLineUp, "edit.moveLineUp", "Move Line Up", ["alt+up"];
     MoveLineDown, "edit.moveLineDown", "Move Line Down", ["alt+down"];
     DuplicateLineUp, "edit.copyLineUp", "Duplicate Line Up", ["alt+shift+up"];
@@ -173,6 +190,12 @@ commands! {
     ToggleWordWrap, "view.wordWrap", "Word Wrap On / Off", ["alt+z"];
     ToggleSidebar, "view.sidebar", "File Tree: Show and Go In, or Hide", ["ctrl+b"];
     FocusSidebar, "view.focusSidebar", "File Tree: Go In, or Back to the Editor", ["ctrl+shift+e"];
+    CollapseFolders, "view.collapseFolders", "File Tree: Collapse All Folders", ["ctrl+left"];
+    ZoomIn, "view.zoomIn", "Bigger Text", ["ctrl+=", "ctrl+shift+="];
+    ZoomOut, "view.zoomOut", "Smaller Text", ["ctrl+-"];
+    ResetZoom, "view.resetZoom", "Reset Text Size", ["ctrl+0"];
+    FullScreen, "view.fullScreen", "Full Screen On / Off", ["f11"];
+    MaximizeWindow, "view.maximize", "Maximize / Restore Window", ["ctrl+alt+enter"];
     SwitchFocus, "view.switchFocus", "Switch Between Editor and Terminal", ["ctrl+j"];
     ToggleTerminal, "terminal.toggle", "Show / Hide Terminal", ["alt+t"];
     NewTerminal, "terminal.new", "New Terminal", ["alt+n"];
@@ -181,6 +204,7 @@ commands! {
     ToggleTerminalGrid, "terminal.grid", "Terminals Side by Side / as Tabs", ["alt+g"];
     MaximizeTerminal, "terminal.maximize", "Maximize / Restore Terminal", ["alt+m"];
     SwitchTerminal, "terminal.switch", "Switch to Terminal…", ["alt+k"];
+    OpenTerminalLink, "terminal.openLink", "Open a Link from the Terminal…", ["ctrl+shift+o"];
     JumpTerminal(1), "terminal.jump1", "Go to Terminal 1", ["alt+1"];
     JumpTerminal(2), "terminal.jump2", "Go to Terminal 2", ["alt+2"];
     JumpTerminal(3), "terminal.jump3", "Go to Terminal 3", ["alt+3"];
@@ -470,6 +494,22 @@ mod tests {
                 c.id,
                 km.conflicts(c.command)
             );
+        }
+    }
+
+    /// Keyboard first: every command ships with a key (remappable).
+    #[test]
+    fn every_command_has_a_default_key() {
+        let missing: Vec<&str> = COMMANDS.iter().filter(|c| c.keys.is_empty()).map(|c| c.id).collect();
+        assert!(missing.is_empty(), "no default key: {missing:?}");
+    }
+
+    #[test]
+    fn command_ids_are_unique_and_titled() {
+        let mut seen = std::collections::HashSet::new();
+        for c in COMMANDS {
+            assert!(seen.insert(c.id), "{} is used twice", c.id);
+            assert!(!c.title.is_empty() && c.id.contains('.'), "{}", c.id);
         }
     }
 
