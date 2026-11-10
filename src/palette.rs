@@ -16,7 +16,6 @@ pub enum Mode {
     UiFonts,
     CodeFonts,
     Recent,
-    Files,
     Terminals,
     Search,
     Todos,
@@ -35,7 +34,6 @@ impl Mode {
             Mode::UiFonts => "Select a UI font — ↑↓ to preview",
             Mode::CodeFonts => "Select a code font — ↑↓ to preview",
             Mode::Recent => "Open a recent folder…",
-            Mode::Files => "Search files by name — empty to browse",
             Mode::Terminals => "Switch to a terminal…",
             Mode::Line => "Line number — or line:column",
             Mode::Search => "Search in files…",
@@ -45,6 +43,12 @@ impl Mode {
             Mode::Keybindings => "Search shortcuts by name…",
             Mode::Links => "Open a link from the terminal…",
         }
+    }
+
+    /// Lists where several rows can be ticked and done at once: paste
+    /// several clips, open several folders.
+    pub fn multi(self) -> bool {
+        matches!(self, Mode::Clipboard | Mode::Recent)
     }
 }
 
@@ -56,12 +60,9 @@ pub enum Pick {
     UiFont(String),
     CodeFont(String),
     Folder(PathBuf),
-    File(PathBuf),
     Terminal(usize),
     /// A search hit: file, line, and the match's char columns.
     Hit(PathBuf, usize, usize, usize),
-    /// A row of the browse tree (index into `FileTree::entries`).
-    Tree(usize),
     /// An entry of the to-do list (index into `App::todos`).
     Todo(usize),
     /// An entry of the clipboard history (index into `App::clips`).
@@ -84,12 +85,8 @@ pub struct Item {
     pub caps: Vec<String>,
     /// Char indices of `label` that matched the query.
     pub matched: Vec<usize>,
-    /// Tree indent level.
-    pub depth: usize,
     /// Faded (gitignored).
     pub dim: bool,
-    /// Open folder (tree rows): draws an open chevron.
-    pub expanded: Option<bool>,
     /// The icon's own colour (file types); otherwise the row's.
     pub tint: Option<eframe::egui::Color32>,
     pub pick: Pick,
@@ -104,9 +101,7 @@ impl Item {
             detail: String::new(),
             caps: Vec::new(),
             matched: Vec::new(),
-            depth: 0,
             dim: false,
-            expanded: None,
             tint: None,
             pick,
         }
@@ -132,8 +127,11 @@ pub struct Palette {
     pub scroll: usize,
     pub items: Vec<Item>,
     pub revert: Option<Revert>,
-    /// Clipboard history: entries ticked for a multi-paste.
-    pub ticked: Vec<usize>,
+    /// Rows ticked to do at once (see `Mode::multi`), by what they pick,
+    /// so they stay ticked while the search narrows the list; in ticking order.
+    pub ticked: Vec<Pick>,
+    /// The row last ticked or unticked: where a ⇧-click's range starts.
+    pub tick_from: Option<usize>,
     /// Keyboard Shortcuts: waiting for the new key for this command.
     pub capture: Option<Command>,
     /// A mouse button went down while it was open. Until then a release
@@ -153,6 +151,7 @@ impl Palette {
             items: Vec::new(),
             revert: None,
             ticked: Vec::new(),
+            tick_from: None,
             capture: None,
             armed: false,
             opened: 0,
@@ -161,6 +160,47 @@ impl Palette {
 
     pub fn selected_pick(&self) -> Option<&Pick> {
         self.items.get(self.selected).map(|i| &i.pick)
+    }
+
+    /// Whether row `i` is ticked.
+    pub fn is_ticked(&self, i: usize) -> bool {
+        self.items.get(i).is_some_and(|it| self.ticked.contains(&it.pick))
+    }
+
+    /// Tick or untick row `i`, if it's a row that can be (not "Open Another
+    /// Folder…").
+    pub fn set_tick(&mut self, i: usize, on: bool) {
+        let Some(pick) = self.items.get(i).map(|it| it.pick.clone()) else { return };
+        if !matches!(pick, Pick::Clip(_) | Pick::Folder(_)) {
+            return;
+        }
+        self.ticked.retain(|t| *t != pick);
+        if on {
+            self.ticked.push(pick);
+        }
+        self.tick_from = Some(i);
+    }
+
+    /// Space, Tab, ⌘-click: flip row `i`.
+    pub fn toggle_tick(&mut self, i: usize) {
+        self.set_tick(i, !self.is_ticked(i));
+    }
+
+    /// ⇧-click: tick every row from the last one ticked (or the selected
+    /// one) to `i`.
+    pub fn tick_range(&mut self, i: usize) {
+        let from = self.tick_from.unwrap_or(self.selected);
+        for r in from.min(i)..=from.max(i) {
+            self.set_tick(r, true);
+        }
+        self.tick_from = Some(i);
+    }
+
+    /// ⇧↑ / ⇧↓: tick this row and the next one up or down, moving there.
+    pub fn extend_tick(&mut self, delta: isize) {
+        self.set_tick(self.selected, true);
+        self.step(delta);
+        self.set_tick(self.selected, true);
     }
 
     /// Move the selection by `delta`, wrapping.
@@ -207,9 +247,7 @@ mod tests {
                 detail: String::new(),
                 caps: Vec::new(),
                 matched: Vec::new(),
-                depth: 0,
                 dim: false,
-                expanded: None,
                 tint: None,
                 pick: Pick::Command(Command::Quit),
             });
@@ -227,6 +265,36 @@ mod tests {
         p.step(1);
         p.follow(8);
         assert_eq!((p.selected, p.scroll), (0, 0));
+    }
+
+    #[test]
+    fn ticking_rows() {
+        let mut p = palette(6);
+        for (i, it) in p.items.iter_mut().enumerate() {
+            it.pick = Pick::Folder(PathBuf::from(i.to_string()));
+        }
+        p.items[5].pick = Pick::Command(Command::OpenFolder);
+        p.toggle_tick(1);
+        p.toggle_tick(3);
+        p.toggle_tick(1);
+        assert!(!p.is_ticked(1) && p.is_ticked(3));
+        // ⇧-click: from the last one ticked or unticked (1) to here.
+        p.tick_range(0);
+        assert_eq!((0..5).filter(|i| p.is_ticked(*i)).collect::<Vec<_>>(), [0, 1, 3]);
+        p.tick_range(4);
+        assert_eq!((0..5).filter(|i| p.is_ticked(*i)).count(), 5);
+        // "Open Another Folder…" is never ticked.
+        p.toggle_tick(5);
+        assert!(!p.is_ticked(5));
+        // ⇧↓ ticks where it starts and where it lands; ticks follow the
+        // pick, not the row, when the list changes.
+        p.ticked.clear();
+        p.selected = 3;
+        p.extend_tick(1);
+        assert_eq!(p.selected, 4);
+        assert!(p.is_ticked(3) && p.is_ticked(4));
+        p.items.remove(0);
+        assert!(p.is_ticked(2) && p.is_ticked(3) && !p.is_ticked(1));
     }
 
     #[test]

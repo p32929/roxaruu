@@ -119,7 +119,12 @@ impl Terminal {
                     pressed: true,
                     modifiers,
                     ..
-                } => self.key(*key, *physical_key, *modifiers),
+                } => {
+                    // Only the text right after a Meta chord is its own: a
+                    // dead ⌥E types none, and mustn't eat the next key's.
+                    self.swallow_text = false;
+                    self.key(*key, *physical_key, *modifiers)
+                }
                 _ => {}
             }
         }
@@ -553,5 +558,32 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    /// ⌥E is a dead key on a Mac: Meta-e goes to the shell and no text
+    /// follows, so the next key's text must not be swallowed in its place.
+    #[test]
+    fn a_dead_meta_key_doesnt_eat_the_next_letter() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut t = Terminal::spawn(dir.path(), 24, 80, &ctx, Throttle::new(60)).unwrap();
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        t.input(&[key(Key::E, ALT)]);
+        t.input(&[key(Key::Z, Modifiers::NONE), Event::Text("zqzq".into())]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !t.pane.screen().contents().contains("zqzq") {
+            assert!(std::time::Instant::now() < deadline, "eaten: {:?}", t.pane.screen().contents());
+            t.pane.pump();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        // ⌥F with its "ƒ" in one frame: the "ƒ" is still swallowed.
+        t.input(&[key(Key::F, ALT), Event::Text("ƒ".into())]);
+        assert!(!t.swallow_text, "the ƒ was taken");
     }
 }

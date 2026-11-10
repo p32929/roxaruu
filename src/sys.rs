@@ -192,6 +192,32 @@ pub fn prevent_app_nap() {
 #[cfg(not(target_os = "macos"))]
 pub fn prevent_app_nap() {}
 
+/// The app menu's "Quit Roxaruu" (⌘Q) ends the app on the spot: AppKit
+/// takes ⌘Q before the window sees the key, and the window is never asked.
+/// Make it close the window instead (as its close button does), so the
+/// window asks first ("Close this window?", `Ask::Quit`). Call once the
+/// app has launched (the menu exists by then).
+#[cfg(target_os = "macos")]
+pub fn quit_closes_the_window() {
+    use objc2::{MainThreadMarker, sel};
+    use objc2_app_kit::NSApplication;
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(menu) = NSApplication::sharedApplication(mtm).mainMenu() else { return };
+    for sub in menu.itemArray().iter().filter_map(|i| i.submenu()) {
+        for item in sub.itemArray().iter().filter(|i| i.action() == Some(sel!(terminate:))) {
+            // SAFETY: a real selector, sent to the key window through the
+            // responder chain (no target), which every NSWindow answers.
+            unsafe {
+                item.setTarget(None);
+                item.setAction(Some(sel!(performClose:)));
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn quit_closes_the_window() {}
+
 /// A desktop notification. `osascript` needs no app bundle or permission
 /// entitlement, so it works for the bare binary too.
 // ponytail: clicking it opens Script Editor, not Roxaruu; UNUserNotificationCenter

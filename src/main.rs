@@ -15,15 +15,16 @@ mod config;
 mod editor;
 mod find;
 mod fonts;
-mod format;
 mod fstree;
 mod fuzzy;
+mod huge;
 #[cfg(test)]
 mod headless;
 mod instances;
 mod keymap;
 mod palette;
 mod recent;
+mod remote;
 mod search;
 mod session;
 mod syntax;
@@ -95,17 +96,23 @@ fn main() -> eframe::Result {
             ..Default::default()
         },
         Box::new(move |cc| {
+            sys::quit_closes_the_window();
             // The detached copy's launcher has already exited: come to the
             // front ourselves rather than open behind the terminal.
             if launch.foreground {
                 cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-            Ok(Box::new(Root(app::App::new(&cc.egui_ctx, target))))
+            Ok(Box::new(Root::new(app::App::new(&cc.egui_ctx, target))))
         }),
     );
     // Remove this window's terminal-bridge shims and its open-folder marker.
+    // (Dropping the app above already stopped remote access if it served
+    // here; this makes sure its marker is gone, and the process exiting
+    // ends the server's threads regardless.)
     termbridge::cleanup();
     instances::unregister();
+    instances::unregister_remote();
+    instances::clear_remote_server(true);
     result
 }
 
@@ -201,9 +208,26 @@ fn spawn_detached<'a>(
     cmd.spawn()
 }
 
-struct Root(app::App);
+/// The window: the app, and its side of remote access (which stops when
+/// this is dropped: the window closed or the app quit).
+pub(crate) struct Root(pub(crate) app::App, remote::Remote);
+
+impl Root {
+    pub(crate) fn new(app: app::App) -> Root {
+        // Remote access starts off, and no password from an earlier build
+        // stays on disk.
+        remote::forget_saved_password();
+        Root(app, remote::Remote::default())
+    }
+}
 
 impl eframe::App for Root {
+    /// Runs even while the window is hidden, covered or minimized: remote
+    /// access draws the browser's copy of the window from here.
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.1.update(&mut self.0, ctx, frame);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.frame(ui);
     }

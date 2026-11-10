@@ -48,11 +48,10 @@ pub enum Setting {
     CurrentLine,
     IndentGuides,
     Sidebar,
-    FormatOnSave,
 }
 
 impl Setting {
-    pub const ALL: [Setting; 11] = [
+    pub const ALL: [Setting; 10] = [
         Setting::Theme,
         Setting::UiFont,
         Setting::CodeFont,
@@ -63,7 +62,6 @@ impl Setting {
         Setting::CurrentLine,
         Setting::IndentGuides,
         Setting::Sidebar,
-        Setting::FormatOnSave,
     ];
 
     /// Its key in `settings.json`.
@@ -79,7 +77,6 @@ impl Setting {
             Setting::CurrentLine => "currentLine",
             Setting::IndentGuides => "indentGuides",
             Setting::Sidebar => "sidebar",
-            Setting::FormatOnSave => "formatOnSave",
         }
     }
 
@@ -95,7 +92,6 @@ impl Setting {
             Setting::CurrentLine => "Highlight the current line",
             Setting::IndentGuides => "Indent guides",
             Setting::Sidebar => "Show file tree",
-            Setting::FormatOnSave => "Format on save",
         }
     }
 
@@ -107,7 +103,7 @@ impl Setting {
             }
             Setting::TerminalFps => icon::PULSE,
             Setting::WordWrap => icon::WRAP,
-            Setting::CurrentLine | Setting::IndentGuides | Setting::FormatOnSave => icon::EDIT,
+            Setting::CurrentLine | Setting::IndentGuides => icon::EDIT,
             Setting::Sidebar => icon::SIDEBAR,
         }
     }
@@ -121,12 +117,6 @@ impl App {
         use std::sync::atomic::Ordering::Relaxed;
         let focused = ctx.input(|i| i.focused);
         crate::terminalpane::APP_FOCUSED.store(focused, Relaxed);
-        let key = self
-            .config
-            .keymap
-            .combo_for(Command::SwitchTerminal)
-            .map(|k| format!(" — {} to switch", k.caps().concat()))
-            .unwrap_or_default();
         for i in 0..self.terminals.len() {
             let shown = self.terminal_open && (self.terminal_grid || i == self.active_terminal);
             let t = &mut self.terminals[i];
@@ -134,6 +124,12 @@ impl App {
             t.pane.watch.looking.store(focused && shown, Relaxed);
             let name = t.pane.display_name();
             for message in t.pane.take_fired() {
+                let key = self
+                    .config
+                    .keymap
+                    .combo_for(Command::SwitchTerminal)
+                    .map(|k| format!(" — {} to switch", k.caps().concat()))
+                    .unwrap_or_default();
                 self.missed.push(format!("{name}: {message}{key}"));
             }
         }
@@ -192,26 +188,13 @@ impl App {
     }
 
     pub(super) fn clip_items(&self, query: &str) -> Vec<Item> {
-        let ticked = self
-            .palette
-            .as_ref()
-            .map(|p| p.ticked.clone())
-            .unwrap_or_default();
         let q = query.to_lowercase();
         self.clips
             .iter()
             .enumerate()
             .filter(|(_, c)| q.is_empty() || c.to_lowercase().contains(&q))
             .map(|(i, text)| {
-                let mut it = Item::new(
-                    if ticked.contains(&i) {
-                        icon::PASS
-                    } else {
-                        icon::COPY
-                    },
-                    preview(text),
-                    Pick::Clip(i),
-                );
+                let mut it = Item::new(icon::COPY, preview(text), Pick::Clip(i));
                 let lines = text.lines().count();
                 if lines > 1 {
                     it.detail = format!("{lines} lines");
@@ -221,27 +204,20 @@ impl App {
             .collect()
     }
 
-    /// Tab: tick (or untick) the selected entry for a multi-paste.
-    pub fn clip_tick(&mut self) {
-        let Some(pal) = &mut self.palette else { return };
-        let Some(Pick::Clip(i)) = pal.selected_pick().cloned() else {
-            return;
-        };
-        match pal.ticked.iter().position(|t| *t == i) {
-            Some(at) => {
-                pal.ticked.remove(at);
-            }
-            None => pal.ticked.push(i),
-        }
-        pal.step(1);
-        self.refresh_items();
+    /// The open list's ticked rows (see `Palette::ticked`).
+    pub(crate) fn ticked(&self) -> Vec<Pick> {
+        self.palette.as_ref().map(|p| p.ticked.clone()).unwrap_or_default()
     }
 
     /// Enter: paste the ticked entries (top to bottom, one per line), or the
     /// selected one, where the keyboard was — and make it the clipboard.
     pub fn clip_paste(&mut self, ctx: &egui::Context) {
         let Some(pal) = &self.palette else { return };
-        let mut picks = pal.ticked.clone();
+        let mut picks: Vec<usize> = pal
+            .ticked
+            .iter()
+            .filter_map(|t| if let Pick::Clip(i) = t { Some(*i) } else { None })
+            .collect();
         picks.sort();
         if picks.is_empty()
             && let Some(Pick::Clip(i)) = pal.selected_pick()
@@ -420,7 +396,12 @@ impl App {
                 it
             })
             .collect();
-        let mut links = vec![Command::Keybindings, Command::OpenSettings];
+        let mut links = vec![
+            Command::ToggleRemoteAccess,
+            Command::ShowRemoteAddress,
+            Command::Keybindings,
+            Command::OpenSettings,
+        ];
         if self.project.is_some() {
             links.push(Command::OpenProjectSettings);
         }
@@ -458,7 +439,6 @@ impl App {
             Setting::CurrentLine => on(st.current_line),
             Setting::IndentGuides => on(st.indent_guides),
             Setting::Sidebar => on(st.sidebar),
-            Setting::FormatOnSave => on(st.format_on_save),
         }
     }
 
@@ -501,7 +481,6 @@ impl App {
             Setting::CurrentLine => (!st.current_line).into(),
             Setting::IndentGuides => (!st.indent_guides).into(),
             Setting::Sidebar => (!st.sidebar).into(),
-            Setting::FormatOnSave => (!st.format_on_save).into(),
         };
         self.save_choice_quietly(s.key(), value, ctx);
         self.refresh_items();

@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Roxaruu</title>
+<style>
+  :root { --bg:#141417; --surface:#19191d; --card:#1f1f24; --border:#2a2a31; --text:#ececf1; --muted:#a1a1ab;
+          --subtle:#6b6b76; --accent:#f27b48; --ok:#5fd28a; --warn:#f2c98a; --top:44px; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); overflow:hidden;
+               font:13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, system-ui, sans-serif;
+               -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+  #top { position:fixed; left:0; right:0; top:0; height:var(--top); display:flex; align-items:center; gap:6px;
+         padding:0 10px; background:var(--surface); border-bottom:1px solid var(--border); z-index:3;
+         overflow-x:auto; scrollbar-width:none; }
+  #top::-webkit-scrollbar { display:none; }
+  #area { position:fixed; left:0; top:var(--top); right:0; bottom:0; overflow:hidden; background:var(--bg);
+          touch-action:none; touch-action:pinch-zoom; }
+  /* Pinching zooms the page (Safari, without pinch-zoom: nothing); one
+     finger is the app's. */
+  canvas { display:block; touch-action:none; touch-action:pinch-zoom; outline:none; -webkit-touch-callout:none; }
+  /* The window's name is the window list's button. */
+  #win { display:flex; align-items:center; gap:8px; max-width:320px; margin-right:4px; padding:0 8px 0 10px;
+         background:none; border-color:transparent; }
+  #win:hover, body.wins #win { background:var(--card); border-color:var(--border); }
+  #name { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #win small, .win kbd { font:inherit; font-size:11px; color:var(--subtle); white-space:nowrap; }
+  #win .chev { color:var(--subtle); font-size:10px; }
+  #wins { position:fixed; left:8px; top:calc(var(--top) - 4px); width:340px; max-width:calc(100vw - 16px);
+          max-height:min(60vh, 520px); overflow-y:auto; padding:6px; background:var(--card);
+          border:1px solid var(--border); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,.45); z-index:5; }
+  #wins[hidden] { display:none; }
+  #wins .foot { margin:6px 8px 2px; font-size:11px; color:var(--subtle); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--warn); flex:none; }
+  .dot.live { background:var(--ok); }
+  .sp { flex:1; min-width:8px; }
+  button.k { font:inherit; font-size:12px; color:var(--text); background:var(--card); border:1px solid var(--border);
+             border-radius:7px; height:28px; min-width:30px; padding:0 8px; cursor:pointer; flex:none; }
+  button.k.on { background:var(--accent); color:#1b0d06; border-color:var(--accent); }
+  button.k:active { transform:translateY(1px); }
+  .win { display:flex; align-items:center; gap:10px; width:100%; margin:1px 0; text-align:left; font:inherit; color:var(--muted);
+         background:none; border:0; border-radius:8px; padding:8px 10px; cursor:pointer; }
+  .win span { flex:1; min-width:0; }
+  .win:hover, .win.sel { background:var(--border); color:var(--text); }
+  .win.on { color:var(--text); box-shadow:inset 3px 0 0 var(--accent); }
+  .win b { display:block; font-weight:600; color:inherit; }
+  .win small { display:block; color:var(--subtle); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .empty { margin:14px; color:var(--subtle); }
+  #msg { position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); pointer-events:none; }
+  #tip { position:fixed; right:12px; bottom:12px; max-width:340px; display:flex; gap:10px; align-items:flex-start;
+         padding:10px 12px; background:var(--card); border:1px solid var(--border); border-radius:10px;
+         color:var(--muted); z-index:4; box-shadow:0 8px 30px rgba(0,0,0,.35); }
+  #tip[hidden] { display:none; }
+  body.locked #full { background:var(--accent); color:#1b0d06; border-color:var(--accent); }
+  /* Lost the link: a dialog over the picture (the bar stays usable). */
+  #lost { position:fixed; left:0; right:0; top:var(--top); bottom:0; display:grid; place-items:center;
+          background:rgba(10,10,12,.55); z-index:4; padding:16px; }
+  #lost[hidden] { display:none; }
+  #lost .box { width:min(420px, calc(100vw - 32px)); padding:20px 22px 16px; background:var(--card);
+               border:1px solid var(--border); border-radius:12px; box-shadow:0 16px 50px rgba(0,0,0,.5); }
+  #lost h3 { margin:0 0 8px; font-size:15px; display:flex; align-items:center; gap:10px; }
+  #lost h3::before { content:""; width:9px; height:9px; border-radius:50%; background:var(--warn); flex:none; }
+  #lost p { margin:0 0 16px; color:var(--muted); line-height:1.5; }
+  #lost .row { display:flex; align-items:center; gap:10px; }
+  #lostStatus { flex:1; color:var(--subtle); font-size:12px; }
+  #lostRetry small { opacity:.7; margin-left:6px; }
+  /* The phone keyboard's field: 16px, or iOS zooms the page on focus. */
+  #kb { position:fixed; left:-1000px; top:0; width:10px; height:10px; opacity:0; font-size:16px; }
+  #full small { color:inherit; opacity:.7; margin-left:4px; }
+  /* Fingers: bar keys big enough to hit (≥ 40px). */
+  @media (pointer: coarse) {
+    :root { --top:52px; }
+    button.k { height:40px; min-width:40px; font-size:14px; }
+  }
+  /* A phone: the list is a sheet across the screen, rows a finger high. */
+  @media (max-width: 760px) {
+    #wins { left:8px; right:8px; width:auto; }
+    .win { padding:12px 10px; }
+    #win small { display:none; }
+  }
+</style>
+</head>
+<body>
+<div id="top">
+  <button class="k" id="win" title="Switch window"><span class="dot" id="dot" title="Connecting"></span><span id="name">Roxaruu</span><small id="winKey"></small><span class="chev">▼</span></button>
+  <span class="sp"></span>
+  <button class="k mod" data-mod="meta" title="⌘ for the next key or click (for keys the browser keeps, like ⌘W)">⌘</button>
+  <button class="k mod" data-mod="alt" title="⌥ for the next key or click">⌥</button>
+  <button class="k mod" data-mod="ctrl" title="⌃ for the next key or click">⌃</button>
+  <button class="k mod" data-mod="shift" title="⇧ for the next key or click">⇧</button>
+  <button class="k key" data-key="Escape">esc</button>
+  <button class="k key" data-key="Tab">⇥</button>
+  <button class="k key" data-key="ArrowLeft">←</button>
+  <button class="k key" data-key="ArrowUp">↑</button>
+  <button class="k key" data-key="ArrowDown">↓</button>
+  <button class="k key" data-key="ArrowRight">→</button>
+  <button class="k" id="kbd" title="Keyboard">⌨</button>
+  <button class="k" id="full" title="Full screen">⛶<small id="fullKey">F11</small></button>
+  <form method="post" action="/logout" style="margin:0"><button class="k" title="Sign out">Sign out</button></form>
+</div>
+<nav id="wins" hidden><div id="list"><div class="empty">Looking for windows…</div></div><div class="foot">↑ ↓ choose · ↵ switch · 1–9 · esc close</div></nav>
+<main id="area"><canvas id="screen" tabindex="0"></canvas><div id="msg">Connecting…</div></main>
+<div id="lost" hidden><div class="box" role="alertdialog" aria-labelledby="lostTitle" aria-describedby="lostText">
+  <h3 id="lostTitle">Disconnected</h3><p id="lostText"></p>
+  <div class="row"><span id="lostStatus"></span><button class="k" id="lostRetry">Try now<small>↵</small></button></div>
+</div></div>
+<div id="tip" hidden><span id="tipText"></span><button class="k" id="tipClose" title="Got it">✕</button></div>
+<textarea id="kb" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const canvas = $("screen"), g = canvas.getContext("2d"), area = $("area"), kb = $("kb");
+const sticky = { meta: false, alt: false, ctrl: false, shift: false };
+// On a Mac, ⌘ is the command key; elsewhere Ctrl is.
+const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
+let ws = null, win = null, windows = [], size = null;
+
+// ---- windows ----------------------------------------------------------
+async function loadWindows() {
+  let r;
+  try { r = await fetch("/api/windows", { cache: "no-store" }); } catch { unreachable = true; return; }
+  if (r.status === 401) { leaving = true; location.href = "/"; return; }
+  unreachable = false;
+  windows = await r.json();
+  const list = $("list");
+  list.replaceChildren();
+  if (!windows.length) list.innerHTML = '<div class="empty">No windows open. Open Roxaruu on the Mac.</div>';
+  windows.forEach((w, i) => {
+    const b = document.createElement("button");
+    b.className = "win" + (w.id === win ? " on" : "") + (i === winSel ? " sel" : "");
+    b.innerHTML = "<span><b></b><small></small></span><kbd></kbd>";
+    b.querySelector("b").textContent = w.name;
+    b.querySelector("small").textContent = w.path || "no folder open";
+    b.querySelector("kbd").textContent = i < 9 ? String(i + 1) : "";
+    b.onclick = () => { closeWins(); pick(w.id); };
+    list.appendChild(b);
+  });
+  if (!windows.some(w => w.id === win)) {
+    // The window being shown was closed: on to another, saying so.
+    const was = win != null && $("name").textContent;
+    if (windows.length) {
+      pick(windows[0].id);
+      if (was) notice(`“${was}” was closed on the Mac. Now showing “${windows[0].name}”.`);
+    } else {
+      win = null; show("No windows open"); linkUp(false);
+      if (ws) { ws.onclose = null; ws.close(); ws = null; }
+    }
+  }
+}
+function pick(id) {
+  if (id === win && ws) return focusInput();
+  win = id;
+  const w = windows.find(w => w.id === id);
+  $("name").textContent = w ? w.name : "Roxaruu";
+  document.querySelectorAll(".win").forEach((b, i) => b.classList.toggle("on", windows[i] && windows[i].id === id));
+  connect();
+  focusInput();
+}
+// The window list: the name's button, or the app's Switch Window key (its
+// key shows on the button). While it's up, the keys are its own.
+let winSel = 0, winKey = "";
+const winsOpen = () => !$("wins").hidden;
+function openWins() {
+  winSel = Math.max(0, windows.findIndex(w => w.id === win));
+  $("wins").hidden = false;
+  document.body.classList.add("wins");
+  markSel();
+}
+function closeWins() { $("wins").hidden = true; document.body.classList.remove("wins"); focusInput(); }
+function markSel() {
+  document.querySelectorAll(".win").forEach((b, i) => b.classList.toggle("sel", i === winSel));
+  document.querySelectorAll(".win")[winSel]?.scrollIntoView({ block: "nearest" });
+}
+function winsKey(e) {
+  const n = windows.length;
+  if (e.key === "Escape") closeWins();
+  else if (e.key === "ArrowDown" && n) { winSel = (winSel + 1) % n; markSel(); }
+  else if (e.key === "ArrowUp" && n) { winSel = (winSel + n - 1) % n; markSel(); }
+  else if (e.key === "Enter" && windows[winSel]) { closeWins(); pick(windows[winSel].id); }
+  else if (/^Digit[1-9]$/.test(e.code) && windows[+e.code.slice(5) - 1]) { closeWins(); pick(windows[+e.code.slice(5) - 1].id); }
+  else return;
+  e.preventDefault();
+}
+$("win").onclick = () => winsOpen() ? closeWins() : openWins();
+// A click elsewhere only closes it (its press and release reach nothing).
+let swallowUp = null;
+document.addEventListener("pointerdown", e => {
+  if (!winsOpen() || e.target.closest("#wins, #win")) return;
+  closeWins(); swallowUp = e.pointerId; e.stopPropagation(); e.preventDefault();
+}, true);
+document.addEventListener("pointerup", e => {
+  if (e.pointerId === swallowUp) { swallowUp = null; e.stopPropagation(); }
+}, true);
+
+// ---- the link -------------------------------------------------------
+function show(text) { $("msg").textContent = text; $("msg").style.display = text ? "grid" : "none"; }
+function live(on) { $("dot").classList.toggle("live", on); $("dot").title = on ? "Live" : "Reconnecting"; linkUp(on); }
+
+// ---- losing the link ---------------------------------------------------
+// Remote access turned off on the Mac, Roxaruu quit, the Mac asleep or off
+// this network, the window closed: once the link has been down a moment
+// (not for a blip), a dialog says so. The page keeps trying; the dialog
+// goes when the link is back (or the sign-in page comes, for a new server).
+let lostAt = 0, unreachable = false;
+function linkUp(on) {
+  if (on) { lostAt = 0; $("lost").hidden = true; }
+  else if (!lostAt) lostAt = Date.now();
+}
+const LOST_AFTER = 1500;
+function lostCheck() {
+  if (!lostAt || Date.now() - lostAt < LOST_AFTER) return;
+  const [title, text] = unreachable
+    ? ["Disconnected from your Mac", "Roxaruu stopped sharing: remote access was turned off, Roxaruu was closed, " +
+       "or the Mac is asleep or off this network. This page reconnects by itself when it's back."]
+    : !windows.length
+    ? ["No windows to show", "Every Roxaruu window open to remote access was closed. Open one on the Mac and it shows up here."]
+    : ["Connection lost", `The link to “${$("name").textContent}” dropped. Trying to get it back…`];
+  $("lostTitle").textContent = title;
+  $("lostText").textContent = text;
+  const s = Math.round((Date.now() - lostAt) / 1000);
+  $("lostStatus").textContent = "Trying again · " + (s < 60 ? s + "s" : Math.floor(s / 60) + "m " + (s % 60) + "s");
+  if ($("lost").hidden) { $("lost").hidden = false; kb.blur(); }
+}
+setInterval(lostCheck, 500);
+async function retryNow() {
+  $("lostStatus").textContent = "Trying…";
+  await loadWindows();
+  if (win != null && (!ws || ws.readyState > 1)) connect();
+}
+$("lostRetry").onclick = retryNow;
+// A note at the corner that goes by itself.
+let noticeTimer = 0;
+function notice(text) {
+  $("tipText").textContent = text;
+  $("tip").hidden = false;
+  $("tipClose").onclick = () => { $("tip").hidden = true; focusInput(); };
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { $("tip").hidden = true; }, 6000);
+}
+function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+function connect() {
+  if (ws) { ws.onclose = null; ws.close(); }
+  if (win == null) return;
+  show("Connecting…"); live(false);
+  const sock = new WebSocket(`wss://${location.host}/ws/${win}`);
+  sock.binaryType = "arraybuffer";
+  ws = sock;
+  sock.onopen = () => { live(true); sendSize(true); };
+  let drawing = Promise.resolve();
+  sock.onmessage = e => {
+    if (typeof e.data === "string") {
+      const m = JSON.parse(e.data);
+      if (m.t === "clip") deliverClip(m.s);
+      if (m.t === "cursor") canvas.style.cursor = m.c;
+      control(m);
+      return;
+    }
+    // Frames are drawn in order (each builds on the last), each one whole.
+    const buf = e.data;
+    drawing = drawing.then(() => drawFrame(buf, sock)).catch(() => {});
+  };
+  sock.onclose = () => { if (ws !== sock) return; live(false); show("Reconnecting…"); setTimeout(() => { if (ws === sock) connect(); }, 1200); };
+}
+
+// ---- frames ------------------------------------------------------------
+// A frame is the regions that changed since the last (see frames.rs): u8 1,
+// u16 width, height, count, then per region u16 x, y, w, h, u32 length, a
+// lossless WebP (at half resolution while things move, scaled to fill).
+// All are decoded (in parallel, off this thread), then drawn together, then
+// acked: the server sends no further ahead than that, so a slow link shows
+// the newest picture, not a queue.
+const roxStats = window.__roxStats = { frames: 0, bytes: 0, decodeMs: 0 };
+async function drawFrame(buf, sock) {
+  const t0 = performance.now();
+  const v = new DataView(buf);
+  if (v.getUint8(0) !== 1) return;
+  const w = v.getUint16(1, true), h = v.getUint16(3, true), n = v.getUint16(5, true), at = [], decoding = [];
+  for (let i = 0, o = 7; i < n; i++) {
+    const len = v.getUint32(o + 8, true);
+    at.push([0, 2, 4, 6].map(k => v.getUint16(o + k, true)));
+    decoding.push(createImageBitmap(new Blob([new Uint8Array(buf, o + 12, len)], { type: "image/webp" })));
+    o += 12 + len;
+  }
+  const bitmaps = await Promise.all(decoding);
+  if (ws !== sock) { bitmaps.forEach(b => b.close()); return; }
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  // A region sent at half resolution (while things move) fills its place.
+  bitmaps.forEach((b, i) => { g.drawImage(b, ...at[i]); b.close(); });
+  if (size) { canvas.style.width = size.w + "px"; canvas.style.height = size.h + "px"; }
+  show("");
+  if (sock.readyState === 1) sock.send('{"t":"ack"}');
+  roxStats.frames++; roxStats.bytes += buf.byteLength; roxStats.decodeMs += performance.now() - t0;
+  dispatchEvent(new Event("rox-frame"));
+}
+
+// ---- size --------------------------------------------------------------
+function sendSize(force) {
+  const r = area.getBoundingClientRect();
+  const s = { w: Math.floor(r.width), h: Math.floor(r.height), dpr: window.devicePixelRatio || 1 };
+  if (!force && size && s.w === size.w && s.h === size.h && s.dpr === size.dpr) return;
+  size = s;
+  send({ t: "size", w: s.w, h: s.h, dpr: s.dpr, mac: IS_MAC });
+}
+let resizeTimer = 0;
+new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => sendSize(false), 80); }).observe(area);
+
+// ---- modifiers ---------------------------------------------------------
+// The held keys, plus any toolbar ones (⌘ ⌥ ⌃ ⇧: for keys the browser
+// keeps, and for phones). AltGr off a Mac types a character: not a chord.
+function mods(e) {
+  const altGr = !IS_MAC && !!(e && e.getModifierState && e.getModifierState("AltGraph"));
+  return { alt: (!altGr && !!(e && e.altKey)) || sticky.alt, ctrl: (!altGr && !!(e && e.ctrlKey)) || sticky.ctrl,
+           shift: !!(e && e.shiftKey) || sticky.shift, meta: !!(e && e.metaKey) || sticky.meta };
+}
+function clearSticky() {
+  for (const k in sticky) sticky[k] = false;
+  document.querySelectorAll(".mod").forEach(b => b.classList.remove("on"));
+}
+document.querySelectorAll(".mod").forEach(b => b.onclick = () => {
+  const k = b.dataset.mod; sticky[k] = !sticky[k]; b.classList.toggle("on", sticky[k]); focusInput();
+});
+// A key typed without a physical keyboard (toolbar, phone): its `code` as
+// a US keyboard would say it.
+const codeOf = ch => /^[a-z]$/i.test(ch) ? "Key" + ch.toUpperCase() : /^[0-9]$/.test(ch) ? "Digit" + ch : ch;
+function tapKey(key, m) {
+  const code = key.length > 1 ? key : codeOf(key);
+  send({ t: "key", k: key, code, down: true, m });
+  send({ t: "key", k: key, code, down: false, m });
+}
+document.querySelectorAll(".key").forEach(b => b.onclick = () => { tapKey(b.dataset.key, mods(null)); clearSticky(); focusInput(); });
+
+// ---- clipboard ---------------------------------------------------------
+// Copies reach this device's clipboard. Safari lets a page write it only
+// during the key press, so ⌘C/⌘X start the write then and the app's text
+// fills it when it arrives; otherwise (a menu's Copy) it's written as it comes.
+let pendingClip = null;
+function armCopy() {
+  if (!window.ClipboardItem || !navigator.clipboard || !navigator.clipboard.write) return;
+  const pending = {};
+  const text = new Promise((ok, no) => {
+    pending.ok = ok;
+    pending.timer = setTimeout(() => { if (pendingClip === pending) pendingClip = null; no(new Error("nothing copied")); }, 3000);
+  });
+  pendingClip = pending;
+  navigator.clipboard.write([new ClipboardItem({ "text/plain": text.then(s => new Blob([s], { type: "text/plain" })) })])
+    .catch(() => { if (pending.s != null) navigator.clipboard.writeText(pending.s).catch(() => {}); });
+}
+function deliverClip(s) {
+  const p = pendingClip;
+  pendingClip = null;
+  if (p) { clearTimeout(p.timer); p.s = s; p.ok(s); }
+  else if (navigator.clipboard) navigator.clipboard.writeText(s).catch(() => {});
+}
+document.addEventListener("paste", e => {
+  if (!typing()) return;
+  e.preventDefault();
+  const s = (e.clipboardData || window.clipboardData).getData("text");
+  if (s) send({ t: "paste", s });
+});
+
+// ---- pointer, touch and scrolling --------------------------------------
+const pos = e => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+// Mouse moves go once per animation frame; anything else sends the latest first.
+let moveQueued = null;
+function flushMove() { if (moveQueued) { send(moveQueued); moveQueued = null; } }
+const BUTTON_BIT = [1, 4, 2, 8, 16];
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+// No autoscroll on middle-click, no history jump on the back/forward buttons.
+for (const t of ["mousedown", "mouseup", "auxclick"]) canvas.addEventListener(t, e => { if (e.button !== 0 && e.button !== 2) e.preventDefault(); });
+canvas.addEventListener("pointerdown", e => {
+  if (e.pointerType === "touch") return touchDown(e);
+  e.preventDefault();
+  canvas.focus();
+  canvas.setPointerCapture(e.pointerId);
+  const p = pos(e);
+  flushMove();
+  send({ t: "down", x: p.x, y: p.y, b: e.button, m: mods(e), ts: e.timeStamp });
+  clearSticky();
+});
+canvas.addEventListener("pointermove", e => {
+  if (e.pointerType === "touch") return touchMove(e);
+  const p = pos(e);
+  // A second button pressed or let go while another is held.
+  if (e.button >= 0) {
+    flushMove();
+    const down = (e.buttons & BUTTON_BIT[e.button]) !== 0;
+    send({ t: down ? "down" : "up", x: p.x, y: p.y, b: e.button, m: mods(e), ts: e.timeStamp });
+    return;
+  }
+  if (!moveQueued) requestAnimationFrame(flushMove);
+  moveQueued = { t: "move", x: p.x, y: p.y, m: mods(e) };
+});
+canvas.addEventListener("pointerup", e => {
+  if (e.pointerType === "touch") return touchUp(e, false);
+  const p = pos(e);
+  flushMove();
+  send({ t: "up", x: p.x, y: p.y, b: e.button, m: mods(e), ts: e.timeStamp });
+});
+canvas.addEventListener("pointercancel", e => { if (e.pointerType === "touch") touchUp(e, true); });
+canvas.addEventListener("pointerleave", e => { if (e.pointerType !== "touch") { flushMove(); send({ t: "leave" }); } });
+
+// A trackpad sends exact pixels in a stream: one gesture from the first
+// event to a pause, applied as it comes, as on the Mac. A mouse wheel's
+// notches are smoothed by the app. A pinch arrives as Ctrl+wheel without
+// Ctrl down. ponytail: trackpad vs wheel is guessed from wheelDelta (Chrome,
+// Safari); Firefox's line units always count as a wheel.
+let ctrlDown = false, wheelEnd = 0;
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  flushMove();
+  if (e.ctrlKey && !ctrlDown && !sticky.ctrl) { send({ t: "zoom", f: Math.exp(-e.deltaY / 100) }); return; }
+  const m = mods(e), unit = ["px", "line", "page"][e.deltaMode] || "px";
+  const precise = e.deltaMode === 0 &&
+    (e.wheelDeltaY ? e.wheelDeltaY === -3 * e.deltaY : e.wheelDeltaX ? e.wheelDeltaX === -3 * e.deltaX : true);
+  if (!precise) { send({ t: "wheel", dx: e.deltaX, dy: e.deltaY, m, unit, src: "wheel" }); return; }
+  const phase = wheelEnd ? "move" : "start";
+  clearTimeout(wheelEnd);
+  wheelEnd = setTimeout(() => { wheelEnd = 0; send({ t: "wheel", dx: 0, dy: 0, phase: "end", src: "trackpad" }); }, 150);
+  send({ t: "wheel", dx: e.deltaX, dy: e.deltaY, m, phase, src: "trackpad" });
+}, { passive: false });
+
+// Touch: a tap clicks, a long press right-clicks, one finger dragging
+// scrolls and coasts on when let go (as on iOS). Two fingers are the
+// browser's (zooming the page); they don't click or scroll the app.
+const fingers = new Set();
+let touch = null, coast = 0;
+function coasted() { coast = 0; send({ t: "wheel", dx: 0, dy: 0, phase: "end", src: "momentum" }); send({ t: "leave" }); }
+function stopCoasting() { if (coast) { cancelAnimationFrame(coast); coasted(); } }
+function touchDown(e) {
+  e.preventDefault(); // no mouse events after: they'd move the focus off the phone keyboard
+  fingers.add(e.pointerId);
+  stopCoasting();
+  if (fingers.size > 1) { if (touch) endTouch(); touch = null; return; }
+  const p = pos(e);
+  // From the left edge: maybe a swipe for the file tree's drawer.
+  touch = { id: e.pointerId, x: p.x, y: p.y, x0: p.x, y0: p.y, moved: false, long: false, edge: p.x < 24,
+            trail: [{ ...p, t: e.timeStamp }] };
+  touch.timer = setTimeout(() => {
+    touch.long = true;
+    send({ t: "move", x: touch.x, y: touch.y });
+    const ts = performance.now();
+    send({ t: "down", x: touch.x, y: touch.y, b: 2, m: mods(null), ts });
+    send({ t: "up", x: touch.x, y: touch.y, b: 2, m: mods(null), ts });
+    clearSticky();
+    if (navigator.vibrate) navigator.vibrate(10);
+  }, 500);
+}
+function touchMove(e) {
+  if (!touch || e.pointerId !== touch.id || touch.long) return;
+  const p = pos(e);
+  if (touch.edge && !touch.moved) {
+    // Rightwards from the edge opens the drawer (a compact view's; elsewhere
+    // the app ignores it); up or down scrolls as usual.
+    const dx = p.x - touch.x0, dy = Math.abs(p.y - touch.y0);
+    if (dx > 30 && dx > 2 * dy) { clearTimeout(touch.timer); touch.long = true; send({ t: "drawer" }); return; }
+    if (dy <= 8 && dx > -8) return; // not sure which way yet
+  }
+  if (!touch.moved && Math.hypot(p.x - touch.x0, p.y - touch.y0) > 8) {
+    touch.moved = true; clearTimeout(touch.timer);
+    send({ t: "move", x: p.x, y: p.y }); // scrolls what's under the finger
+    send({ t: "wheel", dx: 0, dy: 0, phase: "start", src: "trackpad" });
+  }
+  if (touch.moved) send({ t: "wheel", dx: touch.x - p.x, dy: touch.y - p.y, src: "trackpad" });
+  touch.x = p.x; touch.y = p.y;
+  touch.trail.push({ ...p, t: e.timeStamp });
+  while (touch.trail.length > 2 && e.timeStamp - touch.trail[0].t > 100) touch.trail.shift();
+}
+// A finger's gesture ends: a scroll coasts on, a tap clicks.
+function endTouch(e) {
+  clearTimeout(touch.timer);
+  if (touch.moved) {
+    send({ t: "wheel", dx: 0, dy: 0, phase: "end", src: "trackpad" });
+    const a = touch.trail[0], b = touch.trail[touch.trail.length - 1], dt = b.t - a.t;
+    let vx = dt > 0 ? (b.x - a.x) / dt : 0, vy = dt > 0 ? (b.y - a.y) / dt : 0; // px per ms
+    if (e && Math.hypot(vx, vy) > 0.2) {
+      send({ t: "wheel", dx: 0, dy: 0, phase: "start", src: "momentum" });
+      let last = performance.now();
+      const step = now => {
+        const dt = Math.min(now - last, 50); last = now;
+        const k = Math.pow(0.998, dt); // iOS's normal deceleration
+        send({ t: "wheel", dx: -vx * dt, dy: -vy * dt, src: "momentum" });
+        vx *= k; vy *= k;
+        if (Math.hypot(vx, vy) < 0.02) return coasted();
+        coast = requestAnimationFrame(step);
+      };
+      coast = requestAnimationFrame(step);
+      return;
+    }
+    send({ t: "leave" });
+  } else if (e && !touch.long) {
+    send({ t: "move", x: touch.x, y: touch.y });
+    send({ t: "down", x: touch.x, y: touch.y, b: 0, m: mods(null), ts: touch.trail[0].t });
+    send({ t: "up", x: touch.x, y: touch.y, b: 0, m: mods(null), ts: e.timeStamp });
+    send({ t: "leave" }); // nothing hovers after a touch
+    clearSticky();
+    // The caret moved: the phone keyboard's word so far is gone; and its
+    // keyboard stays up (the canvas would take the focus otherwise).
+    kbReset();
+    focusInput();
+  }
+}
+function touchUp(e, cancelled) {
+  fingers.delete(e.pointerId);
+  if (touch && e.pointerId === touch.id) { endTouch(cancelled ? null : e); touch = null; }
+}
+
+// ---- keyboard ----------------------------------------------------------
+const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "Fn", "AltGraph", "OS"]);
+function typing() { return document.activeElement === canvas || document.activeElement === kb; }
+// Keys sent down and not yet up (code → key), so each gets its release.
+const held = new Map();
+// The letter a key means for clipboard chords: the typed one, or on other
+// layouts the physical one (as egui does).
+const letterOf = e => /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : e.code.startsWith("Key") ? e.code.slice(3).toLowerCase() : "";
+document.addEventListener("keydown", e => {
+  if (e.key === "Control") ctrlDown = true;
+  if (winsOpen() && !MODIFIER_KEYS.has(e.key)) return winsKey(e);
+  // Disconnected: ↵ tries now; nothing else has anywhere to go.
+  if (!$("lost").hidden) { if (e.key === "Enter") retryNow(); if (!MODIFIER_KEYS.has(e.key)) e.preventDefault(); return; }
+  if (!typing() || e.isComposing || e.key === "Unidentified" || e.key === "Process") return;
+  const m = mods(e), letter = letterOf(e);
+  // Into the phone keyboard's field, plain typing (and Backspace, Enter)
+  // goes the field's way, so autocorrect and input methods see the word.
+  if (document.activeElement === kb && !m.meta && !m.ctrl && !m.alt &&
+      ([...e.key].length === 1 || e.key === "Backspace" || (e.key === "Enter" && !m.shift))) return;
+  if (document.activeElement === kb && !MODIFIER_KEYS.has(e.key)) kbReset();
+  // ⌘V (Ctrl+V elsewhere): the browser's own paste brings this device's
+  // clipboard (the paste event above), as the Mac's ⌘V does.
+  const cmd = IS_MAC ? e.metaKey : e.ctrlKey || e.metaKey;
+  if (cmd && !e.altKey && !e.shiftKey && letter === "v") { clearSticky(); return; }
+  if ((IS_MAC ? m.meta : m.meta || m.ctrl) && !m.alt && !m.shift && (letter === "c" || letter === "x")) armCopy();
+  e.preventDefault();
+  held.set(e.code, e.key);
+  send({ t: "key", k: e.key, code: e.code, down: true, m });
+  if (!MODIFIER_KEYS.has(e.key)) clearSticky();
+});
+document.addEventListener("keyup", e => {
+  if (e.key === "Control") ctrlDown = false;
+  if (!held.has(e.code)) return;
+  held.delete(e.code);
+  const m = mods(e);
+  send({ t: "key", k: e.key, code: e.code, down: false, m });
+  // A Mac browser sends no key-up for keys let go while ⌘ was down: let
+  // them go with it.
+  if (e.key === "Meta") for (const [code, key] of held) if (!MODIFIER_KEYS.has(key)) { held.delete(code); send({ t: "key", k: key, code, down: false, m }); }
+});
+// Switching away with keys held: the app forgets them, as when the Mac's
+// window loses focus.
+window.addEventListener("blur", () => { held.clear(); ctrlDown = false; send({ t: "focus", on: false }); });
+window.addEventListener("focus", () => send({ t: "focus", on: true }));
+
+// Phone keyboards type into a hidden field, word by word: autocorrect
+// rewrites a word, an input method (Gboard, Japanese, Chinese) composes
+// then replaces it. Whatever the field becomes, the app gets the same
+// change: a Backspace per character gone, then the new text. A leading
+// zero-width space gives Backspace something to delete when the field is
+// otherwise empty (Android sends no key for it).
+const KB_START = "​";
+let kbSent = KB_START, composing = false;
+function kbReset() { if (!composing) { kb.value = KB_START; kbSent = KB_START; } }
+function kbSync() {
+  const was = [...kbSent], now = [...kb.value];
+  let same = 0;
+  while (same < was.length && same < now.length && was[same] === now[same]) same++;
+  const m = mods(null), chord = m.meta || m.ctrl || m.alt;
+  for (let i = same; i < was.length; i++) tapKey("Backspace", { alt: false, ctrl: false, shift: false, meta: false });
+  let text = "";
+  const flush = () => { if (text) send({ t: "text", s: text }); text = ""; };
+  for (const ch of now.slice(same)) {
+    if (ch === "\n") { flush(); tapKey("Enter", m); }
+    else if (ch === KB_START) {}
+    else if (chord) tapKey(ch, m); // ⌘ then a letter: a shortcut
+    else text += ch;
+  }
+  flush();
+  kbSent = kb.value;
+  if (now.length > same || was.length > same) clearSticky();
+  // Back to a fresh field after a line, or once the start was deleted.
+  if (!composing && (kb.value.includes("\n") || !kb.value.startsWith(KB_START) || kb.value.length > 200)) kbReset();
+}
+kb.addEventListener("input", kbSync);
+kb.addEventListener("compositionstart", () => { composing = true; });
+kb.addEventListener("compositionend", () => { composing = false; kbSync(); });
+kbReset();
+function focusInput() { if (matchMedia("(pointer: coarse)").matches && document.body.classList.contains("typing")) kb.focus(); else canvas.focus(); }
+$("kbd").onclick = () => { document.body.classList.toggle("typing"); kbReset(); if (document.body.classList.contains("typing")) kb.focus(); else kb.blur(); };
+
+// ---- keys the browser keeps -------------------------------------------
+// ⌘W, ⌘T, ⌘N, ⌘Q, ⌃Tab, ⌘L… are the browser's: its own shortcuts run
+// before the page sees them. In full screen, Chrome, Edge and Opera hand
+// every key to the page (Keyboard Lock; hold esc to leave); the OS keeps
+// its own (⌘Tab, ⌘Space). Safari and Firefox can't: there the toolbar's
+// ⌘ ⌥ ⌃ ⇧ do it (tap ⌘, then W). Full screen is the app's own Full Screen
+// command (its key, F11 by default, shown on the button), or the button.
+const CAN_LOCK = !!(navigator.keyboard && navigator.keyboard.lock);
+let fullKey = "F11";
+async function fullScreen() {
+  if (document.fullscreenElement) return document.exitFullscreen();
+  try {
+    await document.documentElement.requestFullscreen();
+    if (CAN_LOCK) await navigator.keyboard.lock();
+  } catch {}
+  focusInput();
+}
+function fullTitle() {
+  $("fullKey").textContent = fullKey;
+  $("full").title = (CAN_LOCK
+    ? "Full screen: every key goes to Roxaruu, even ⌘W ⌘T ⌘N ⌘Q (hold esc to leave)"
+    : "Full screen (this browser keeps ⌘W ⌘T ⌘N ⌘Q: use the ⌘ button, then the key)") + (fullKey ? "  " + fullKey : "");
+}
+fullTitle();
+$("full").onclick = fullScreen;
+document.addEventListener("fullscreenchange", () => {
+  const on = !!document.fullscreenElement;
+  document.body.classList.toggle("locked", on && CAN_LOCK);
+  if (!on && CAN_LOCK) navigator.keyboard.unlock();
+});
+// What the app asks of the browser (besides frames, the clipboard and the
+// cursor): its Full Screen command, a link to open here, the keys to show.
+function control(m) {
+  if (m.t === "full") fullScreen();
+  else if (m.t === "keys") {
+    fullKey = m.full || ""; fullTitle();
+    winKey = m.windows || "";
+    $("winKey").textContent = winKey;
+    $("win").title = "Switch window" + (winKey ? "  " + winKey : "");
+  }
+  else if (m.t === "windows") winsOpen() ? closeWins() : openWins();
+  else if (m.t === "open") {
+    // Allowed while the click or key that asked is recent; else a link to tap.
+    const w = window.open(m.url, "_blank");
+    if (w) w.opener = null;
+    else {
+      const a = document.createElement("a");
+      a.href = m.url; a.target = "_blank"; a.rel = "noopener"; a.textContent = m.url;
+      $("tipText").replaceChildren("Open ", a);
+      $("tip").hidden = false;
+      $("tipClose").onclick = () => { $("tip").hidden = true; focusInput(); };
+    }
+  }
+}
+function tip() {
+  const coarse = matchMedia("(pointer: coarse)").matches;
+  let seen = false;
+  try { seen = localStorage.getItem("rox-keys-tip") === "1"; } catch {}
+  if (coarse || seen) return;
+  $("tipText").textContent = CAN_LOCK
+    ? `The browser keeps ⌘W ⌘T ⌘N ⌘Q. Press ⛶ (${fullKey}) to send every key to Roxaruu, or tap ⌘ then the key.`
+    : "This browser keeps ⌘W ⌘T ⌘N ⌘Q: tap ⌘ in the bar, then the key.";
+  $("tip").hidden = false;
+  $("tipClose").onclick = () => { $("tip").hidden = true; try { localStorage.setItem("rox-keys-tip", "1"); } catch {} canvas.focus(); };
+}
+tip();
+// ⌘W or ⌘Q reaching the browser would close the page: ask first.
+let leaving = false;
+window.addEventListener("beforeunload", e => { if (!leaving && ws && ws.readyState === 1) { e.preventDefault(); e.returnValue = ""; } });
+document.querySelector('form[action="/logout"]').addEventListener("submit", () => { leaving = true; });
+document.addEventListener("visibilitychange", () => send({ t: "visible", on: !document.hidden }));
+
+loadWindows();
+setInterval(loadWindows, 2500);
+canvas.focus();
+</script>
+</body>
+</html>

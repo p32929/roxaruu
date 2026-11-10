@@ -157,6 +157,10 @@ pub struct Buffer {
     /// means scanning the head of the file, which is far too much to redo on
     /// every frame just to place indent guides.
     indent_unit_cache: std::cell::Cell<Option<(u64, usize)>>,
+    /// Whether this holds the file's text. A tab not read yet (or a file too
+    /// big to hold, see `crate::huge`) has an empty buffer that must never
+    /// be saved over the file.
+    loaded: bool,
 }
 
 impl Buffer {
@@ -164,13 +168,29 @@ impl Buffer {
         let path = path.as_ref();
         let text =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let line_ending = LineEnding::detect(&text);
-        let rope = Rope::from_str(&text);
-        Ok(Buffer {
-            id: 0,
-            path: Some(path.to_path_buf()),
+        Ok(Self::from_text(path, &text))
+    }
+
+    /// A buffer of `text`, read from `path`.
+    pub fn from_text(path: &Path, text: &str) -> Self {
+        let rope = Rope::from_str(text);
+        Buffer {
+            line_ending: LineEnding::detect(text),
+            disk: Self::disk_meta(path),
             saved: rope.clone(),
             rope,
+            loaded: true,
+            ..Self::unloaded(path)
+        }
+    }
+
+    /// An empty stand-in for `path`'s text, until it's read.
+    pub fn unloaded(path: &Path) -> Self {
+        Buffer {
+            id: 0,
+            path: Some(path.to_path_buf()),
+            saved: Rope::new(),
+            rope: Rope::new(),
             cursor: 0,
             anchor: None,
             carets: Vec::new(),
@@ -178,15 +198,20 @@ impl Buffer {
             scroll_row: 0,
             modified: false,
             lang: Lang::detect(path),
-            line_ending,
-            disk: Self::disk_meta(path),
+            line_ending: LineEnding::Lf,
+            disk: None,
             revision: 0,
             undo: Vec::new(),
             redo: Vec::new(),
             last_kind: None,
             last_edit_cursor: None,
             indent_unit_cache: std::cell::Cell::new(None),
-        })
+            loaded: false,
+        }
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
     }
 
     pub fn revision(&self) -> u64 {
@@ -289,6 +314,9 @@ impl Buffer {
     /// Write the buffer back to its file, clearing the modified flag.
     pub fn save(&mut self) -> Result<()> {
         let path = self.path.clone().context("buffer has no path to save to")?;
+        if !self.loaded {
+            anyhow::bail!("it isn't open for editing");
+        }
         let mut writer = std::io::BufWriter::new(
             fs::File::create(&path).with_context(|| format!("writing {}", path.display()))?,
         );
@@ -343,6 +371,7 @@ impl Buffer {
         let max_row = rope.len_lines().saturating_sub(1);
         self.rope = rope.clone();
         self.saved = rope;
+        self.loaded = true;
         self.cursor = self.cursor.min(max_char);
         self.anchor = None;
         self.carets.clear();
@@ -1076,28 +1105,6 @@ impl Buffer {
         self.bump();
     }
 
-    /// Replace the whole text in one undo step (a formatter's output),
-    /// keeping the caret on its line and column where they still exist.
-    /// Returns whether anything changed.
-    pub fn replace_all(&mut self, text: &str) -> bool {
-        if self.rope == text {
-            return false;
-        }
-        let (row, col) = (self.cursor_row(), self.cursor_col());
-        self.last_kind = None; // its own step, never merged with typing
-        self.checkpoint(EditKind::Insert);
-        self.rope = Rope::from_str(text);
-        self.anchor = None;
-        self.carets.clear();
-        let row = row.min(self.rope.len_lines().saturating_sub(1));
-        self.cursor = self.rope.line_to_char(row) + col.min(self.line_len_chars(row));
-        self.goal_col = self.cursor_col();
-        self.last_kind = None;
-        self.last_edit_cursor = None;
-        self.bump();
-        true
-    }
-
     pub fn newline(&mut self) {
         self.insert_char('\n');
     }
@@ -1671,25 +1678,8 @@ mod tests {
             last_kind: None,
             last_edit_cursor: None,
             indent_unit_cache: std::cell::Cell::new(None),
+            loaded: true,
         }
-    }
-
-    #[test]
-    fn replace_all_is_one_undo_step_and_keeps_the_caret() {
-        let mut b = with("fn  a(){\n  let x=1;\n}\n", 1, 7);
-        b.insert_char('y'); // typing before formatting stays its own step
-        assert!(b.replace_all("fn a() {\n    let xy = 1;\n}\n"));
-        assert_eq!((b.cursor_row(), b.cursor_col()), (1, 8));
-        assert!(b.modified);
-        assert!(!b.replace_all("fn a() {\n    let xy = 1;\n}\n"), "no change, no step");
-        b.undo();
-        assert_eq!(b.rope.to_string(), "fn  a(){\n  let xy=1;\n}\n");
-        b.undo();
-        assert_eq!(b.rope.to_string(), "fn  a(){\n  let x=1;\n}\n");
-        // A caret past the new end is pulled back inside.
-        let mut b = with("a\nbbbbbb\nc\n", 1, 5);
-        b.replace_all("a\nb\n");
-        assert_eq!((b.cursor_row(), b.cursor_col()), (1, 1));
     }
 
     fn with(text: &str, line: usize, col: usize) -> Buffer {

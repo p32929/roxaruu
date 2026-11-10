@@ -4,7 +4,6 @@
 //! they're collected as messages and the defaults stand in. A project's own
 //! `.oxru/settings.json` overrides the global settings, key by key.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -33,11 +32,10 @@ pub struct Settings {
     pub word_wrap: bool,
     /// The file tree beside the editor (⌘B).
     pub sidebar: bool,
-    /// Formatter command per file extension, over the built-in ones (see
-    /// `format.rs`); `""` turns formatting off for that extension.
-    pub formatters: BTreeMap<String, String>,
-    /// Run the formatter on save.
-    pub format_on_save: bool,
+    /// Earlier builds saved remote access here; it's off at every launch
+    /// now. Accepted, so an old file doesn't show an error, and ignored.
+    #[serde(rename = "remoteAccess")]
+    pub old_remote_access: serde::de::IgnoredAny,
 }
 
 /// The offered terminal frame rates (Oxru's).
@@ -56,8 +54,7 @@ impl Default for Settings {
             indent_guides: true,
             word_wrap: false,
             sidebar: true,
-            formatters: BTreeMap::new(),
-            format_on_save: false,
+            old_remote_access: serde::de::IgnoredAny,
         }
     }
 }
@@ -427,12 +424,7 @@ pub(crate) fn settings_template() -> String {
            // \"currentLine\": {},\n  \
            // \"indentGuides\": {},\n  \
            // \"wordWrap\": {},\n  \
-           // \"sidebar\": {},\n\n  \
-           // Format Document (⇧⌥F) runs rustfmt, ruff, biome, taplo, gofmt, clang-format,\n  \
-           // shfmt or prettier by extension. Use your own (stdin in, stdout out; {{file}}\n  \
-           // is the file's path), or \"\" to turn one off:\n  \
-           // \"formatters\": {{ \"rs\": \"rustfmt --edition 2021\", \"md\": \"\" }},\n  \
-           // \"formatOnSave\": {},\n\
+           // \"sidebar\": {},\n\
          }}\n",
         quote(themes.into_iter().map(|t| t.name).collect()),
         d.theme,
@@ -452,7 +444,6 @@ pub(crate) fn settings_template() -> String {
         d.indent_guides,
         d.word_wrap,
         d.sidebar,
-        d.format_on_save,
     )
 }
 

@@ -1,6 +1,7 @@
 //! The file tree beside the editor. ⌘B shows or hides it, ⇧⌘E puts the
 //! keyboard in it (↑↓ move, → ← open and close folders, ↵ opens, esc leaves).
-//! The tree is the project's, the same one Go to File browses.
+//! Its search box is Go to File (⌥F): typing anywhere in the tree lists the
+//! files that match in its place.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -18,10 +19,30 @@ enum Act {
 
 impl App {
     pub(crate) fn sidebar_shown(&self) -> bool {
-        self.project.is_some() && self.config.settings.sidebar
+        let view = self.view();
+        self.project.is_some()
+            && if view.compact {
+                view.drawer
+            } else {
+                self.config.settings.sidebar
+            }
     }
 
     pub fn toggle_sidebar(&mut self, ctx: &egui::Context) {
+        self.sidebar.peek = false; // chosen, not a peek
+        // A compact view's drawer is its own: the saved setting is the
+        // full-size layout's, which a phone must not change.
+        if self.view().compact {
+            if self.sidebar_shown() {
+                self.view_mut().drawer = false;
+                if self.focus == Focus::Sidebar {
+                    self.focus = Focus::Editor;
+                }
+            } else {
+                self.focus_sidebar();
+            }
+            return;
+        }
         let on = !self.config.settings.sidebar;
         if on {
             // Showing the tree is asking to use it: the keyboard goes there.
@@ -45,26 +66,75 @@ impl App {
         }
     }
 
-    /// ⇧⌘E: into the tree, on the active file (showing the sidebar if
-    /// needed); again to go back to the editor.
-    /// Fold every folder in the tree (and Go to File's browser), keeping
-    /// the selection on a row that's still there.
+    /// Fold every folder in the tree, keeping the selection on a row that's
+    /// still there.
     pub fn collapse_folders(&mut self) {
         let Some(p) = &mut self.project else { return };
         p.tree.collapse_all();
         self.sidebar.revealed = self.active_tab().and_then(|t| t.path().cloned());
-        if self.palette.as_ref().is_some_and(|p| p.mode == Mode::Files) {
-            self.refresh_items();
-        }
     }
 
-    pub fn focus_sidebar(&mut self) {
-        if self.focus == Focus::Sidebar && self.config.settings.sidebar {
+    /// Go to File: into the tree's search box, showing the tree if needed;
+    /// again to go back to the editor.
+    pub fn search_files(&mut self) {
+        let shown = self.sidebar_shown();
+        let in_tree = self.focus == Focus::Sidebar && shown;
+        if in_tree && self.sidebar.searching {
             self.focus = Focus::Editor;
             return;
         }
-        self.config.settings.sidebar = true;
+        self.sidebar.query.clear();
+        if !in_tree {
+            self.focus_sidebar();
+        }
+        self.sidebar.searching = true;
+        self.sidebar.from_tree = in_tree;
+        self.sidebar.peek |= !shown && self.sidebar_shown();
+    }
+
+    /// Esc in the search box: back to the rows if the search began there,
+    /// else to the editor.
+    fn leave_search(&mut self) {
+        self.sidebar.query.clear();
+        self.sidebar.searching = false;
+        if !self.sidebar.from_tree {
+            self.focus = Focus::Editor;
+        }
+    }
+
+    /// A tree shown only for a search goes away when the keyboard leaves it.
+    pub(super) fn end_peek(&mut self) {
+        if !self.sidebar.peek
+            || self.focus == Focus::Sidebar
+            || self.palette.is_some()
+            || self.modal_open()
+        {
+            return;
+        }
+        self.sidebar.peek = false;
+        self.sidebar.query.clear();
+        self.sidebar.searching = false;
+        if self.view().compact {
+            self.view_mut().drawer = false;
+        } else {
+            self.config.settings.sidebar = false;
+        }
+    }
+
+    /// ⇧⌘E: into the tree, on the active file (showing the sidebar if
+    /// needed); again to go back to the editor.
+    pub fn focus_sidebar(&mut self) {
+        if self.focus == Focus::Sidebar && self.sidebar_shown() {
+            self.focus = Focus::Editor;
+            return;
+        }
+        if self.view().compact {
+            self.view_mut().drawer = true;
+        } else {
+            self.config.settings.sidebar = true;
+        }
         self.focus = Focus::Sidebar;
+        self.sidebar.searching = false; // walking the rows; typing searches
         self.sidebar.revealed = None; // reveal the active file again
         if self.sidebar.selected.is_none() {
             self.sidebar.selected = self
@@ -105,11 +175,65 @@ impl App {
         }
     }
 
+    /// Redo the matches when the query or the file list changed.
+    fn update_hits(&mut self) {
+        let Some(p) = &self.project else { return };
+        let key = (self.sidebar.query.clone(), p.files.len());
+        if self.sidebar.hits_for.as_ref() == Some(&key) {
+            return;
+        }
+        let Some(m) = &p.matcher else {
+            self.sidebar.hits.clear(); // still indexing: try again next frame
+            return;
+        };
+        let recent = |i: usize| self.mru.iter().position(|r| *r == p.root.join(&p.files[i].0));
+        self.sidebar.hits = if key.0.trim().is_empty() {
+            Vec::new()
+        } else {
+            m.rank(&key.0, recent).into_iter().take(crate::app::MAX_RESULTS).collect()
+        };
+        self.sidebar.hit = 0;
+        self.sidebar.scroll = true;
+        self.sidebar.hits_for = Some(key);
+    }
+
+    /// The chosen match's path.
+    pub(crate) fn hit_path(&self, n: usize) -> Option<PathBuf> {
+        let p = self.project.as_ref()?;
+        Some(p.root.join(&p.files.get(*self.sidebar.hits.get(n)?)?.0))
+    }
+
     fn sidebar_keys(&mut self, ctx: &egui::Context) -> Option<Act> {
         if self.focus != Focus::Sidebar || self.palette.is_some() || self.modal_open() {
             return None;
         }
         let pressed = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
+        // Searching: the arrows choose a match; everything else types.
+        // Nothing typed yet, ↓ goes down into the rows.
+        if self.sidebar.searching && self.sidebar.query.is_empty() {
+            if pressed(Key::ArrowDown) {
+                self.sidebar.searching = false;
+                self.sidebar.scroll = true;
+            } else if pressed(Key::Escape) {
+                self.leave_search();
+            }
+            return None;
+        }
+        if !self.sidebar.query.is_empty() {
+            let n = self.sidebar.hits.len();
+            if pressed(Key::ArrowDown) {
+                self.sidebar.hit = (self.sidebar.hit + 1).min(n.saturating_sub(1));
+                self.sidebar.scroll = true;
+            } else if pressed(Key::ArrowUp) {
+                self.sidebar.hit = self.sidebar.hit.saturating_sub(1);
+                self.sidebar.scroll = true;
+            } else if pressed(Key::Enter) {
+                return self.hit_path(self.sidebar.hit).map(|p| Act::Open(p, true));
+            } else if pressed(Key::Escape) {
+                self.leave_search();
+            }
+            return None;
+        }
         let p = self.project.as_ref()?;
         let n = p.tree.entries.len();
         if n == 0 {
@@ -140,6 +264,8 @@ impl App {
                 _ => {}
             }
         } else if let Some(enter) = [Key::Enter, Key::Space].into_iter().find(|k| pressed(*k)) {
+            // Space here isn't the start of a search.
+            ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t == " ")));
             // ↵ opens and goes to the file; space opens it and stays here.
             match (at, entry) {
                 (Some(i), Some(e)) if e.is_dir => act = Some(Act::Toggle(i)),
@@ -148,6 +274,10 @@ impl App {
             }
         } else if pressed(Key::Escape) {
             self.focus = Focus::Editor;
+        } else if ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Paste(_)))) {
+            // Typing in the rows searches (the box has the keys all along).
+            self.sidebar.searching = true;
+            self.sidebar.from_tree = true;
         }
         if let Some(i) = go {
             self.select_row(i);
@@ -226,7 +356,10 @@ impl App {
                         act = Some(a);
                     }
                 }
-                let room = (ui.available_width() - 6.0 * s).max(0.0);
+                // The key that brings the keyboard here, after the name.
+                let go: Vec<Hint> = self.go_hint(Focus::Sidebar).map(|(caps, _)| (caps, "")).into_iter().collect();
+                let go_w = pt.key_hints(ui, None, &go, 10.5, Pos2::ZERO);
+                let room = (ui.available_width() - 6.0 * s - go_w - 8.0 * s).max(0.0);
                 let mut job = LayoutJob::simple_singleline(
                     project.name.to_uppercase(),
                     pt.font(11.5, Weight::SemiBold),
@@ -242,6 +375,8 @@ impl App {
                 let at = pos2(head.left() + 16.0 * s, head.center().y - g.size().y / 2.0);
                 let name = Rect::from_min_size(at, g.size());
                 ui.painter().galley(at, g, c.text_muted);
+                let p = ui.painter().clone();
+                pt.key_hints(ui, Some(&p), &go, 10.5, pos2(name.right() + 8.0 * s, head.center().y));
                 if let Some(tip) = tip {
                     ui.interact(name, egui::Id::unique("sidebar-folder"), Sense::hover())
                         .on_hover_text(tip);
@@ -249,8 +384,74 @@ impl App {
             },
         );
 
+        // The search box: Go to File. It has the keys whenever the tree
+        // does, so typing in the rows searches; it looks it (lit, a caret)
+        // only while searching.
+        let typing = focused && self.sidebar.searching;
+        let go_to = caps(Command::GoToFile);
+        let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0 * s), Sense::hover());
+        let field = bar.shrink2(vec2(10.0 * s, 3.0 * s));
+        ui.painter().rect(
+            field,
+            7.0 * s,
+            c.hover.gamma_multiply(if typing { 1.0 } else { 0.6 }),
+            Stroke::new(1.0, if typing { c.accent.gamma_multiply(0.7) } else { c.border }),
+            StrokeKind::Inside,
+        );
+        ui.painter().text(
+            pos2(field.left() + 12.0 * s, field.center().y),
+            Align2::CENTER_CENTER,
+            icon::SEARCH,
+            pt.font(12.5, Weight::Regular),
+            c.text_subtle,
+        );
+        let hint = egui::RichText::new(format!("Search files{go_to}"))
+            .color(c.text_subtle)
+            .font(pt.font(12.5, Weight::Regular));
+        let had = !self.sidebar.query.is_empty();
+        let edit = egui::TextEdit::singleline(&mut self.sidebar.query)
+            .id(egui::Id::unique("sidebar-search"))
+            .frame(egui::Frame::NONE)
+            .font(pt.font(13.0, Weight::Regular))
+            .text_color(c.text)
+            .hint_text(hint)
+            .align(Align2::LEFT_CENTER)
+            .desired_width(field.width() - 30.0 * s);
+        let caret = ui.visuals().text_cursor.clone();
+        if !typing {
+            ui.visuals_mut().text_cursor.stroke.color = Color32::TRANSPARENT;
+        }
+        let resp = ui.put(field.with_min_x(field.left() + 24.0 * s), edit);
+        ui.visuals_mut().text_cursor = caret;
+        if resp.clicked() {
+            self.sidebar.searching = true;
+            self.sidebar.from_tree = false;
+        }
+        if focused {
+            resp.request_focus();
+        } else if resp.has_focus() {
+            resp.surrender_focus();
+        }
+        if resp.clicked() || resp.gained_focus() {
+            self.focus = Focus::Sidebar;
+        }
+        // Typed in the rows and erased again: back to walking them.
+        if had && self.sidebar.query.is_empty() && self.sidebar.from_tree {
+            self.sidebar.searching = false;
+        }
+        self.sidebar.searching |= !self.sidebar.query.is_empty();
+        self.update_hits(); // for what was just typed
+        let Some(project) = &self.project else { return };
+
         // The rows.
-        let row_h = 26.0 * s;
+        // Rows a finger can hit, in the drawer of a touch-sized view.
+        let row_h = if self.view().compact { 34.0 } else { 26.0 } * s;
+        if !self.sidebar.query.is_empty() {
+            if let Some(a) = self.hit_rows(ui, row_h, focused) {
+                act = Some(a);
+            }
+            return self.sidebar_act(act, None, &ctx);
+        }
         let entries = &project.tree.entries;
         let selected = self.sidebar.selected.as_deref();
         let active = self
@@ -288,7 +489,7 @@ impl App {
                 let is_sel = selected == Some(e.path.as_path());
                 let is_active = active == Some(e.path.as_path());
                 let bg = r.shrink2(vec2(6.0 * s, 1.0 * s));
-                if is_sel && focused {
+                if is_sel && focused && !self.sidebar.searching {
                     p.rect(
                         bg,
                         6.0 * s,
@@ -426,12 +627,20 @@ impl App {
         self.sidebar.view = out.inner_rect.height();
         self.sidebar.scroll = false;
 
+        self.sidebar_act(act, select_click, &ctx);
+    }
+
+    /// Do what a click or key in the sidebar asked for.
+    fn sidebar_act(&mut self, act: Option<Act>, select_click: Option<PathBuf>, ctx: &egui::Context) {
         if let Some(path) = select_click {
             self.sidebar.selected = (!path.as_os_str().is_empty()).then_some(path);
             self.focus = Focus::Sidebar;
+            self.sidebar.searching = false;
         }
         match act {
             Some(Act::Open(path, edit)) => {
+                self.sidebar.query.clear();
+                self.sidebar.searching = false;
                 self.open_file(&path);
                 if edit {
                     self.focus = Focus::Editor;
@@ -443,10 +652,111 @@ impl App {
                 }
                 self.select_row(i);
             }
-            Some(Act::Hide) => self.toggle_sidebar(&ctx),
-            Some(Act::Run(cmd)) => self.run(cmd, &ctx),
+            Some(Act::Hide) => self.toggle_sidebar(ctx),
+            Some(Act::Run(cmd)) => self.run(cmd, ctx),
             None => {}
         }
+    }
+
+    /// The matches for the search box, best first, in place of the tree.
+    fn hit_rows(&mut self, ui: &mut egui::Ui, row_h: f32, focused: bool) -> Option<Act> {
+        let pt = self.paint();
+        let (c, s) = (&pt.c, pt.s);
+        let Some(p) = &self.project else { return None };
+        let query = &self.sidebar.query;
+        let mut act = None;
+        let mut clicked = None;
+        let mut area = egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .id_salt("sidebar-hits");
+        if self.sidebar.scroll {
+            let i = self.sidebar.hit;
+            let (top, bottom) = (i as f32 * row_h, (i + 1) as f32 * row_h);
+            let (off, view) = (self.sidebar.offset, self.sidebar.view);
+            if top < off {
+                area = area.vertical_scroll_offset(top);
+            } else if bottom > off + view && view > 0.0 {
+                area = area.vertical_scroll_offset(bottom - view);
+            }
+        }
+        let out = area.show_rows(ui, row_h, self.sidebar.hits.len(), |ui, range| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for n in range {
+                let (rel, ignored) = &p.files[self.sidebar.hits[n]];
+                let (dir, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+                let (r, resp) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
+                let chosen = n == self.sidebar.hit;
+                let bg = r.shrink2(vec2(6.0 * s, 1.0 * s));
+                if chosen && focused {
+                    ui.painter().rect(
+                        bg,
+                        6.0 * s,
+                        c.accent.gamma_multiply(0.16),
+                        Stroke::new(1.0, c.accent.gamma_multiply(0.6)),
+                        StrokeKind::Inside,
+                    );
+                } else if chosen || resp.hovered() {
+                    ui.painter().rect_filled(bg, 6.0 * s, c.hover);
+                }
+                let (glyph, tint) = icon::for_file(name);
+                let tint = tint.map(|t| if *ignored { t.gamma_multiply(0.5) } else { t });
+                let mut label = pt.label(
+                    name,
+                    &crate::palette::label_positions(rel, &crate::fuzzy::positions(query, rel)),
+                    if *ignored { c.text_subtle } else { c.text },
+                );
+                for s in &mut label.sections {
+                    s.format.font_id.size = pt.font(13.0, Weight::Regular).size;
+                }
+                // The chosen match says what ↵ does.
+                let open: Vec<Hint> = if chosen && focused { vec![(vec!["↵".into()], "open")] } else { Vec::new() };
+                pt.row(ui, ui.painter(), bg, 0.0, (glyph, tint), label, dir, &[], &open, -4.0 * s);
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+                if resp.clicked() {
+                    act = self.hit_path(n).map(|p| Act::Open(p, true));
+                }
+                if resp.secondary_clicked() {
+                    clicked = Some(n);
+                }
+                resp.context_menu(|ui| {
+                    if let Some(cmd) = self.sidebar_menu(ui, false) {
+                        act = Some(Act::Run(cmd));
+                    }
+                });
+            }
+        });
+        if self.sidebar.hits.is_empty() {
+            let indexing = p.matcher.is_none();
+            let build = self
+                .config
+                .keymap
+                .combo_for(Command::ToggleBuildFolders)
+                .filter(|_| !p.build)
+                .map(|k| format!("{} to include build folders", k.caps().concat()));
+            let msg = if indexing { "Indexing files…".to_string() } else { "No matches".to_string() };
+            let at = out.inner_rect.center_top() + vec2(0.0, 24.0 * s);
+            ui.painter().text(at, Align2::CENTER_CENTER, msg, pt.font(12.5, Weight::Regular), c.text_subtle);
+            if let Some(build) = build.filter(|_| !indexing) {
+                ui.painter().text(
+                    at + vec2(0.0, 20.0 * s),
+                    Align2::CENTER_CENTER,
+                    build,
+                    pt.font(11.5, Weight::Regular),
+                    c.text_subtle,
+                );
+            }
+        }
+        self.sidebar.offset = out.state.clamped_offset().y;
+        self.sidebar.view = out.inner_rect.height();
+        self.sidebar.scroll = false;
+        if let Some(n) = clicked {
+            self.sidebar.hit = n;
+            self.focus = Focus::Sidebar;
+        }
+        act
     }
 
     /// The right-click menu: file actions on the row, with their keys.

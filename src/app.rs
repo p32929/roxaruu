@@ -16,7 +16,7 @@ use crate::fonts;
 use crate::fstree::{self, FileTree};
 use crate::fuzzy::{self, FileMatcher};
 use crate::keymap::{COMMANDS, Command};
-use crate::palette::{Item, Mode, Palette, Pick, Revert, label_positions};
+use crate::palette::{Item, Mode, Palette, Pick, Revert};
 use crate::terminal::{self, Terminal, Throttle};
 use crate::ui::icon;
 
@@ -51,7 +51,7 @@ struct SearchState {
 }
 
 /// Search results shown at most — more is noise, and costs layout.
-const MAX_RESULTS: usize = 300;
+pub(crate) const MAX_RESULTS: usize = 300;
 
 pub struct Project {
     pub root: PathBuf,
@@ -59,8 +59,8 @@ pub struct Project {
     pub tree: FileTree,
     /// Project-relative paths (with `/`) and their gitignored flag, once the
     /// background walk finishes.
-    files: Vec<(String, bool)>,
-    matcher: Option<FileMatcher>,
+    pub(crate) files: Vec<(String, bool)>,
+    pub(crate) matcher: Option<FileMatcher>,
     indexing: Option<Receiver<Vec<(PathBuf, bool)>>>,
     /// Search includes the build/dependency folders (node_modules, target…).
     pub build: bool,
@@ -93,8 +93,22 @@ pub enum Focus {
     Sidebar,
 }
 
-/// The file tree's own state (the tree itself is the project's, shared with
-/// Go to File).
+/// One view's layout: the window's own, or a browser's copy of it. Derived
+/// from that view's size each frame and never saved, so a phone looking in
+/// never changes how the Mac's window is laid out.
+#[derive(Default, Clone, Copy)]
+pub struct View {
+    /// Too narrow for the tree beside the editor: it becomes a drawer.
+    pub compact: bool,
+    /// The tree's drawer is out (compact views only).
+    pub drawer: bool,
+    /// The editor's and the terminals' tab strips: scroll, drag.
+    pub tabs: crate::ui::tabstrip::Strip,
+    pub terms: crate::ui::tabstrip::Strip,
+}
+
+/// The file tree's own state, and its search box (Go to File). The tree
+/// itself is the project's.
 #[derive(Default)]
 pub struct Sidebar {
     /// The selected row's path (rows move as folders open and close).
@@ -108,6 +122,23 @@ pub struct Sidebar {
     pub view: f32,
     /// When the tree was last re-read from disk.
     pub read_at: Option<Instant>,
+    /// The search box above the tree: typing there (or anywhere in the
+    /// tree) lists matching files in place of the tree.
+    pub query: String,
+    /// The matches (indices into `Project::files`), the chosen one, and
+    /// what they were found for (query, file count) so they're redone
+    /// only when either changes.
+    pub hits: Vec<usize>,
+    pub hit: usize,
+    pub hits_for: Option<(String, usize)>,
+    /// With the keyboard in the tree: in its search box (Go to File, or
+    /// typing), not walking the rows; and whether the search began in the
+    /// rows (esc goes back there, else to the editor).
+    pub searching: bool,
+    pub from_tree: bool,
+    /// Go to File showed a hidden tree just for the search: hide it again
+    /// once the keyboard leaves.
+    pub peek: bool,
 }
 
 /// The answer to "save changes?".
@@ -145,21 +176,38 @@ pub struct App {
     /// The F1 shortcuts sheet is up.
     pub help: bool,
     pub welcome_selected: usize,
-    /// The app icon as a texture, loaded the first time it's drawn.
-    pub(crate) app_icon: Option<egui::TextureHandle>,
+    /// The app icon as a texture, per egui context (this window's, and the
+    /// browser's copy of it), loaded the first time it's drawn.
+    pub(crate) app_icon: Vec<(egui::Context, egui::TextureHandle)>,
+    /// Remote access, as this window shows it.
+    pub remote: crate::remote::Status,
+    /// Turn remote access on (with a password) or off, on the next update.
+    pub(crate) remote_want: Option<crate::remote::Want>,
+    /// Set while drawing the browser's copy of the window (see `remote`).
+    pub(crate) remote_pass: bool,
+    /// Switch Window was run in a browser's copy: its page shows the list.
+    pub(crate) remote_windows: bool,
+    /// Layout per view: `[the window, a browser's copy]` (see `View`).
+    pub(crate) views: [View; 2],
+    /// This window's own egui context: settings always go to it, even when
+    /// a browser's pass is the one that notices they changed.
+    main_ctx: egui::Context,
     pub project: Option<Project>,
     pub tabs: Vec<Tab>,
     pub active: Option<usize>,
     /// Recently closed files, newest last, for Reopen Closed Tab.
     closed: Vec<PathBuf>,
     pub prompt: Option<Prompt>,
+    /// The frame a dialog came up in: it doesn't take that frame's keys,
+    /// which opened it (egui may run a frame twice; both passes count).
+    pub(crate) modal_since: std::cell::Cell<Option<u64>>,
     /// A modified tab whose file changed on disk, awaiting reload-or-keep.
     pub conflict: Option<PathBuf>,
     /// A file dialog (new / rename / delete) or "open this link?".
     pub ask: Option<Ask>,
     last_file_check: Instant,
     /// Set once unsaved work is dealt with, so the window may really close.
-    allow_close: bool,
+    pub(crate) allow_close: bool,
     pub palette: Option<Palette>,
     pub find: Option<Find>,
     search: SearchState,
@@ -184,7 +232,7 @@ pub struct App {
     used: Vec<Command>,
     pub focus: Focus,
     /// Files opened this session, newest first (ranks them first in search).
-    mru: Vec<PathBuf>,
+    pub(crate) mru: Vec<PathBuf>,
     title: String,
     pub fps: Option<f32>,
     frames: u32,
@@ -211,12 +259,19 @@ impl App {
             todos: Vec::new(),
             help: false,
             welcome_selected: 0,
-            app_icon: None,
+            app_icon: Vec::new(),
+            remote: Default::default(),
+            remote_want: None,
+            remote_pass: false,
+            remote_windows: false,
+            views: Default::default(),
+            main_ctx: ctx.clone(),
             project: None,
             tabs: Vec::new(),
             active: None,
             closed: Vec::new(),
             prompt: None,
+            modal_since: std::cell::Cell::new(None),
             conflict: None,
             ask: None,
             last_file_check: Instant::now(),
@@ -264,7 +319,8 @@ impl App {
 
     /// Push the config into egui: fonts (only when they changed — rebuilding
     /// the atlas isn't free) and visuals.
-    pub fn apply(&mut self, ctx: &egui::Context) {
+    pub fn apply(&mut self, _ctx: &egui::Context) {
+        let ctx = &self.main_ctx.clone();
         let s = &self.config.settings;
         let wanted = (s.ui_font.clone(), s.code_font.clone());
         if self.applied_fonts.as_ref() != Some(&wanted) {
@@ -339,7 +395,8 @@ impl App {
     /// Per-frame housekeeping before drawing.
     pub fn tick(&mut self, ctx: &egui::Context) {
         self.expire_toasts();
-        self.frames += 1;
+        // FPS is this window's own: a browser's frames don't count.
+        self.frames += u32::from(!self.remote_pass);
         let elapsed = self.fps_window_start.elapsed();
         if elapsed >= Duration::from_secs(1) {
             self.fps = Some(self.frames as f32 / elapsed.as_secs_f32());
@@ -361,6 +418,9 @@ impl App {
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.request_quit(ctx);
+        }
+        if let Some(i) = self.active {
+            self.load_tab(i);
         }
         if let Some(t) = self.active_tab_mut() {
             t.refresh(Some(ctx));
@@ -449,12 +509,10 @@ impl App {
             _ => None,
         };
         // A command that can't run now leaves its key to the editor. Move to
-        // Trash's key (⌘⌫) works only in Go to File: elsewhere, even in the
-        // command palette's search box, it deletes to the line start.
-        let in_files = self
-            .palette
-            .as_ref()
-            .map_or(self.focus == Focus::Sidebar, |p| p.mode == Mode::Files);
+        // Trash's key (⌘⌫) works only in the file tree (and its search box):
+        // elsewhere, even in the command palette's search box, it deletes to
+        // the line start.
+        let in_files = self.palette.is_none() && self.focus == Focus::Sidebar;
         let command_for = |e: &egui::Event| {
             bound(e).filter(|c| self.available(*c) && (*c != Command::DeleteFile || in_files))
         };
@@ -467,11 +525,18 @@ impl App {
         if !chord {
             return;
         }
-        // Take the chord's events (and any text it typed, like ⌥F's "ƒ") so
-        // nothing downstream acts on them too.
+        // Take the chord's events (and the text it typed, like ⌥F's "ƒ",
+        // which comes right after its key) so nothing downstream acts on
+        // them too. Other typing in the same frame stays: "ab" then ⌘S
+        // landing together (a slow frame, a remote batch) still types "ab".
         ctx.input_mut(|i| {
-            i.events
-                .retain(|e| command_for(e).is_none() && !matches!(e, egui::Event::Text(_)))
+            let mut after_chord = false;
+            i.events.retain(|e| {
+                let keep = command_for(e).is_none()
+                    && !(after_chord && matches!(e, egui::Event::Text(_)));
+                after_chord = bound(e).is_some();
+                keep
+            })
         });
         for command in pressed {
             // The palette's search box handles its own copy/paste.
@@ -500,7 +565,6 @@ impl App {
         // The key that opened a list closes it again.
         let list = match command {
             Command::Palette => Some(Mode::Commands),
-            Command::GoToFile => Some(Mode::Files),
             Command::RecentFolders => Some(Mode::Recent),
             Command::SearchInFiles => Some(Mode::Search),
             Command::GoToLine => Some(Mode::Line),
@@ -518,7 +582,8 @@ impl App {
             Command::Palette => self.open_palette(Mode::Commands, ctx),
             Command::GoToFile => {
                 if self.project.is_some() {
-                    self.open_palette(Mode::Files, ctx)
+                    self.close_palette(false, ctx);
+                    self.search_files()
                 } else {
                     self.notify("Open a folder first")
                 }
@@ -526,9 +591,7 @@ impl App {
             Command::OpenFolder => {
                 // The Finder panel takes over: nothing should be left open behind it.
                 self.close_palette(false, ctx);
-                if let Some(dir) = pick_folder() {
-                    self.open_folder(dir, ctx);
-                }
+                self.open_folders(pick_folders(), ctx);
             }
             Command::RecentFolders => self.open_palette(Mode::Recent, ctx),
             Command::CloseFolder => self.begin_close(self.tab_paths(), After::CloseFolder, ctx),
@@ -560,15 +623,9 @@ impl App {
                     (self.active_terminal as isize + step).rem_euclid(n) as usize;
             }
             Command::MoveTabLeft | Command::MoveTabRight if self.terminal_focused() => {
-                let to = self.active_terminal as isize
-                    + if command == Command::MoveTabRight {
-                        1
-                    } else {
-                        -1
-                    };
-                if to >= 0 && (to as usize) < self.terminals.len() {
-                    self.terminals.swap(self.active_terminal, to as usize);
-                    self.active_terminal = to as usize;
+                let to = self.active_terminal as isize + if command == Command::MoveTabRight { 1 } else { -1 };
+                if to >= 0 {
+                    self.reorder(true, self.active_terminal, to as usize);
                 }
             }
             Command::NextTab => self.cycle_tab(1),
@@ -586,6 +643,19 @@ impl App {
             | Command::Paste
             | Command::SelectAll => self.edit_command(command, ctx),
             Command::Find | Command::Replace => self.open_find(command == Command::Replace),
+            Command::EditWholeFile => {
+                if let Some(t) = self.active_tab_mut() {
+                    let line = t.caret().0;
+                    match t.load(true) {
+                        Ok(()) => {
+                            t.go_to(line, 0..0);
+                            let name = t.buf.name();
+                            self.notify(format!("{name} is open for editing"));
+                        }
+                        Err(e) => self.warn(e),
+                    }
+                }
+            }
             Command::AddNextOccurrence | Command::AddCursorAbove | Command::AddCursorBelow => {
                 if let Some(t) = self.active_tab_mut() {
                     match command {
@@ -644,11 +714,6 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
             }
             Command::MaximizeWindow => toggle_maximized(ctx),
-            Command::FormatDocument => {
-                if let Some(i) = self.active {
-                    self.format_tab(i, true);
-                }
-            }
             Command::ToggleWordWrap => {
                 let wrap = !self.config.settings.word_wrap;
                 self.config.settings.word_wrap = wrap;
@@ -672,6 +737,12 @@ impl App {
             }
             Command::SwitchTerminal => self.open_palette(Mode::Terminals, ctx),
             Command::OpenTerminalLink => self.open_palette(Mode::Links, ctx),
+            Command::ToggleRemoteAccess => self.toggle_remote(ctx),
+            Command::ShowRemoteAddress => {
+                self.close_palette(true, ctx);
+                self.ask = Some(Ask::RemoteAddress);
+            }
+            Command::SwitchWindow => self.remote_windows = true,
             Command::JumpTerminal(n) => {
                 let i = n as usize - 1;
                 if i < self.terminals.len() {
@@ -728,24 +799,24 @@ impl App {
                 (self.palette.is_some() || self.focus == Focus::Sidebar)
                     && self.file_target().is_some()
             }
+            Command::CloseTab | Command::CloseAllTabs | Command::Copy => {
+                self.active.is_some() || self.terminal_focused()
+            }
             Command::Save
-            | Command::CloseTab
-            | Command::CloseAllTabs
             | Command::Undo
             | Command::Redo
-            | Command::Copy
             | Command::Cut
             | Command::Paste
-            | Command::SelectAll => self.active.is_some() || self.terminal_focused(),
-            Command::Find
-            | Command::FormatDocument
-            | Command::Replace
+            | Command::SelectAll => self.editable() || self.terminal_focused(),
+            Command::Find => self.active.is_some(),
+            Command::Replace
             | Command::AddNextOccurrence
             | Command::AddCursorAbove
-            | Command::AddCursorBelow => self.active.is_some(),
+            | Command::AddCursorBelow => self.editable(),
+            Command::EditWholeFile => !self.editable() && self.active.is_some(),
             // Line edits are the editor's: in a terminal ⌥↑ and ⌘↵ stay the shell's.
-            Command::GoToLine
-            | Command::ToggleComment
+            Command::GoToLine => self.active.is_some() && self.focus == Focus::Editor,
+            Command::ToggleComment
             | Command::MoveLineUp
             | Command::MoveLineDown
             | Command::DuplicateLineUp
@@ -754,7 +825,7 @@ impl App {
             | Command::InsertLineBelow
             | Command::InsertLineAbove
             | Command::IndentLines
-            | Command::OutdentLines => self.active.is_some() && self.focus == Focus::Editor,
+            | Command::OutdentLines => self.editable() && self.focus == Focus::Editor,
             Command::GoToTab(n) => {
                 n == 9 && !self.tabs.is_empty() || (n as usize) <= self.tabs.len()
             }
@@ -766,15 +837,9 @@ impl App {
             Command::ToggleSplit => self.tabs.len() > 1,
             Command::SaveAll => self.tabs.iter().any(|t| t.buf.modified),
             Command::CloseSavedTabs => self.tabs.iter().any(|t| !t.buf.modified),
-            // ⌘← is the tree's only where a tree has the keyboard; in the
-            // editor it stays "line start".
-            Command::CollapseFolders => {
-                self.project.is_some()
-                    && match &self.palette {
-                        Some(p) => p.mode == Mode::Files && p.query.is_empty(),
-                        None => self.focus == Focus::Sidebar && self.sidebar_shown(),
-                    }
-            }
+            // Its key shows on the tree's header whatever has the keyboard,
+            // so it works from anywhere (its key clashes with no editor key).
+            Command::CollapseFolders => self.project.is_some(),
             Command::NextTab
             | Command::PrevTab
             | Command::MoveTabLeft
@@ -791,6 +856,8 @@ impl App {
             Command::OpenTerminalLink => self.terminal_open && self.terminal().is_some(),
             Command::JumpTerminal(n) => (n as usize) <= self.terminals.len(),
             Command::ReopenTab => !self.closed.is_empty(),
+            // The page's window list: nothing to switch to on the Mac.
+            Command::SwitchWindow => self.remote_pass,
             _ => true,
         }
     }
@@ -841,14 +908,28 @@ impl App {
         let root = self.project.as_ref().map(|p| p.root.clone());
         if let Some(root) = root {
             let (files, active) = crate::session::load(&root);
-            for f in &files {
-                if let Ok(tab) = Tab::open(f) {
-                    self.tabs.push(tab);
-                }
-            }
+            // Each is read when it's first shown, not now: fifty restored
+            // tabs cost what the one in front does.
+            self.tabs.extend(files.iter().map(|f| Tab::lazy(f)));
             if !self.tabs.is_empty() {
                 self.active = Some(active.min(self.tabs.len() - 1));
             }
+        }
+    }
+
+    /// Several folders at once (ticked in Recent Folders, or picked together
+    /// in Finder): the first here if this window has none, each of the
+    /// others in its own window. One toast for them all.
+    pub fn open_folders(&mut self, dirs: Vec<PathBuf>, ctx: &egui::Context) {
+        let n = dirs.len();
+        let before: Vec<String> = self.toasts.iter().map(|t| t.msg.clone()).collect();
+        for dir in dirs {
+            self.open_folder(dir, ctx);
+        }
+        if n > 1 {
+            // What went wrong still shows.
+            self.toasts.retain(|t| t.error || before.contains(&t.msg));
+            self.notify(format!("Opened {n} folders, each in its own window"));
         }
     }
 
@@ -877,13 +958,7 @@ impl App {
             .collect();
         let names: Vec<String> = p.files.iter().map(|(f, _)| f.clone()).collect();
         p.matcher = Some(FileMatcher::new(&names));
-        if self
-            .palette
-            .as_ref()
-            .is_some_and(|pal| pal.mode == Mode::Files)
-        {
-            self.refresh_items();
-        }
+        self.sidebar.hits_for = None; // search the new list
     }
 
     /// Open `path` in a tab, or switch to it if it's already open.
@@ -910,6 +985,21 @@ impl App {
         }
     }
 
+    /// Read tab `i`'s file if it isn't yet: it's being shown.
+    pub(crate) fn load_tab(&mut self, i: usize) {
+        let Some(tab) = self.tabs.get_mut(i) else { return };
+        if let Err(e) = tab.ensure_loaded()
+            && !tab.gone
+        {
+            self.warn(e);
+        }
+    }
+
+    /// Whether the active tab's text can be edited (a huge file's can't).
+    pub(crate) fn editable(&self) -> bool {
+        self.active_tab().is_some_and(|t| t.huge.is_none())
+    }
+
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active?)
     }
@@ -931,6 +1021,29 @@ impl App {
         self.tabs.iter().filter_map(|t| t.path().cloned()).collect()
     }
 
+    /// Remote access on or off, from any window. Turning it on always asks
+    /// for a password (kept in memory only, until it's turned off); off stops
+    /// the server wherever it runs.
+    pub fn toggle_remote(&mut self, ctx: &egui::Context) {
+        self.close_palette(true, ctx);
+        if self.remote.on {
+            self.remote_want = Some(crate::remote::Want::Off);
+            self.notify("Remote access off");
+        } else {
+            self.ask = Some(Ask::RemotePassword { password: String::new() });
+        }
+    }
+
+    /// Serve remote access with `password`; then show where to open it.
+    pub fn start_remote(&mut self, password: &str) -> Result<(), String> {
+        if password.is_empty() {
+            return Err("The password can't be empty".into());
+        }
+        self.remote_want = Some(crate::remote::Want::On(password.to_string()));
+        self.ask = Some(Ask::RemoteAddress);
+        Ok(())
+    }
+
     /// Text size: one step bigger / smaller (`Some(±1)`), or back to the
     /// defaults (`None`). UI and code text move together, saved like any
     /// setting so every window follows.
@@ -948,35 +1061,6 @@ impl App {
         self.notify(format!("Text size {ui} · code {code}"));
     }
 
-    /// Format tab `i` with its language's formatter (`format.rs`); its
-    /// failures are shown, never applied. `asked`: also say when there's
-    /// nothing to format with, or nothing changed.
-    fn format_tab(&mut self, i: usize, asked: bool) {
-        let Some(tab) = self.tabs.get(i) else { return };
-        let Some(path) = tab.path().cloned() else {
-            return;
-        };
-        let Some(cmd) = crate::format::command_for(&self.config.settings.formatters, &path) else {
-            if asked {
-                self.notify(format!(
-                    "No formatter for {} — add one under \"formatters\" in settings",
-                    tab.buf.name()
-                ));
-            }
-            return;
-        };
-        let text = tab.buf.rope.to_string();
-        match crate::format::run(&cmd, &path, &text) {
-            Ok(out) => {
-                let changed = self.tabs[i].buf.replace_all(&out);
-                if asked {
-                    self.notify(if changed { "Formatted" } else { "Already formatted" });
-                }
-            }
-            Err(e) => self.warn(e),
-        }
-    }
-
     pub fn save_session(&self) {
         if let Some(p) = &self.project {
             crate::session::save(&p.root, &self.tab_paths(), self.active.unwrap_or(0));
@@ -989,9 +1073,6 @@ impl App {
     }
 
     fn save_tab(&mut self, i: usize) -> bool {
-        if self.config.settings.format_on_save {
-            self.format_tab(i, false);
-        }
         let Some(tab) = self.tabs.get_mut(i) else {
             return false;
         };
@@ -1042,9 +1123,25 @@ impl App {
     fn move_tab(&mut self, delta: isize) {
         let Some(a) = self.active else { return };
         let to = a as isize + delta;
-        if to >= 0 && (to as usize) < self.tabs.len() {
-            self.tabs.swap(a, to as usize);
-            self.active = Some(to as usize);
+        if to >= 0 {
+            self.reorder(false, a, to as usize);
+        }
+    }
+
+    /// Move editor tab (or terminal) `from` to `to`, the active one going
+    /// with it: ⇧⌘, / ⇧⌘. or a drag.
+    pub fn reorder(&mut self, terminal: bool, from: usize, to: usize) {
+        use crate::ui::tabstrip::moved_index;
+        if terminal {
+            if from < self.terminals.len() && to < self.terminals.len() {
+                let t = self.terminals.remove(from);
+                self.terminals.insert(to, t);
+                self.active_terminal = moved_index(self.active_terminal, from, to);
+            }
+        } else if from < self.tabs.len() && to < self.tabs.len() {
+            let t = self.tabs.remove(from);
+            self.tabs.insert(to, t);
+            self.active = self.active.map(|a| moved_index(a, from, to));
             self.save_session();
         }
     }
@@ -1102,6 +1199,14 @@ impl App {
         let mut f = Find::open(&self.tabs[i].buf, i, replace, previous);
         f.jump_from_origin(&mut self.tabs[i].buf);
         self.tabs[i].reveal = true;
+        if let Some(h) = &mut self.tabs[i].huge {
+            // Read-only: find, no replace; it searches the file on disk.
+            f.replace_open = false;
+            f.in_replace = false;
+            if !f.query.is_empty() {
+                let _ = h.find(&f.query, f.case, None);
+            }
+        }
         self.find = Some(f);
         self.focus = Focus::Find;
     }
@@ -1114,6 +1219,15 @@ impl App {
     }
 
     /// Whether a dialog (save changes? / changed on disk?) owns the keyboard.
+    /// The layout of the view being drawn (or the window's, between frames).
+    pub(crate) fn view(&self) -> View {
+        self.views[usize::from(self.remote_pass)]
+    }
+
+    pub(crate) fn view_mut(&mut self) -> &mut View {
+        &mut self.views[usize::from(self.remote_pass)]
+    }
+
     pub fn modal_open(&self) -> bool {
         self.prompt.is_some() || self.conflict.is_some() || self.ask.is_some() || self.help
     }
@@ -1234,15 +1348,16 @@ impl App {
         let Some(t) = self.active_tab() else {
             return Vec::new();
         };
-        let n = t.buf.line_count();
+        let n = t.line_count();
         let (l, c) = query.trim().split_once(':').unwrap_or((query.trim(), ""));
         let Ok(line) = l.trim().parse::<usize>() else {
-            let row = t.buf.cursor_row() + 1;
+            let (row, col) = t.caret();
+            let row = row + 1;
             return vec![
                 Item::new(
                     icon::GO_TO_LINE,
                     format!("Type a line number, 1 to {n}"),
-                    Pick::Line(row - 1, t.buf.cursor_col()),
+                    Pick::Line(row - 1, col),
                 )
                 .detail(format!("now on line {row}")),
             ];
@@ -1250,10 +1365,7 @@ impl App {
         let line = line.clamp(1, n.max(1));
         let col = c.trim().parse::<usize>().unwrap_or(1).max(1);
         let text: String = t
-            .buf
-            .rope
-            .line(line - 1)
-            .to_string()
+            .line_text(line - 1)
             .trim()
             .chars()
             .take(80)
@@ -1269,13 +1381,7 @@ impl App {
     /// Put the caret at `line`, `col` (from 0) and show it.
     fn go_to(&mut self, line: usize, col: usize) {
         if let Some(t) = self.active_tab_mut() {
-            let b = &mut t.buf;
-            let line = line.min(b.line_count().saturating_sub(1));
-            let at = b.rope.line_to_char(line) + col.min(b.line_len_chars(line));
-            b.clear_extra_carets();
-            b.select_range(at, at);
-            b.clear_selection();
-            t.reveal = true;
+            t.go_to(line, col..col);
         }
         self.focus = Focus::Editor;
     }
@@ -1291,7 +1397,7 @@ impl App {
         }
     }
 
-    /// Notice files changed by something else (a `git checkout`, a formatter,
+    /// Notice files changed by something else (a `git checkout`, a code generator,
     /// vim in a terminal): a clean tab just reloads. One with unsaved edits,
     /// or whose file was deleted, gets a question — when that tab is in front
     /// and the editor has the keyboard, never by jumping to it. A deleted
@@ -1317,6 +1423,18 @@ impl App {
         for i in 0..self.tabs.len() {
             let tab = &mut self.tabs[i];
             let name = tab.buf.name();
+            if !tab.is_loaded() {
+                // Not read yet: whether it's still there is all that matters.
+                let there = tab.path().is_some_and(|p| p.exists());
+                if tab.gone == there {
+                    tab.gone = !there;
+                    tab.disk_news = (!there).then_some(DiskStatus::Deleted);
+                    if !there {
+                        self.warn(format!("{name} was deleted on disk"));
+                    }
+                }
+                continue;
+            }
             if tab.gone {
                 // Back again (git checkout, put back from the Trash)?
                 if tab.path().is_some_and(|p| p.exists()) {
@@ -1338,7 +1456,8 @@ impl App {
                 DiskStatus::Unchanged => {}
                 DiskStatus::Deleted => {
                     tab.gone = true;
-                    tab.buf.modified = true;
+                    // Its text is ours to save back (a huge file's isn't held).
+                    tab.buf.modified = tab.buf.is_loaded();
                     tab.buf.forget_disk(); // report once
                     tab.disk_news = Some(DiskStatus::Deleted);
                     self.warn(format!("{name} was deleted on disk"));
@@ -1557,8 +1676,48 @@ impl App {
     }
 
     /// Quit, asking about unsaved work first.
+    /// ⌘Q or the close button: always asked first, since closing ends
+    /// whatever runs in the terminals (and remote access, if it runs here).
     fn request_quit(&mut self, ctx: &egui::Context) {
-        self.begin_close(self.tab_paths(), After::Quit, ctx);
+        if self.prompt.is_some() {
+            return; // already on its way, asking about unsaved files
+        }
+        self.close_palette(true, ctx);
+        self.ask = Some(Ask::Quit);
+    }
+
+    /// What closing this window would stop, one line each, for its dialog.
+    pub(crate) fn quit_losses(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        let running: Vec<String> =
+            self.terminals.iter().filter(|t| t.pane.is_running()).map(|t| t.pane.display_name()).collect();
+        let idle = self.terminals.len() - running.len();
+        match running.len() {
+            0 => {}
+            1 => v.push(format!("A terminal is still running ({}): it will be stopped.", running[0])),
+            n => v.push(format!("{n} terminals are still running ({}): they will be stopped.", running.join(", "))),
+        }
+        match idle {
+            0 => {}
+            1 if running.is_empty() => v.push("Its terminal closes.".into()),
+            n if running.is_empty() => v.push(format!("Its {n} terminals close.")),
+            _ => {}
+        }
+        match self.tabs.iter().filter(|t| t.buf.modified).count() {
+            0 => {}
+            1 => v.push("A file has unsaved changes: you'll be asked whether to save it.".into()),
+            n => v.push(format!("{n} files have unsaved changes: you'll be asked about each.")),
+        }
+        if self.remote.here {
+            v.push("Remote access turns off, for every window (it runs from this one).".into());
+        } else {
+            match self.remote.clients {
+                0 => {}
+                1 => v.push("A browser looking at it disconnects.".into()),
+                n => v.push(format!("{n} browsers looking at it disconnect.")),
+            }
+        }
+        v
     }
 
     /// Close the tabs for `paths`, asking about each modified one, then do
@@ -1700,7 +1859,7 @@ impl App {
     pub fn open_palette(&mut self, mode: Mode, ctx: &egui::Context) {
         self.close_palette(false, ctx);
         let mut p = Palette::new(mode);
-        p.opened = ctx.cumulative_pass_nr();
+        p.opened = ctx.cumulative_frame_nr();
         p.revert = match mode {
             Mode::Themes => Some(Revert::Theme(self.config.theme.clone())),
             Mode::UiFonts | Mode::CodeFonts => Some(Revert::Settings(self.config.settings.clone())),
@@ -1768,7 +1927,6 @@ impl App {
                 }
                 self.search_items(&query)
             }
-            Mode::Files => self.file_items(&query),
             Mode::Todos => self.todo_items(),
             Mode::Clipboard => self.clip_items(&query),
             Mode::Settings => self.setting_items(&query),
@@ -1803,9 +1961,7 @@ impl App {
                         .map(|k| k.caps())
                         .unwrap_or_default(),
                     matched: fuzzy::positions(query, c.title),
-                    depth: 0,
                     dim: false,
-                    expanded: None,
                     tint: None,
                     pick: Pick::Command(c.command),
                 };
@@ -1913,9 +2069,7 @@ impl App {
                     detail: format!("{}:{}", rel_path(&root, path), m.line + 1),
                     caps: Vec::new(),
                     matched,
-                    depth: 0,
                     dim: false,
-                    expanded: None,
                     tint: None,
                     pick: Pick::Hit(path.to_path_buf(), m.line, m.col, m.end_col),
                 }
@@ -1993,9 +2147,7 @@ impl App {
                 } else {
                     Vec::new()
                 },
-                depth: 0,
                 dim: false,
-                expanded: None,
                 tint: None,
                 pick: Pick::Terminal(i),
             })
@@ -2029,9 +2181,7 @@ impl App {
                     label: name,
                     detail,
                     caps: Vec::new(),
-                    depth: 0,
                     dim: elsewhere,
-                    expanded: None,
                     tint: None,
                     pick: Pick::Folder(dir),
                 })
@@ -2040,7 +2190,7 @@ impl App {
             .chain(std::iter::once(Item {
                 icon: icon::FOLDER_OPEN,
                 label: "Open Another Folder…".into(),
-                detail: "choose it in Finder".into(),
+                detail: "choose one or several in Finder (⌘-click)".into(),
                 caps: self
                     .config
                     .keymap
@@ -2048,75 +2198,10 @@ impl App {
                     .map(|k| k.caps())
                     .unwrap_or_default(),
                 matched: Vec::new(),
-                depth: 0,
                 dim: false,
-                expanded: None,
                 tint: None,
                 pick: Pick::Command(Command::OpenFolder),
             }))
-            .collect()
-    }
-
-    fn file_items(&self, query: &str) -> Vec<Item> {
-        let Some(p) = &self.project else {
-            return Vec::new();
-        };
-        if query.trim().is_empty() {
-            // Browse: the tree.
-            return p
-                .tree
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(i, e)| {
-                    let (icon, tint) = if e.is_dir {
-                        (icon::FOLDER, None)
-                    } else {
-                        icon::for_file(&e.name)
-                    };
-                    Item {
-                        icon,
-                        label: e.name.clone(),
-                        detail: String::new(),
-                        caps: Vec::new(),
-                        matched: Vec::new(),
-                        depth: e.depth,
-                        dim: e.ignored,
-                        expanded: e.is_dir.then_some(e.expanded),
-                        tint,
-                        pick: Pick::Tree(i),
-                    }
-                })
-                .collect();
-        }
-        let Some(m) = &p.matcher else {
-            return Vec::new();
-        };
-        let recent = |i: usize| {
-            self.mru
-                .iter()
-                .position(|r| *r == p.root.join(&p.files[i].0))
-        };
-        m.rank(query, recent)
-            .into_iter()
-            .take(MAX_RESULTS)
-            .map(|i| {
-                let (rel, ignored) = &p.files[i];
-                let (dir, name) = rel.rsplit_once('/').unwrap_or(("", rel));
-                let (icon, tint) = icon::for_file(name);
-                Item {
-                    icon,
-                    tint,
-                    label: name.to_string(),
-                    detail: dir.to_string(),
-                    caps: Vec::new(),
-                    matched: label_positions(rel, &fuzzy::positions(query, rel)),
-                    depth: 0,
-                    dim: *ignored,
-                    expanded: None,
-                    pick: Pick::File(p.root.join(rel)),
-                }
-            })
             .collect()
     }
 
@@ -2174,35 +2259,14 @@ impl App {
                     p.capture = Some(c);
                 }
             }
-            Pick::Tree(i) => {
-                let entry = self
-                    .project
-                    .as_ref()
-                    .and_then(|p| p.tree.entries.get(i).cloned());
-                match entry {
-                    Some(e) if e.is_dir => self.palette_tree(i, None),
-                    Some(e) => {
-                        self.close_palette(true, ctx);
-                        self.open_file(&e.path);
-                    }
-                    None => {}
-                }
-            }
-            Pick::File(path) => {
-                self.close_palette(true, ctx);
-                self.open_file(&path);
-            }
             Pick::Hit(path, line, col, end) => {
                 self.close_palette(true, ctx);
                 self.open_file(&path);
+                if let Some(i) = self.active {
+                    self.load_tab(i);
+                }
                 if let Some(t) = self.active_tab_mut() {
-                    let at = t
-                        .buf
-                        .rope
-                        .line_to_char(line.min(t.buf.line_count().saturating_sub(1)));
-                    t.buf.clear_extra_carets();
-                    t.buf.select_range(at + col, at + end);
-                    t.reveal = true;
+                    t.go_to(line, col..end);
                 }
                 self.focus = Focus::Editor;
             }
@@ -2213,9 +2277,7 @@ impl App {
             Pick::Url(url) => {
                 self.close_palette(true, ctx);
                 // Chosen by name from the list: no "open this link?" step.
-                if !files::os_open(&[url.as_ref()]) {
-                    self.warn("Couldn't open your browser");
-                }
+                self.open_url(url, ctx);
             }
             Pick::Terminal(i) => {
                 self.close_palette(true, ctx);
@@ -2223,8 +2285,17 @@ impl App {
                 self.show_terminals(ctx);
             }
             Pick::Folder(dir) => {
+                // The ticked ones, if any; else the one chosen.
+                let mut dirs: Vec<PathBuf> = self
+                    .ticked()
+                    .into_iter()
+                    .filter_map(|t| if let Pick::Folder(d) = t { Some(d) } else { None })
+                    .collect();
+                if dirs.is_empty() {
+                    dirs.push(dir);
+                }
                 self.close_palette(true, ctx);
-                self.open_folder(dir, ctx);
+                self.open_folders(dirs, ctx);
             }
             Pick::Command(c) => {
                 self.close_palette(true, ctx);
@@ -2267,29 +2338,6 @@ impl App {
             Err(e) => self.warn(format!("Couldn't save: {e}")),
         }
     }
-
-    /// Fold or unfold the tree row at `i`: `Some(true)` expands, `Some(false)`
-    /// collapses (or jumps to the parent if already collapsed), `None` toggles.
-    pub fn palette_tree(&mut self, i: usize, expand: Option<bool>) {
-        let Some(project) = &mut self.project else {
-            return;
-        };
-        let Some(e) = project.tree.entries.get(i) else {
-            return;
-        };
-        let mut select = i;
-        match (expand, e.is_dir, e.expanded) {
-            (None, true, _) => project.tree.toggle(i),
-            (Some(true), true, false) => project.tree.expand(i),
-            (Some(false), true, true) => project.tree.collapse(i),
-            (Some(false), _, _) => select = project.tree.parent(i).unwrap_or(i),
-            _ => {}
-        }
-        self.refresh_items();
-        if let Some(p) = &mut self.palette {
-            p.selected = select;
-        }
-    }
 }
 
 /// Items for a plain list of names (themes, fonts).
@@ -2308,9 +2356,7 @@ fn simple_items(
             label: name.clone(),
             detail: String::new(),
             caps: Vec::new(),
-            depth: 0,
             dim: false,
-            expanded: None,
             tint: None,
             pick: pick(name),
         })
@@ -2346,18 +2392,20 @@ fn rel_path(root: &Path, path: &Path) -> String {
     }
 }
 
+/// Finder's panel: one folder, or several (⌘- or ⇧-click).
 #[cfg(all(target_os = "macos", not(test)))]
-fn pick_folder() -> Option<PathBuf> {
+fn pick_folders() -> Vec<PathBuf> {
     rfd::FileDialog::new()
-        .set_title("Open Folder")
-        .pick_folder()
+        .set_title("Open Folders")
+        .pick_folders()
+        .unwrap_or_default()
 }
 
 /// No native picker wired up off macOS yet; Recent Folders and the CLI path
 /// work. Tests never open the real panel.
 #[cfg(any(not(target_os = "macos"), test))]
-fn pick_folder() -> Option<PathBuf> {
-    None
+fn pick_folders() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 /// Maximize the window, or restore it (the title bar's double-click).

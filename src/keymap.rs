@@ -59,6 +59,7 @@ pub enum Command {
     SelectAll,
     Find,
     Replace,
+    EditWholeFile,
     AddNextOccurrence,
     AddCursorAbove,
     AddCursorBelow,
@@ -75,7 +76,6 @@ pub enum Command {
     FocusSidebar,
     GoToLine,
     ToggleComment,
-    FormatDocument,
     MoveLineUp,
     MoveLineDown,
     DuplicateLineUp,
@@ -95,6 +95,9 @@ pub enum Command {
     MaximizeTerminal,
     SwitchTerminal,
     OpenTerminalLink,
+    ToggleRemoteAccess,
+    ShowRemoteAddress,
+    SwitchWindow,
     JumpTerminal(u8),
     Quit,
 }
@@ -170,12 +173,12 @@ commands! {
     SelectAll, "edit.selectAll", "Select All", ["ctrl+a"];
     Find, "edit.find", "Find", ["ctrl+f"];
     Replace, "edit.replace", "Replace", ["ctrl+r"];
+    EditWholeFile, "file.editWhole", "Edit a Huge File (Load It Whole)", ["ctrl+alt+e"];
     AddNextOccurrence, "edit.addNextOccurrence", "Add Cursor at Next Match", ["ctrl+d"];
     AddCursorAbove, "edit.addCursorAbove", "Add Cursor Above", ["ctrl+alt+up"];
     AddCursorBelow, "edit.addCursorBelow", "Add Cursor Below", ["ctrl+alt+down"];
     GoToLine, "edit.goToLine", "Go to Line…", ["ctrl+l"];
     ToggleComment, "edit.toggleComment", "Comment / Uncomment Line", ["ctrl+/"];
-    FormatDocument, "edit.format", "Format Document", ["shift+alt+f"];
     MoveLineUp, "edit.moveLineUp", "Move Line Up", ["alt+up"];
     MoveLineDown, "edit.moveLineDown", "Move Line Down", ["alt+down"];
     DuplicateLineUp, "edit.copyLineUp", "Duplicate Line Up", ["alt+shift+up"];
@@ -190,7 +193,7 @@ commands! {
     ToggleWordWrap, "view.wordWrap", "Word Wrap On / Off", ["alt+z"];
     ToggleSidebar, "view.sidebar", "File Tree: Show and Go In, or Hide", ["ctrl+b"];
     FocusSidebar, "view.focusSidebar", "File Tree: Go In, or Back to the Editor", ["ctrl+shift+e"];
-    CollapseFolders, "view.collapseFolders", "File Tree: Collapse All Folders", ["ctrl+left"];
+    CollapseFolders, "view.collapseFolders", "File Tree: Collapse All Folders", ["alt+shift+c"];
     ZoomIn, "view.zoomIn", "Bigger Text", ["ctrl+=", "ctrl+shift+="];
     ZoomOut, "view.zoomOut", "Smaller Text", ["ctrl+-"];
     ResetZoom, "view.resetZoom", "Reset Text Size", ["ctrl+0"];
@@ -205,6 +208,9 @@ commands! {
     MaximizeTerminal, "terminal.maximize", "Maximize / Restore Terminal", ["alt+m"];
     SwitchTerminal, "terminal.switch", "Switch to Terminal…", ["alt+k"];
     OpenTerminalLink, "terminal.openLink", "Open a Link from the Terminal…", ["ctrl+shift+o"];
+    ToggleRemoteAccess, "remote.toggle", "Remote Access: On / Off", ["ctrl+alt+shift+r"];
+    ShowRemoteAddress, "remote.address", "Remote Access: Show Address", ["ctrl+alt+shift+a"];
+    SwitchWindow, "remote.switchWindow", "Remote Access: Switch Window… (in the Browser)", ["ctrl+alt+shift+s"];
     JumpTerminal(1), "terminal.jump1", "Go to Terminal 1", ["alt+1"];
     JumpTerminal(2), "terminal.jump2", "Go to Terminal 2", ["alt+2"];
     JumpTerminal(3), "terminal.jump3", "Go to Terminal 3", ["alt+3"];
@@ -215,6 +221,22 @@ commands! {
     JumpTerminal(8), "terminal.jump8", "Go to Terminal 8", ["alt+8"];
     JumpTerminal(9), "terminal.jump9", "Go to Terminal 9", ["alt+9"];
     Quit, "app.quit", "Quit", ["ctrl+q"];
+}
+
+/// ⇧ ⌃ ⌥ ⌘ themselves: egui reports pressing one as a key of its own
+/// (`ShiftLeft`…), which isn't typing and can't be a shortcut's key.
+pub fn is_modifier(key: Key) -> bool {
+    matches!(
+        key,
+        Key::ShiftLeft
+            | Key::ShiftRight
+            | Key::ControlLeft
+            | Key::ControlRight
+            | Key::AltLeft
+            | Key::AltRight
+            | Key::SuperLeft
+            | Key::SuperRight
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -431,11 +453,25 @@ impl Keymap {
 
     /// The first key bound to `command`, for showing in the UI.
     pub fn combo_for(&self, command: Command) -> Option<Combo> {
+        #[cfg(test)]
+        SHOWN.with(|s| s.borrow_mut().as_mut().map(|v| v.push(command)));
         self.bindings
             .iter()
             .find(|(_, c)| *c == command)
             .map(|(combo, _)| *combo)
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static SHOWN: std::cell::RefCell<Option<Vec<Command>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: while on, records every command whose key is looked up to
+/// be shown. Returns what was recorded since the last call.
+#[cfg(test)]
+pub fn record_shown(on: bool) -> Vec<Command> {
+    SHOWN.with(|s| std::mem::replace(&mut *s.borrow_mut(), on.then(Vec::new)).unwrap_or_default())
 }
 
 /// A fresh `keybindings.json`: instructions plus every default, commented out,

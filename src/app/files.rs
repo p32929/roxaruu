@@ -1,5 +1,5 @@
 //! Working with files: new / rename / delete / reveal / copy path from the
-//! Go to File list (or on the open file), files dropped from Finder, files
+//! file tree or its search (or on the open file), files dropped from Finder, files
 //! pasted from Finder, and links clicked in a terminal.
 
 use std::path::{Path, PathBuf};
@@ -9,7 +9,7 @@ use eframe::egui;
 use super::{App, Focus, display_name, rel_path};
 use crate::editor::Tab;
 use crate::keymap::Command;
-use crate::palette::{Mode, Pick};
+use crate::palette::Mode;
 
 /// A question with a text field (or a yes/no) about a file or link.
 #[derive(Clone, Debug)]
@@ -19,28 +19,32 @@ pub enum Ask {
     Rename { path: PathBuf, name: String },
     Delete { path: PathBuf },
     OpenUrl(String),
+    /// The password for turning remote access on (typed hidden).
+    RemotePassword { password: String },
+    /// Where to open the windows from a browser.
+    RemoteAddress,
+    /// ⌘Q or the close button: close this window? (What's running stops.)
+    Quit,
 }
 
 impl App {
-    /// What Rename, Delete, Reveal and Copy Path act on: the selected row in
-    /// Go to File, else (no list open, or from the command palette) the
-    /// active tab's file.
+    /// What Rename, Delete, Reveal and Copy Path act on: in the file tree,
+    /// its selected row (or chosen search match), else (from the editor or
+    /// the command palette) the active tab's file.
     pub fn file_target(&self) -> Option<PathBuf> {
-        let project = self.project.as_ref();
-        match self.palette.as_ref().map(|p| (p.mode, p.selected_pick())) {
-            Some((Mode::Files, Some(Pick::Tree(i)))) => {
-                project?.tree.entries.get(*i).map(|e| e.path.clone())
+        match self.palette.as_ref().map(|p| p.mode) {
+            // Searching: the chosen match (none, with nothing found).
+            None if self.focus == Focus::Sidebar && !self.sidebar.query.is_empty() => {
+                self.hit_path(self.sidebar.hit)
             }
-            Some((Mode::Files, Some(Pick::File(path)))) => Some(path.clone()),
-            Some((Mode::Files, _)) => None,
             None if self.focus == Focus::Sidebar => self.sidebar.selected.clone(),
-            None | Some((Mode::Commands, _)) => self.active_tab().and_then(|t| t.path().cloned()),
+            None | Some(Mode::Commands) => self.active_tab().and_then(|t| t.path().cloned()),
             _ => None,
         }
     }
 
     /// Where New File / New Folder create: beside (or inside) the selected
-    /// row in Go to File, else beside the active file, else the project root.
+    /// row in the file tree, else beside the active file, else the project root.
     fn new_file_dir(&self) -> Option<PathBuf> {
         let root = self.project.as_ref()?.root.clone();
         let target = self.file_target().filter(|p| p.starts_with(&root));
@@ -137,11 +141,22 @@ impl App {
             Ask::Rename { path, name } => self.rename(&path, name.trim(), ctx),
             Ask::Delete { path } => self.delete(&path, ctx),
             Ask::OpenUrl(url) => {
-                if os_open(&[url.as_ref()]) {
-                    Ok(())
-                } else {
-                    Err("Couldn't open your browser".into())
+                self.open_url(url, ctx);
+                Ok(())
+            }
+            Ask::RemotePassword { password } => self.start_remote(&password),
+            Ask::Quit => {
+                // Then "save changes?" for each unsaved file, then close.
+                self.begin_close(self.tab_paths(), crate::app::After::Quit, ctx);
+                Ok(())
+            }
+            Ask::RemoteAddress => {
+                // "Copy Address".
+                if let Some(url) = self.remote.url.clone() {
+                    self.copy(ctx, url);
+                    self.notify("Address copied");
                 }
+                Ok(())
             }
         };
         if let Err(e) = result {
@@ -241,7 +256,7 @@ impl App {
     }
 
     /// Files were added, renamed or deleted: re-read the tree (keeping folders
-    /// open), re-index for search, and select `select` in Go to File.
+    /// open), re-index for search, and select `select` in the tree.
     fn files_changed(&mut self, select: Option<&Path>, ctx: &egui::Context) {
         let Some(p) = &mut self.project else { return };
         p.tree.refresh();
@@ -251,16 +266,9 @@ impl App {
             self.sidebar.scroll = true;
         }
         self.index(ctx);
-        if let Some(pal) = &mut self.palette
-            && pal.mode == Mode::Files
-        {
-            if row.is_some() {
-                pal.query.clear(); // show it in the tree
-            }
-            self.refresh_items();
-            if let (Some(pal), Some(row)) = (&mut self.palette, row) {
-                pal.selected = row;
-            }
+        if row.is_some() {
+            self.sidebar.query.clear(); // show it in the tree
+            self.sidebar.searching = false;
         }
     }
 
@@ -339,6 +347,16 @@ impl App {
         })
     }
 
+    /// Open a link in the browser of whoever asked: the Mac's, or (asked
+    /// from a browser looking in) that browser.
+    pub fn open_url(&mut self, url: String, ctx: &egui::Context) {
+        if self.remote_pass {
+            ctx.open_url(egui::OpenUrl::new_tab(url));
+        } else if !os_open(&[url.as_ref()]) {
+            self.warn("Couldn't open your browser");
+        }
+    }
+
     /// ⌘+click on a link in a terminal: ask before opening it.
     pub fn offer_url(&mut self, url: String) {
         self.ask = Some(Ask::OpenUrl(url));
@@ -355,6 +373,9 @@ impl Tab {
     /// The file was renamed or moved: follow it (the language may change).
     pub fn retarget(&mut self, path: PathBuf) {
         self.buf.lang = crate::syntax::Lang::detect(&path);
+        if let Some(h) = &mut self.huge {
+            h.path = path.clone(); // it reads from there
+        }
         self.buf.path = Some(path);
         self.invalidate_highlight();
     }

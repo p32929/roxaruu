@@ -19,7 +19,7 @@ fn harness(target: Option<PathBuf>) -> Harness<'static, Root> {
     Harness::builder()
         .with_size(egui::vec2(1280.0, 820.0))
         .wgpu()
-        .build_eframe(move |cc| Root(App::new(&cc.egui_ctx, target)))
+        .build_eframe(move |cc| Root::new(App::new(&cc.egui_ctx, target)))
 }
 
 /// Run a few frames (and give background work a moment), then save a PNG.
@@ -34,6 +34,28 @@ fn shot(h: &mut Harness<'static, Root>, name: &str) {
     img.save(dir.join(format!("{name}.png"))).unwrap();
 }
 
+/// Every key on screen works from where the keyboard is now: pressing it
+/// runs its command (a key shown but left to the editor or shell is a lie).
+fn visible_keys_work(h: &mut Harness<'static, Root>, place: &str) {
+    crate::keymap::record_shown(true);
+    h.step();
+    let mut shown = crate::keymap::record_shown(false);
+    shown.sort_by_key(|c| format!("{c:?}"));
+    shown.dedup();
+    let mut dead = Vec::new();
+    for command in shown {
+        let Some((key, mods)) = app(h).config.keymap.combo_for(command).map(|c| c.press()) else {
+            continue;
+        };
+        crate::app::dry_run(true);
+        press(h, mods, key);
+        if crate::app::dry_run(false) != [command] {
+            dead.push(command);
+        }
+    }
+    assert!(dead.is_empty(), "shown in {place} but their keys do nothing there: {dead:?}");
+}
+
 fn press(h: &mut Harness<'static, Root>, modifiers: Modifiers, key: Key) {
     h.key_press_modifiers(modifiers, key);
     h.step();
@@ -43,6 +65,10 @@ fn type_text(h: &mut Harness<'static, Root>, text: &str) {
     h.event(Event::Text(text.into()));
     h.step();
 }
+
+/// Where the editor's text area starts: under the title bar (32), the
+/// tab strip (36) and its row of tab keys (26).
+const EDITOR_TOP: f32 = 32.0 + 36.0 + 26.0;
 
 const CMD: Modifiers = Modifiers {
     mac_cmd: true,
@@ -69,8 +95,9 @@ const CMD_SHIFT: Modifiers = Modifiers {
 fn headless_welcome() {
     let mut h = harness(None);
     shot(&mut h, "01-welcome");
+    visible_keys_work(&mut h, "the welcome page");
     // The real app icon is the welcome mark, not a stand-in.
-    assert!(app(&h).app_icon.is_some(), "the app icon loaded");
+    assert!(!app(&h).app_icon.is_empty(), "the app icon loaded");
 }
 
 /// `PROJECT` = a file inside a git repo (the walkthrough opens its repo).
@@ -195,7 +222,7 @@ fn headless_editing_walkthrough() {
     press(&mut h, CMD, Key::Z);
 
     // Mouse: click places the caret, drag selects.
-    let (row_h, x0, y0) = (24.0, 108.0, 32.0 + 36.0 + 12.0); // code size 15 → 24px rows
+    let (row_h, x0, y0) = (24.0, 108.0, EDITOR_TOP + 12.0); // code size 15 → 24px rows
     click(&mut h, egui::pos2(x0 + 3.0 * 9.0, y0 + row_h), None);
     let caret = h.state().0.active_tab().unwrap().buf.cursor_row();
     assert_eq!(caret, 1, "click on the second row puts the caret there");
@@ -253,8 +280,10 @@ fn headless_editing_walkthrough() {
     assert_eq!(h.state().0.tabs.len(), 2);
     shot(&mut h, "38-reopened");
 
-    // Quit with unsaved work asks; Save writes it.
+    // Quit asks first (always), then about unsaved work; Save writes it.
     press(&mut h, CMD, Key::Q);
+    assert!(matches!(h.state().0.ask, Some(crate::app::Ask::Quit)));
+    press(&mut h, Modifiers::NONE, Key::Enter);
     shot(&mut h, "39-quit-prompt");
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert!(h.state().0.prompt.is_none());
@@ -740,6 +769,7 @@ echo run.sh-done
 #[test]
 #[ignore]
 fn headless_editor_features_walkthrough() {
+    let _restore = keep_settings(); // ⌥Z below saves word wrap
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap().join("proj");
     std::fs::create_dir_all(root.join(".git")).unwrap();
@@ -878,6 +908,7 @@ fn headless_editor_features_walkthrough() {
     press(&mut h, CMD, Key::Backslash);
 
     // Word wrap: ⌥Z, saved to settings.json.
+    assert!(!h.state().0.config.settings.word_wrap, "starts off");
     press(&mut h, ALT, Key::F);
     type_text(&mut h, "notes");
     press(&mut h, Modifiers::NONE, Key::Enter);
@@ -1000,9 +1031,11 @@ fn headless_files_walkthrough() {
         "src/new_name.rs",
         "the open tab follows the rename"
     );
-    let pal = app(&h).palette.as_ref().expect("Go to File stays open");
+    assert_eq!(app(&h).focus, crate::app::Focus::Sidebar, "the tree keeps the keyboard");
+    assert!(app(&h).sidebar.query.is_empty());
     assert_eq!(
-        pal.items[pal.selected].label, "new_name.rs",
+        app(&h).sidebar.selected.as_deref(),
+        Some(root.join("src/new_name.rs").as_path()),
         "…on the renamed file, in the tree"
     );
     shot(&mut h, "a3-renamed");
@@ -1071,15 +1104,10 @@ fn headless_files_walkthrough() {
     // Build folders: skipped by search until ⌥H.
     press(&mut h, ALT, Key::F);
     type_text(&mut h, "index.js");
-    assert!(
-        app(&h).palette.as_ref().unwrap().items.is_empty(),
-        "node_modules is skipped"
-    );
+    assert!(app(&h).sidebar.hits.is_empty(), "node_modules is skipped");
     shot(&mut h, "a5-no-match-hint");
     press(&mut h, ALT, Key::H);
-    wait_for(&mut h, "re-indexing with build folders", |a| {
-        a.palette.as_ref().is_some_and(|p| !p.items.is_empty())
-    });
+    wait_for(&mut h, "re-indexing with build folders", |a| !a.sidebar.hits.is_empty());
     shot(&mut h, "a5-build-folders-on");
     press(&mut h, ALT, Key::H);
     press(&mut h, Modifiers::NONE, Key::Escape);
@@ -1365,8 +1393,8 @@ fn headless_extras_walkthrough() {
     shot(&mut h, "b7-help-files");
     press(&mut h, Modifiers::NONE, Key::F1);
     assert!(
-        !app(&h).help && app(&h).palette.is_some(),
-        "F1 again closes help, back to the list"
+        !app(&h).help && app(&h).focus == crate::app::Focus::Sidebar,
+        "F1 again closes help, back to the file search"
     );
     press(&mut h, Modifiers::NONE, Key::Escape);
 
@@ -1446,6 +1474,7 @@ fn headless_every_shortcut() {
         a.terminals.len()
     );
 
+    visible_keys_work(&mut h, "the editor");
     let km = &app(&h).config.keymap;
     let sheet: Vec<_> = crate::ui::help_sections(km)
         .into_iter()
@@ -1469,6 +1498,7 @@ fn headless_every_shortcut() {
     // (only real Ctrl chords are the shell's, and none of the defaults use one).
     h.state_mut().0.focus = crate::app::Focus::Terminal;
     h.step();
+    visible_keys_work(&mut h, "a terminal");
     let mut from_terminal = 0;
     for &(command, title, (key, mods)) in &sheet {
         if command == Command::DeleteFile || !app(&h).available(command) {
@@ -1489,9 +1519,10 @@ fn headless_every_shortcut() {
     }
     eprintln!("{from_editor} work from the editor, {from_terminal} from a terminal");
 
-    // From the file tree: its own keys (⌘← collapse all) get through.
+    // From the file tree: its own keys get through.
     h.state_mut().0.focus_sidebar();
     h.step();
+    visible_keys_work(&mut h, "the tree");
     for &(command, title, (key, mods)) in &sheet {
         if done.contains(&command) || !app(&h).available(command) {
             continue;
@@ -1502,6 +1533,21 @@ fn headless_every_shortcut() {
         done.push(command);
     }
     h.state_mut().0.focus = crate::app::Focus::Editor;
+
+    // Edit a Huge File: only with one in front (a long line makes it one).
+    let wide = root.join("min.js");
+    std::fs::write(&wide, "x".repeat(crate::huge::LONG_LINE + 1)).unwrap();
+    h.state_mut().0.open_file(&wide);
+    h.step();
+    let (_, _, (key, mods)) = sheet
+        .iter()
+        .find(|s| s.0 == Command::EditWholeFile)
+        .copied()
+        .unwrap();
+    crate::app::dry_run(true);
+    press(&mut h, mods, key);
+    assert_eq!(crate::app::dry_run(false), [Command::EditWholeFile]);
+    done.push(Command::EditWholeFile);
 
     // Move to Trash, from Go to File.
     press(&mut h, ALT, Key::F);
@@ -1514,6 +1560,18 @@ fn headless_every_shortcut() {
     crate::app::dry_run(true);
     press(&mut h, mods, key);
     assert_eq!(crate::app::dry_run(false), [Command::DeleteFile]);
+    done.push(Command::DeleteFile);
+
+    // Switch Window: in a browser's copy (the page's list; the Chrome test
+    // opens it for real).
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    let (_, _, (key, mods)) = sheet.iter().find(|s| s.0 == Command::SwitchWindow).copied().unwrap();
+    h.state_mut().0.remote_pass = true;
+    crate::app::dry_run(true);
+    press(&mut h, mods, key);
+    h.state_mut().0.remote_pass = false;
+    assert_eq!(crate::app::dry_run(false), [Command::SwitchWindow]);
+    done.push(Command::SwitchWindow);
     let missed: Vec<_> = sheet
         .iter()
         .filter(|s| !done.contains(&s.0))
@@ -1748,6 +1806,10 @@ fn headless_sidebar_walkthrough() {
         before,
         "typing in the tree doesn't edit"
     );
+    assert_eq!(app(&h).sidebar.query, "zz", "it searches");
+    press(&mut h, Modifiers::NONE, Key::Backspace);
+    press(&mut h, Modifiers::NONE, Key::Backspace);
+    assert_eq!(app(&h).focus, Focus::Sidebar, "back to the tree");
     press(&mut h, Modifiers::NONE, Key::ArrowUp);
     assert_eq!(selected(&h).as_deref(), Some("src/cart/mod.rs"));
     press(&mut h, Modifiers::NONE, Key::ArrowLeft); // to the folder
@@ -1796,7 +1858,8 @@ fn headless_sidebar_walkthrough() {
     assert_eq!(app(&h).focus, Focus::Editor);
 
     // Clicks: a folder opens, a file opens in the editor.
-    let row = |i: usize| egui::pos2(80.0, 32.0 + 38.0 + 26.0 * i as f32 + 13.0);
+    // Title bar, the tree's header, its search box, then the rows.
+    let row = |i: usize| egui::pos2(80.0, 32.0 + 38.0 + 36.0 + 26.0 * i as f32 + 13.0);
     let at = |h: &Harness<'static, Root>, name: &str| {
         names(h).iter().position(|n| n.trim() == name).unwrap()
     };
@@ -1851,7 +1914,6 @@ fn headless_sidebar_walkthrough() {
 #[test]
 #[ignore]
 fn headless_project_home_and_file_browser() {
-    use crate::palette::Mode;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap().join("shop");
     for d in [".git", "src/cart", "docs"] {
@@ -1869,34 +1931,80 @@ fn headless_project_home_and_file_browser() {
     h.state_mut().0.config.settings.sidebar = false;
     shot(&mut h, "k0-project-home");
     assert!(app(&h).active_tab().is_none());
+    visible_keys_work(&mut h, "the empty-folder page");
 
-    // Its keys work from the page: ⌥F browses the tree.
+    // Its keys work from the page: ⌥F shows the tree, keyboard in its
+    // search box; with nothing typed the arrows walk the tree.
     press(&mut h, ALT, Key::F);
     shot(&mut h, "k1-files");
-    assert_eq!(app(&h).palette.as_ref().map(|p| p.mode), Some(Mode::Files));
+    assert!(app(&h).palette.is_none(), "no dialog: the tree is the finder");
+    assert!(app(&h).sidebar_shown());
+    assert_eq!(app(&h).focus, crate::app::Focus::Sidebar);
     let label = |h: &Harness<'static, Root>| {
-        let p = app(h).palette.as_ref().unwrap();
-        p.items[p.selected].label.clone()
+        let a = app(h);
+        a.sidebar.selected.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string())
     };
-    while label(&h) != "src" {
+    while label(&h).as_deref() != Some("src") {
         press(&mut h, Modifiers::NONE, Key::ArrowDown);
     }
     shot(&mut h, "k2-folder-selected");
     press(&mut h, Modifiers::NONE, Key::ArrowRight);
     shot(&mut h, "k3-folder-expanded");
-    let p = app(&h).palette.as_ref().unwrap();
-    assert!(p.items.iter().any(|i| i.label == "main.rs" && i.depth == 1));
+    let tree = &app(&h).project.as_ref().unwrap().tree;
+    assert!(tree.entries.iter().any(|e| e.name == "main.rs" && e.depth == 1));
     press(&mut h, Modifiers::NONE, Key::ArrowDown);
     press(&mut h, Modifiers::NONE, Key::ArrowDown);
     shot(&mut h, "k4-file-selected");
-    assert_eq!(label(&h), "main.rs");
+    assert_eq!(label(&h).as_deref(), Some("main.rs"));
+    assert!(app(&h).sidebar.query.is_empty(), "arrows don't type");
     press(&mut h, Modifiers::NONE, Key::Enter);
-    assert!(app(&h).palette.is_none());
+    assert_eq!(app(&h).focus, crate::app::Focus::Editor);
     assert!(
         app(&h)
             .tab_rel(app(&h).active_tab().unwrap())
             .ends_with("main.rs")
     );
+
+    // Typing searches, from the box or anywhere in the tree: matches replace
+    // the tree, ↓ picks one, ↵ opens it and the tree comes back.
+    press(&mut h, ALT, Key::F);
+    type_text(&mut h, ".md");
+    shot(&mut h, "k4b-file-search");
+    let hits = |h: &Harness<'static, Root>| app(h).sidebar.hits.len();
+    assert_eq!(hits(&h), 2, "README.md and docs/guide.md");
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    let chosen = app(&h).file_target().unwrap();
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(app(&h).active_tab().and_then(|t| t.path().cloned()), Some(chosen));
+    assert!(app(&h).sidebar.query.is_empty());
+    assert_eq!(app(&h).focus, crate::app::Focus::Editor);
+    press(&mut h, CMD_SHIFT, Key::E); // into the rows, not the box
+    assert!(!app(&h).sidebar.searching, "⇧⌘E browses");
+    shot(&mut h, "k4c-browsing");
+    visible_keys_work(&mut h, "the tree's rows");
+    type_text(&mut h, "guide");
+    assert_eq!(app(&h).sidebar.query, "guide", "typing in the tree searches");
+    assert_eq!(hits(&h), 1);
+    // Esc: back to the rows the search began in, then to the editor.
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(app(&h).sidebar.query.is_empty());
+    assert_eq!(app(&h).focus, crate::app::Focus::Sidebar);
+    assert!(!app(&h).sidebar.searching);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert_eq!(app(&h).focus, crate::app::Focus::Editor);
+    // From the box with nothing typed, ↓ goes down into the rows.
+    press(&mut h, ALT, Key::F);
+    assert!(app(&h).sidebar.searching);
+    shot(&mut h, "k4d-search-box");
+    visible_keys_work(&mut h, "the tree's search box");
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    assert!(!app(&h).sidebar.searching && app(&h).focus == crate::app::Focus::Sidebar);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert_eq!(app(&h).focus, crate::app::Focus::Editor);
+    // ⌥F twice: in and back out.
+    press(&mut h, ALT, Key::F);
+    press(&mut h, ALT, Key::F);
+    assert_eq!(app(&h).focus, crate::app::Focus::Editor);
 
     // The welcome launcher is for no folder only.
     let mut h = harness(None);
@@ -2048,6 +2156,258 @@ fn headless_focus_keys() {
     assert!(app(&h).palette.is_none(), "so does ⌥F");
 }
 
+/// Recent Folders, several at once: space / ⇥ tick one, ⇧↓ ticks a run,
+/// ⌘-click and ⇧-click too; ticks survive the search; ↵ opens them all,
+/// the first here, the rest each in a window of its own.
+#[test]
+#[ignore]
+fn headless_open_several_folders() {
+    use crate::palette::Pick;
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    let names = ["alpha", "bravo", "charlie", "delta", "echo"];
+    for n in names.iter().rev() {
+        std::fs::create_dir_all(base.join(n).join(".git")).unwrap();
+        crate::recent::record(&base.join(n)); // alpha ends up first
+    }
+    let mut h = harness(None);
+    press(&mut h, ALT, Key::O);
+    let rows = |h: &Harness<'static, Root>| -> Vec<String> {
+        app(h).palette.as_ref().unwrap().items.iter().map(|i| i.label.clone()).collect()
+    };
+    assert_eq!(&rows(&h)[..5], &names);
+    let ticked = |h: &Harness<'static, Root>| -> Vec<String> {
+        let mut v: Vec<String> = app(h)
+            .ticked()
+            .iter()
+            .filter_map(|p| if let Pick::Folder(d) = p { Some(d.file_name().unwrap().to_string_lossy().to_string()) } else { None })
+            .collect();
+        v.sort();
+        v
+    };
+
+    // Space ticks without moving (and types nothing); ⇧↓ ticks a run.
+    press(&mut h, Modifiers::NONE, Key::Space);
+    assert_eq!(ticked(&h), ["alpha"]);
+    assert_eq!(app(&h).palette.as_ref().unwrap().query, "");
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    press(&mut h, Modifiers::SHIFT, Key::ArrowDown);
+    assert_eq!(ticked(&h), ["alpha", "charlie", "delta"]);
+    assert_eq!(app(&h).palette.as_ref().unwrap().selected, 3);
+    // ⇥ flips it and moves on: delta off, now on echo.
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert_eq!(ticked(&h), ["alpha", "charlie"]);
+    assert_eq!(app(&h).palette.as_ref().unwrap().selected, 4);
+    shot(&mut h, "o1-ticked");
+
+    // Narrowing the list keeps the ticks.
+    type_text(&mut h, "brav");
+    assert_eq!(rows(&h)[0], "bravo");
+    assert_eq!(ticked(&h), ["alpha", "charlie"]);
+    for _ in 0..4 {
+        press(&mut h, Modifiers::NONE, Key::Backspace);
+    }
+
+    // The mouse: ⌘-click ticks one, ⇧-click a run (here: bravo to echo,
+    // after the last one ticked). Rows are found by hovering.
+    let row = |h: &mut Harness<'static, Root>, i: usize| {
+        (0..800)
+            .step_by(6)
+            .map(|y| egui::pos2(640.0, y as f32))
+            .find(|p| {
+                h.event(Event::PointerMoved(*p));
+                h.step();
+                app(h).palette.as_ref().unwrap().selected == i
+            })
+            .unwrap()
+    };
+    let click = |h: &mut Harness<'static, Root>, at: egui::Pos2, m: Modifiers| {
+        h.event(Event::ModifiersChanged(m));
+        click_at(h, at, egui::PointerButton::Primary);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.step();
+    };
+    let bravo = row(&mut h, 1);
+    click(&mut h, bravo, Modifiers::COMMAND);
+    assert!(app(&h).palette.is_some(), "a ⌘-click doesn't open it");
+    assert_eq!(ticked(&h), ["alpha", "bravo", "charlie"]);
+    let echo = row(&mut h, 4);
+    click(&mut h, echo, Modifiers::SHIFT);
+    assert_eq!(ticked(&h), ["alpha", "bravo", "charlie", "delta", "echo"]);
+    click(&mut h, echo, Modifiers::COMMAND);
+    click(&mut h, bravo, Modifiers::COMMAND);
+    assert_eq!(ticked(&h), ["alpha", "charlie", "delta"]);
+    shot(&mut h, "o2-ticked-by-mouse");
+
+    // ↵: all of them. This window had none, so the first one opens here.
+    App::take_launched();
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(app(&h).palette.is_none());
+    let here = app(&h).project.as_ref().map(|p| p.name.clone()).unwrap();
+    let mut elsewhere: Vec<String> = App::take_launched()
+        .into_iter()
+        .filter(|l| l[0] == "new window")
+        .map(|l| std::path::Path::new(&l[1]).file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    elsewhere.push(here);
+    elsewhere.sort();
+    assert_eq!(elsewhere, ["alpha", "charlie", "delta"]);
+    assert!(
+        app(&h).toasts.iter().any(|t| t.msg.starts_with("Opened 3 folders")),
+        "one toast for them all"
+    );
+    shot(&mut h, "o3-opened");
+}
+
+/// Many tabs: the strip scrolls (wheel, the "‹ N" end), keeps the active
+/// tab in view, and a tab drags to a new place; terminals' tabs too.
+#[test]
+#[ignore]
+fn headless_tab_strips_scroll_and_drag() {
+    use crate::ui::tabstrip::laid_out;
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let names: Vec<String> = (0..24).map(|i| format!("module_{i:02}.rs")).collect();
+    for n in &names {
+        std::fs::write(root.join(n), "fn x() {}\n").unwrap();
+    }
+    let mut h = harness(Some(root.join(&names[0])));
+    no_sidebar(&mut h);
+    for n in &names[1..] {
+        h.state_mut().0.open_file(&root.join(n));
+    }
+    h.step();
+    // The editor's strip: (room, tab rects) from the last frame.
+    let strip = |h: &mut Harness<'static, Root>, terminal: bool| {
+        laid_out();
+        h.step();
+        laid_out().into_iter().rfind(|(room, _)| (room.top() > 300.0) == terminal).unwrap()
+    };
+    let shown = |room: egui::Rect, r: egui::Rect| r.left() >= room.left() - 0.5 && r.right() <= room.right() + 0.5;
+
+    // The active (last opened) tab is in view, the first ones scrolled off.
+    let (room, rects) = strip(&mut h, false);
+    assert_eq!(app(&h).active, Some(23));
+    assert!(shown(room, rects[23]), "the active tab is in view");
+    assert!(rects[0].right() < room.left(), "the first ones are scrolled off");
+    shot(&mut h, "s0-many-tabs");
+
+    // The wheel over the strip scrolls it back (up/down go sideways).
+    let to_start = |h: &mut Harness<'static, Root>| {
+        h.event(Event::PointerMoved(room.center()));
+        for _ in 0..40 {
+            h.event(Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 400.0), modifiers: Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel });
+            h.step();
+        }
+    };
+    to_start(&mut h);
+    let (room, rects) = strip(&mut h, false);
+    assert!(shown(room, rects[0]), "scrolled to the start: {:?} in {room:?}", rects[0]);
+    assert_eq!(app(&h).active, Some(23), "scrolling selects nothing");
+    shot(&mut h, "s1-scrolled");
+
+    // "N ›" at the right end brings the next hidden tab in.
+    let first_hidden = rects.iter().position(|r| r.right() > room.right() + 1.0).unwrap();
+    click_at(&mut h, egui::pos2(room.right() - 10.0, room.center().y), egui::PointerButton::Primary);
+    let (room, rects) = strip(&mut h, false);
+    assert!(shown(room, rects[first_hidden]), "tab {first_hidden} came in");
+
+    // Drag tab 0 right, past two tabs: it lands third, and is the active one.
+    to_start(&mut h);
+    let (room, rects) = strip(&mut h, false);
+    let order = |h: &Harness<'static, Root>| -> Vec<String> { app(h).tabs.iter().map(|t| t.buf.name()).collect() };
+    let first = order(&h)[0].clone();
+    let drag = |h: &mut Harness<'static, Root>, from: egui::Pos2, to: egui::Pos2| {
+        h.event(Event::PointerMoved(from));
+        h.event(Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        for k in 1..=12 {
+            h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 12.0)));
+            h.step();
+        }
+        shot(h, "s2-dragging");
+        h.event(Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+        h.step();
+    };
+    let target = egui::pos2(rects[2].center().x + rects[2].width() * 0.2, rects[0].center().y);
+    assert!(shown(room, rects[0]) && shown(room, rects[2]));
+    drag(&mut h, rects[0].center(), target);
+    assert_eq!(order(&h)[2], first, "{:?}", order(&h));
+    assert_eq!(app(&h).active, Some(2), "the moved tab is the active one");
+    assert_eq!(order(&h).len(), 24);
+
+    // Terminals: three, drag the last to the front.
+    for _ in 0..3 {
+        press(&mut h, ALT, Key::N);
+        wait_for(&mut h, "a prompt", at_prompt);
+    }
+    let (_, rects) = strip(&mut h, true);
+    assert_eq!(rects.len(), 3);
+    // Which terminal is which: its shared state stays put as it moves.
+    let id = |h: &Harness<'static, Root>, i: usize| std::sync::Arc::as_ptr(&app(h).terminals[i].visible) as usize;
+    let last = id(&h, 2);
+    drag(&mut h, rects[2].center(), egui::pos2(rects[0].left() + 4.0, rects[0].center().y));
+    assert_eq!(id(&h, 0), last, "the last terminal is first now");
+    assert_eq!(app(&h).active_terminal, 0, "and active");
+}
+
+/// ⌘Q (or the window's close button) always asks first, saying what would
+/// stop: running terminals, unsaved files. Esc keeps the window; ↵ closes.
+#[test]
+#[ignore]
+fn headless_quit_asks_first() {
+    use crate::app::Ask;
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
+    let mut h = harness(Some(root.join("a.rs")));
+
+    // Nothing running, nothing unsaved: it still asks.
+    press(&mut h, CMD, Key::Q);
+    assert!(matches!(app(&h).ask, Some(Ask::Quit)), "always asks");
+    assert!(app(&h).quit_losses().is_empty());
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(app(&h).ask.is_none() && !app(&h).allow_close, "esc keeps the window");
+
+    // The close button too.
+    h.input_mut()
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .events
+        .push(egui::ViewportEvent::Close);
+    h.step();
+    assert!(matches!(app(&h).ask, Some(Ask::Quit)), "the close button asks too");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+
+    // A program running in a terminal, and an unsaved file: it says so.
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "a prompt", at_prompt);
+    run(&mut h, "sleep 30");
+    wait_for(&mut h, "sleep running", |a| a.terminals.iter().any(|t| t.pane.is_running()));
+    h.state_mut().0.focus = crate::app::Focus::Editor;
+    type_text(&mut h, "x");
+    press(&mut h, CMD, Key::Q);
+    let losses = app(&h).quit_losses().join(" ");
+    assert!(losses.contains("still running") && losses.contains("sleep"), "{losses}");
+    assert!(losses.contains("unsaved"), "{losses}");
+    shot(&mut h, "q0-quit-confirm");
+
+    // ↵: on to "save changes?", then the window closes.
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(app(&h).prompt.is_some(), "then asked about the unsaved file");
+    press(&mut h, Modifiers::NONE, Key::D); // don't save
+    assert!(app(&h).allow_close, "and it closes");
+}
+
 /// Right-click a tab: close others / to the right / to the left / saved,
 /// for editor tabs and terminal tabs alike.
 #[test]
@@ -2157,7 +2517,8 @@ fn headless_tab_menus() {
     let ctx = h.ctx.clone();
     h.state_mut().0.run(crate::keymap::Command::ToggleSplit, &ctx);
     shot(&mut h, "t5-split");
-    click_at(&mut h, egui::pos2(700.0, 87.0), egui::PointerButton::Secondary); // e.rs's title
+    // e.rs's title bar: the split view's top row, 19px into the editor area.
+    click_at(&mut h, egui::pos2(700.0, EDITOR_TOP + 19.0), egui::PointerButton::Secondary);
     assert_eq!(names(&h)[app(&h).active.unwrap()], "e.rs");
     pick(&mut h, "Close to the Right");
     assert_eq!(names(&h), ["a.rs", "e.rs"]);
@@ -2183,7 +2544,6 @@ fn headless_dialogs_fit() {
     let mut h = harness(Some(root.join("file00.rs")));
     let opens = [
         Command::Palette,
-        Command::GoToFile,
         Command::RecentFolders,
         Command::SearchInFiles,
         Command::GoToLine,
@@ -2233,8 +2593,12 @@ fn headless_dialogs_fit() {
             ctx.memory_mut(|m| *m.areas_mut() = Default::default());
             h.step();
         }
-        // Confirmations: delete (long name), then save-changes.
+        // Confirmations: quit, delete (long name), then save-changes.
         let ctx = h.ctx.clone();
+        h.state_mut().0.ask = Some(crate::app::Ask::Quit);
+        check(&mut h, "quit", size);
+        h.state_mut().0.ask = None;
+        ctx.memory_mut(|m| *m.areas_mut() = Default::default());
         h.state_mut().0.ask = Some(crate::app::Ask::Delete { path: root.join(&long) });
         check(&mut h, "delete", size);
         if size.y < 500.0 {
@@ -2436,76 +2800,6 @@ fn headless_save_all_discard_all() {
     assert_eq!(saved.iter().filter(|t| t.ends_with("edited")).count(), 1);
 }
 
-/// ⇧⌥F formats with the language's tool (rustfmt here), as one undo step;
-/// `"formatters"` adds or replaces tools, `"formatOnSave"` runs it on ⌘S,
-/// and a missing tool says how to install it.
-#[test]
-#[ignore]
-fn headless_format_document() {
-    const SHIFT_ALT: Modifiers = Modifiers {
-        shift: true,
-        alt: true,
-        ..Modifiers::NONE
-    };
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().canonicalize().unwrap().join("shop");
-    std::fs::create_dir_all(root.join(".oxru")).unwrap();
-    std::fs::create_dir_all(root.join(".git")).unwrap();
-    let messy = "fn  main(){let x=1;println!(\"{}\",x);}\n";
-    std::fs::write(root.join("main.rs"), messy).unwrap();
-    std::fs::write(root.join("notes.txt"), "shout\n").unwrap();
-    std::fs::write(root.join("a.md"), "# hi\n").unwrap();
-    std::fs::write(
-        root.join(".oxru/settings.json"),
-        r#"{ "formatters": { "txt": "tr a-z A-Z", "md": "no-such-formatter-xyz" }, "formatOnSave": true }"#,
-    )
-    .unwrap();
-    let last_toast = |h: &Harness<'static, Root>| {
-        app(h).toasts.last().map(|t| (t.msg.clone(), t.error)).unwrap_or_default()
-    };
-    let mut h = harness(Some(root.join("main.rs")));
-
-    if which("rustfmt") {
-        press(&mut h, SHIFT_ALT, Key::F);
-        assert_eq!(
-            text_of(&h),
-            "fn main() {\n    let x = 1;\n    println!(\"{}\", x);\n}\n",
-            "{:?}",
-            last_toast(&h)
-        );
-        shot(&mut h, "f0-formatted");
-        press(&mut h, CMD, Key::Z);
-        assert_eq!(text_of(&h), messy, "one undo step");
-    } else {
-        eprintln!("rustfmt not installed: skipped the real-tool step");
-    }
-
-    // Your own formatter, and format on save.
-    h.state_mut().0.open_file(&root.join("notes.txt"));
-    h.step();
-    press(&mut h, CMD, Key::ArrowDown);
-    type_text(&mut h, "more");
-    press(&mut h, CMD, Key::S);
-    assert_eq!(std::fs::read_to_string(root.join("notes.txt")).unwrap(), "SHOUT\nMORE");
-    assert!(!app(&h).active_tab().unwrap().buf.modified, "saved what was formatted");
-
-    // A tool that isn't there: told, text untouched.
-    h.state_mut().0.open_file(&root.join("a.md"));
-    h.step();
-    press(&mut h, SHIFT_ALT, Key::F);
-    let (msg, error) = last_toast(&h);
-    assert!(error && msg.contains("isn't installed"), "{msg}");
-    assert_eq!(text_of(&h), "# hi\n");
-    shot(&mut h, "f1-missing-tool");
-}
-
-fn which(tool: &str) -> bool {
-    std::process::Command::new("sh")
-        .args(["-c", &format!("command -v {tool}")])
-        .env("PATH", format!("{}:/opt/homebrew/bin:{}/.cargo/bin", std::env::var("PATH").unwrap_or_default(), std::env::var("HOME").unwrap_or_default()))
-        .output()
-        .is_ok_and(|o| o.status.success())
-}
 
 /// Highlighting across languages: a look at variables, numbers, operators,
 /// Markdown headings and code fences in the real editor.
@@ -2535,7 +2829,7 @@ fn headless_highlighting() {
 
 /// Put the shared settings.json back when this goes out of scope, pass or
 /// fail: for tests that change settings.
-fn keep_settings() -> impl Drop {
+fn keep_settings() -> impl Drop + 'static {
     struct Restore(PathBuf, String);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -2549,6 +2843,64 @@ fn keep_settings() -> impl Drop {
 
 /// The keys for what used to need the mouse: collapse the tree, text size,
 /// links in the terminal, and "Change shortcuts…" on the F1 sheet.
+/// From the editor, the tree or the terminal, the keys to the other two
+/// show in the status bar and on the area they go to, and take you there.
+#[test]
+#[ignore]
+fn headless_focus_keys_everywhere() {
+    use crate::app::Focus;
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let _restore = keep_settings();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
+    let mut h = harness(Some(root.join("main.rs")));
+    h.state_mut().0.config.settings.sidebar = true;
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "a prompt", at_prompt);
+    let place = |a: &App| {
+        if a.terminal_focused() {
+            Focus::Terminal
+        } else {
+            a.focus
+        }
+    };
+    let set = |h: &mut Harness<'static, Root>, f: Focus| {
+        h.state_mut().0.focus = f;
+        h.step();
+    };
+    for from in [Focus::Editor, Focus::Sidebar, Focus::Terminal] {
+        for to in [Focus::Editor, Focus::Sidebar, Focus::Terminal] {
+            set(&mut h, from);
+            assert_eq!(place(app(&h)), from);
+            let hint = app(&h).focus_hint(to);
+            if to == from {
+                assert!(hint.is_none(), "{from:?} to itself");
+                continue;
+            }
+            let (command, what) = hint.unwrap_or_else(|| panic!("no key from {from:?} to {to:?}"));
+            assert!(
+                app(&h).status_hints().iter().any(|(_, w, c)| *c == Some(command) && *w == what),
+                "the status bar in {from:?} shows {what}"
+            );
+            assert!(app(&h).go_hint(to).is_some(), "drawn on {to:?} from {from:?}");
+            let (key, mods) = app(&h).config.keymap.combo_for(command).unwrap().press();
+            press(&mut h, mods, key);
+            assert_eq!(place(app(&h)), to, "{what} from {from:?}");
+        }
+        set(&mut h, from);
+        visible_keys_work(&mut h, &format!("{from:?}"));
+    }
+    set(&mut h, Focus::Sidebar);
+    shot(&mut h, "f1-focus-keys-from-tree");
+    set(&mut h, Focus::Terminal);
+    shot(&mut h, "f2-focus-keys-from-terminal");
+    set(&mut h, Focus::Editor);
+    shot(&mut h, "f0-focus-keys-from-editor");
+}
+
 #[test]
 #[ignore]
 fn headless_keyboard_for_everything() {
@@ -2568,15 +2920,22 @@ fn headless_keyboard_for_everything() {
         tree.entries.iter().filter(|e| e.is_dir && e.expanded).count()
     };
 
-    // ⌘← collapses the tree only while the tree has the keyboard.
+    // ⌥⇧C collapses the tree wherever the keyboard is: its key shows on the
+    // tree's header, so it can't be the tree's only (it used to be ⌘←, which
+    // the editor kept as "line start").
+    let alt_shift = Modifiers { alt: true, shift: true, ..Default::default() };
     assert!(open_dirs(&h) > 0, "the open file's folders start expanded");
-    press(&mut h, CMD, Key::ArrowLeft); // in the editor: line start, tree untouched
-    assert!(open_dirs(&h) > 0);
+    assert_eq!(app(&h).focus, Focus::Editor);
+    press(&mut h, alt_shift, Key::C);
+    assert_eq!(open_dirs(&h), 0, "from the editor");
+    assert_eq!(app(&h).focus, Focus::Editor);
     press(&mut h, CMD_SHIFT, Key::E);
     assert_eq!(app(&h).focus, Focus::Sidebar);
     shot(&mut h, "k0-tree-hints");
-    press(&mut h, CMD, Key::ArrowLeft);
-    assert_eq!(open_dirs(&h), 0);
+    press(&mut h, Modifiers::NONE, Key::ArrowRight); // open a folder again
+    assert!(open_dirs(&h) > 0);
+    press(&mut h, alt_shift, Key::C);
+    assert_eq!(open_dirs(&h), 0, "from the tree");
     press(&mut h, Modifiers::NONE, Key::Escape);
 
     // Text size: bigger, smaller, back to the default — saved, so every
@@ -2700,4 +3059,1124 @@ fn headless_terminal_tab_hints() {
     assert!(hints.iter().any(|(c, w)| *w == "close" && c == &vec!["⌥W".to_string()]), "{hints:?}");
     assert!(hints.iter().any(|(_, w)| *w == "close left / right"));
     shot(&mut h, "z2-terminal-tab-hints");
+}
+
+/// Remote access, end to end: turned on with a password, a browser signs in, sees this window in the list, gets frames at its own
+/// size, and its typing, shortcuts and copying act on the same live window.
+#[test]
+#[ignore]
+fn headless_remote_access() {
+    use crate::remote::testing::{https, link, sign_in};
+    use tungstenite::Message;
+    let (mut h, port) = serve_remotely("open sesame", "fn main() {}\n");
+
+    // Nothing secret reached the disk: no password file, and the password
+    // in no file of ours (the marker holds only the pid and port).
+    assert!(!crate::remote::old_secrets_path().exists());
+    let running = dirs::config_dir().unwrap().join("roxaruu").join("running");
+    for dir in [crate::config::dir(), running.clone()] {
+        let leaks = files_containing(&dir, "open sesame");
+        assert!(leaks.is_empty(), "the password is on disk: {leaks:?}");
+    }
+    let marker = std::fs::read_to_string(running.join("remote-server.json")).unwrap();
+    assert_eq!(marker, format!(r#"{{"pid":{},"port":{port}}}"#, std::process::id()));
+
+    // Sign in; this window is listed.
+    assert!(sign_in(port, "wrong").is_none());
+    let session = sign_in(port, "open sesame").expect("signed in");
+    let me = std::process::id() as i32;
+    let list = https(
+        port,
+        &format!("GET /api/windows HTTP/1.1\r\nHost: localhost:{port}\r\nCookie: {session}\r\n\r\n"),
+    );
+    assert!(list.contains(&format!("\"id\":{me}")) && list.contains("\"name\":\"shop\""), "{list}");
+
+    // Link to it, say how big the page is: frames come at that size.
+    let mut ws = link(port, me, &session);
+    ws.get_mut()
+        .sock
+        .set_read_timeout(Some(std::time::Duration::from_millis(30)))
+        .unwrap();
+    let send = |ws: &mut tungstenite::WebSocket<_>, json: &str| ws.send(Message::text(json)).unwrap();
+    send(&mut ws, r#"{"t":"size","w":900,"h":560,"dpr":1}"#);
+    // Pump the window and the link, drawing (and acking, as the page does)
+    // every frame; the picture once they go quiet.
+    let mut texts = Vec::new();
+    let mut screen = crate::remote::frames::Screen::default();
+    let mut next_frame = |h: &mut Harness<'static, Root>, ws: &mut tungstenite::WebSocket<_>, texts: &mut Vec<String>| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut got = false;
+        let mut quiet = 0;
+        while !got || quiet < 10 {
+            assert!(std::time::Instant::now() < deadline, "no frame came");
+            h.step();
+            match ws.read() {
+                Ok(Message::Binary(b)) => {
+                    assert!(screen.apply(&b), "a frame");
+                    ws.send(Message::text(crate::remote::ACK)).unwrap();
+                    got = true;
+                    quiet = 0;
+                }
+                Ok(Message::Text(t)) => texts.push(t.to_string()),
+                _ => quiet += 1,
+            }
+        }
+        screen.image()
+    };
+    let frame = next_frame(&mut h, &mut ws, &mut texts);
+    assert_eq!((frame.width(), frame.height()), (900, 560), "laid out at the browser's size");
+    let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
+    std::fs::create_dir_all(&shots).unwrap();
+    frame.save(shots.join("r0-remote-frame.png")).unwrap();
+
+    // One session: typing in the browser edits the window's file.
+    send(&mut ws, r#"{"t":"text","s":"// from the browser\n"}"#);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !text_of(&h).contains("// from the browser") {
+        assert!(std::time::Instant::now() < deadline, "the typing never landed: {:?}", text_of(&h));
+        h.step();
+    }
+    // ⌥T from a Mac browser: the press types "†" too (sent with it, as the
+    // page does). It opens the terminal and the "†" goes nowhere — not into
+    // the file, not into the terminal — exactly as on the Mac.
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let before = text_of(&h);
+    send(&mut ws, r#"{"t":"key","k":"†","code":"KeyT","down":true,"m":{"alt":true},"text":"†"}"#);
+    send(&mut ws, r#"{"t":"key","k":"†","code":"KeyT","down":false,"m":{"alt":true}}"#);
+    while !app(&h).terminal_open {
+        assert!(std::time::Instant::now() < deadline, "⌥T never opened the terminal");
+        h.step();
+    }
+    wait_for(&mut h, "a prompt", screen_has("$ "));
+    for _ in 0..10 {
+        h.step();
+    }
+    assert_eq!(text_of(&h), before, "⌥T typed into the file");
+    let screen = app(&h).terminal().unwrap().pane.screen().contents();
+    assert!(!screen.contains('†'), "⌥T typed into the terminal: {screen:?}");
+    // And a plain letter still types.
+    send(&mut ws, r#"{"t":"key","k":"x","code":"KeyX","down":true,"text":"x"}"#);
+    wait_for(&mut h, "x in the terminal", screen_has("$ x"));
+    send(&mut ws, r#"{"t":"key","k":"Backspace","code":"Backspace","down":true}"#);
+    send(&mut ws, r#"{"t":"key","k":"Backspace","code":"Backspace","down":false}"#);
+    // Let it land in the terminal before ⌘J moves the keyboard to the editor
+    // (in the same frame, the editor could get it).
+    wait_for(&mut h, "x erased", |a| !screen_has("$ x")(a));
+    send(&mut ws, r#"{"t":"key","k":"j","code":"KeyJ","down":true,"m":{"meta":true}}"#); // back to the editor
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app(&h).focus != crate::app::Focus::Editor {
+        assert!(std::time::Instant::now() < deadline, "⌘J never went back to the editor");
+        h.step();
+    }
+
+    // A shortcut from the browser: ⌘⇧P opens the command palette.
+    send(&mut ws, r#"{"t":"key","k":"p","code":"KeyP","down":true,"m":{"meta":true,"shift":true}}"#);
+    send(&mut ws, r#"{"t":"key","k":"p","code":"KeyP","down":false,"m":{"meta":true,"shift":true}}"#);
+    while app(&h).palette.is_none() {
+        assert!(std::time::Instant::now() < deadline, "the shortcut never ran");
+        h.step();
+    }
+    let frame = next_frame(&mut h, &mut ws, &mut texts);
+    frame.save(shots.join("r1-remote-palette.png")).unwrap();
+    send(&mut ws, r#"{"t":"key","k":"Escape","code":"Escape","down":true}"#);
+    while app(&h).palette.is_some() {
+        assert!(std::time::Instant::now() < deadline, "esc never closed the palette");
+        h.step();
+    }
+
+    // Copying in the browser lands in the browser's clipboard.
+    send(&mut ws, r#"{"t":"key","k":"a","code":"KeyA","down":true,"m":{"meta":true}}"#);
+    for _ in 0..5 {
+        h.step();
+    }
+    send(&mut ws, r#"{"t":"copy"}"#);
+    while !texts.iter().any(|t| t.contains("\"t\":\"clip\"") && t.contains("from the browser")) {
+        assert!(std::time::Instant::now() < deadline, "no clipboard text: {texts:?}");
+        h.step();
+        if let Ok(Message::Text(t)) = ws.read() {
+            texts.push(t.to_string());
+        }
+    }
+
+    // Where to open it, with a QR code for phones.
+    let ctx = h.ctx.clone();
+    h.state_mut().0.run(crate::keymap::Command::ShowRemoteAddress, &ctx);
+    shot(&mut h, "r3-address-dialog");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(app(&h).ask.is_none(), "esc closes it");
+
+    // Turned off: the server stops, the browser's link closes, and this
+    // window is no longer listed.
+    h.state_mut().0.run(crate::keymap::Command::ToggleRemoteAccess, &ctx);
+    assert!(app(&h).ask.is_none(), "turning off asks nothing");
+    wait_link_closed(&mut ws, || h.step());
+    wait_port_closed(port, || h.step());
+    h.step();
+    assert!(!app(&h).remote.on && crate::instances::remote_server().is_none());
+    assert!(crate::instances::remote_windows().is_empty());
+
+    // Turning on again asks for a password again (typed hidden).
+    h.state_mut().0.run(crate::keymap::Command::ToggleRemoteAccess, &ctx);
+    h.step(); // the field takes the keyboard as the dialog appears
+    type_text(&mut h, "secret");
+    shot(&mut h, "r2-password-dialog");
+    assert!(
+        matches!(&app(&h).ask, Some(crate::app::Ask::RemotePassword { password }) if password == "secret")
+    );
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    h.step();
+    assert!(!app(&h).remote.on, "cancelled: still off");
+}
+
+/// Remote access never outlives its window: off at launch whatever an old
+/// build saved (and that build's password file deleted), stopped when
+/// turned off from another window, and stopped when the window closes.
+#[test]
+#[ignore]
+fn headless_remote_stops_with_the_window() {
+    use crate::remote::testing::{link, sign_in};
+    let _restore = keep_settings();
+    std::fs::create_dir_all(crate::config::dir()).unwrap();
+    std::fs::write(crate::config::settings_path(), "{ \"remoteAccess\": true }").unwrap();
+    std::fs::write(crate::remote::old_secrets_path(), r#"{"salt":"00","hash":"00","iterations":1,"key":"00"}"#)
+        .unwrap();
+    let mut h = harness(None);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(!crate::remote::old_secrets_path().exists(), "the old password file is gone");
+    assert!(app(&h).config.errors.is_empty(), "{:?}", app(&h).config.errors);
+    assert!(!app(&h).remote.on && crate::instances::remote_server().is_none(), "off at launch");
+    drop(h);
+
+    // Turned off from another window: it removes the marker, and the
+    // serving window stops.
+    let (mut h, port) = serve_remotely("pw", "");
+    let session = sign_in(port, "pw").expect("signed in");
+    let mut ws = link(port, std::process::id() as i32, &session);
+    crate::instances::clear_remote_server(false);
+    wait_link_closed(&mut ws, || {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    });
+    wait_port_closed(port, || h.step());
+    drop(h);
+
+    // The serving window closes: the server stops with it.
+    let (h, port) = serve_remotely("pw", "");
+    let session = sign_in(port, "pw").expect("signed in");
+    let mut ws = link(port, std::process::id() as i32, &session);
+    drop(h);
+    assert!(crate::instances::remote_server().is_none(), "the marker went with the window");
+    assert!(crate::instances::remote_windows().is_empty());
+    wait_link_closed(&mut ws, || {});
+    wait_port_closed(port, || {});
+}
+
+/// Files under `dir` holding `needle`.
+fn files_containing(dir: &std::path::Path, needle: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            out.extend(files_containing(&path, needle));
+        } else if std::fs::read(&path).is_ok_and(|b| String::from_utf8_lossy(&b).contains(needle)) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// Wait (calling `step`) until the browser's live link is closed.
+fn wait_link_closed(ws: &mut tungstenite::WebSocket<crate::remote::testing::Tls>, mut step: impl FnMut()) {
+    ws.get_mut()
+        .sock
+        .set_read_timeout(Some(std::time::Duration::from_millis(30)))
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        assert!(std::time::Instant::now() < deadline, "the browser is still linked");
+        step();
+        match ws.read() {
+            Err(tungstenite::Error::Io(e))
+                if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Err(_) => return,
+            Ok(_) => {}
+        }
+    }
+}
+
+/// Wait (calling `step`) until nothing listens on `port`.
+fn wait_port_closed(port: u16, mut step: impl FnMut()) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        assert!(std::time::Instant::now() < deadline, "still serving on {port}");
+        step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// A window with project `shop/a.rs` (holding `text`), remote access turned
+/// on as a user would (the command, then the password), serving on a free
+/// port once this returns.
+fn serve_remotely(password: &str, text: &str) -> (Harness<'static, Root>, u16) {
+    let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("a.rs"), text).unwrap();
+    let mut h = harness(Some(root.join("a.rs")));
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    h.state_mut().1.port = port;
+    h.step();
+    let ctx = h.ctx.clone();
+    h.state_mut().0.run(crate::keymap::Command::ToggleRemoteAccess, &ctx);
+    h.step(); // the field takes the keyboard as the dialog appears
+    assert!(matches!(&app(&h).ask, Some(crate::app::Ask::RemotePassword { password }) if password.is_empty()));
+    type_text(&mut h, password);
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+        assert!(std::time::Instant::now() < deadline, "the server never started");
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(app(&h).remote.on && app(&h).remote.problem.is_none(), "{:?}", app(&h).remote);
+    assert!(matches!(app(&h).ask, Some(crate::app::Ask::RemoteAddress)), "then where to open it");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    (h, port)
+}
+
+/// The real page in a real (headless) Chrome: sign in through the form, see
+/// the window drawn on the canvas at the page's size, and type into it.
+/// Skipped when Node or Chrome isn't installed.
+#[test]
+#[ignore]
+fn headless_remote_in_chrome() {
+    let Some((node, chrome)) = node_and_chrome() else {
+        eprintln!("skipped: needs Node and Google Chrome");
+        return;
+    };
+    let (mut h, port) = serve_remotely("open sesame", "fn main() {}\n");
+    let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
+    std::fs::create_dir_all(&shots).unwrap();
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/remote_browser.mjs");
+    let out_path = shots.join("chrome-run.log");
+    let mut child = std::process::Command::new(node)
+        .arg(&script)
+        .arg(port.to_string())
+        .arg("open sesame")
+        .arg(&shots)
+        .arg(chrome)
+        .stdout(std::fs::File::create(&out_path).unwrap())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap();
+    // Keep the window running while Chrome drives the page; turn remote
+    // access off when it asks (to see the page say it's disconnected).
+    let mut off = false;
+    let status = loop {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        if !off && std::fs::read_to_string(&out_path).unwrap_or_default().contains("STEP turn-off") {
+            off = true;
+            let ctx = h.ctx.clone();
+            h.state_mut().0.run(crate::keymap::Command::ToggleRemoteAccess, &ctx);
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+    };
+    let out = std::fs::read_to_string(&out_path).unwrap_or_default();
+    assert!(off, "the page never got to remote access turning off: {out}");
+    assert!(status.success() && out.lines().any(|l| l.starts_with("OK ")), "{out}");
+    assert!(out.contains("listed=shop"), "{out}");
+    // Chrome's keystrokes landed in the window's editor; its ⌥T opened the
+    // terminal without typing "†" anywhere.
+    for _ in 0..10 {
+        h.step();
+    }
+    assert!(text_of(&h).contains("zq"), "{:?}", text_of(&h));
+    assert!(app(&h).terminal_open, "⌥T from Chrome opened the terminal");
+    assert!(!text_of(&h).contains('†'), "{:?}", text_of(&h));
+    let screen = app(&h).terminal().map(|t| t.pane.screen().contents()).unwrap_or_default();
+    assert!(!screen.contains('†'), "{screen:?}");
+}
+
+/// Node and Google Chrome, for the tests that drive the real page.
+fn node_and_chrome() -> Option<(&'static str, &'static str)> {
+    let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    let node = ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())?;
+    std::path::Path::new(chrome).exists().then_some((node, chrome))
+}
+
+/// Real key, mouse, wheel and touch events from Chrome (CDP's
+/// `Input.dispatch*Event`, so through the page's real handlers) reach the
+/// window as on the Mac: typing with ⇧, ⌥ accents and dead keys, ⌥T not
+/// typing "†", ⌘P opening Go to File, the wheel and finger drags scrolling
+/// (a flick coasting further), clicks, ⇧-click, triple-click and ⌘C/⌘X/⌘V
+/// with this browser's clipboard, right-click and long-press menus, ⌃C in a
+/// shell, links opening in the browser, the phone keyboard (input methods,
+/// autocorrect, Backspace) and an edge swipe for the drawer. The script
+/// prints `STEP <name>` once each part has landed; each is checked here.
+#[test]
+#[ignore]
+fn headless_remote_input_in_chrome() {
+    use crate::app::Focus;
+    use std::io::BufRead;
+    let Some((node, chrome)) = node_and_chrome() else {
+        eprintln!("skipped: needs Node and Google Chrome");
+        return;
+    };
+    let text: String = (0..300).map(|i| format!("row {i}\n")).collect();
+    let (mut h, port) = serve_remotely("open sesame", &text);
+    // No CJK font is bundled: the input method's "日本" draws as boxes.
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+    let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
+    std::fs::create_dir_all(&shots).unwrap();
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/remote_browser.mjs");
+    let mut child = std::process::Command::new(node)
+        .args([script.as_os_str(), port.to_string().as_ref(), "open sesame".as_ref(), shots.as_os_str()])
+        .args([chrome, "input"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let stdout = child.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = tx.send(line);
+        }
+    });
+    let lines = |h: &Harness<'static, Root>| -> Vec<String> { text_of(h).lines().map(String::from).collect() };
+    // The row number on the line typed `suffix` at the end of ("row 12W").
+    let row_with = |h: &Harness<'static, Root>, suffix: &str| -> Option<usize> {
+        lines(h).iter().find_map(|l| l.strip_prefix("row ")?.strip_suffix(suffix)?.parse().ok())
+    };
+    let menu_open = |h: &Harness<'static, Root>| h.state().1.ctx().any_popup_open();
+    let (mut out, mut seen, mut dragged_to) = (Vec::new(), Vec::new(), 0);
+    let mut before_pinch = String::new();
+    let mut caret_before = (0, 0);
+    let status = loop {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let Ok(line) = rx.try_recv() else {
+            match child.try_wait().unwrap() {
+                Some(status) if rx.try_recv().is_err() => break status,
+                _ => continue,
+            }
+        };
+        out.push(line.clone());
+        let Some(step) = line.strip_prefix("STEP ") else { continue };
+        for _ in 0..3 {
+            h.step();
+        }
+        seen.push(step.to_string());
+        let a = app(&h);
+        let screen = a.terminal().map(|t| t.pane.screen().contents()).unwrap_or_default();
+        let first = lines(&h).first().cloned().unwrap_or_default();
+        let what = format!("at {step}: {first:?}");
+        match step {
+            "typed" => assert_eq!(first, "Hiéå row 0", "⇧H, ⌥E E, ⌥A, a Backspace {what}"),
+            "lines" => {
+                let second = &lines(&h)[1];
+                assert!(second.ends_with("trrr") && second.starts_with(char::is_whitespace), "{second:?}")
+            }
+            "wheeled" => {
+                let w: Vec<_> = lines(&h).into_iter().filter(|l| l.contains('W')).collect();
+                assert!(row_with(&h, "W").is_some_and(|n| n >= 5), "the wheel scrolled {what} {w:?}")
+            }
+            "cut" => {
+                let clip = out.iter().rev().find_map(|l| l.strip_prefix("CLIP2 ")).unwrap_or_default();
+                assert!(clip.contains("trrr") && !text_of(&h).contains("trrr"), "⇧-click + ⌘X cut {clip} {what}");
+            }
+            "pasted" => assert!(text_of(&h).contains("P!"), "{what}"),
+            "refocused" => {
+                assert!(text_of(&h).contains("P!k"), "⇧ let go while away {what}");
+                before_pinch = text_of(&h);
+            }
+            "pinched" => assert_eq!(text_of(&h), before_pinch, "a pinch types nothing"),
+            "menu" | "long-pressed" => assert!(menu_open(&h), "a menu is up {what}"),
+            "menu-closed" => assert!(!menu_open(&h), "{what}"),
+            "palette" => assert_eq!(a.focus, crate::app::Focus::Sidebar, "⌘P went to the file search"),
+            "palette-closed" => {
+                assert_eq!(a.focus, crate::app::Focus::Editor);
+                caret_before = a.active_tab().unwrap().caret();
+            }
+            // The page's window list kept its keys (↓, esc) and the click
+            // that closed it: the editor saw none of them.
+            "windows" => {
+                assert_eq!(a.focus, crate::app::Focus::Editor, "{what}");
+                assert!(a.palette.is_none() && !menu_open(&h), "{what}");
+                assert_eq!(a.active_tab().unwrap().caret(), caret_before, "{what}");
+            }
+            "terminal" => {
+                assert!(screen.contains("done-2"), "⌃C interrupted, then typed: {screen:?}");
+                assert!(!screen.contains('†') && !text_of(&h).contains('†'), "{screen:?}");
+            }
+            "link-opened" => assert!(a.ask.is_none(), "answered"),
+            "editor-again" => assert_eq!(a.focus, Focus::Editor),
+            "dragged" => {
+                dragged_to = row_with(&h, "A").unwrap_or(0);
+                assert!(dragged_to >= 3, "a finger's drag scrolled {what}");
+            }
+            "flicked" => {
+                let to = row_with(&h, "F").unwrap_or(0);
+                assert!(to > dragged_to, "a flick coasts further: {to} vs {dragged_to}");
+            }
+            "tapped" => assert!(first.ends_with('T'), "a tap clicked {what}"),
+            "after-pinch" => assert!(first.ends_with("TZ"), "taps work after a page pinch {what}"),
+            "soft-keyboard" => {
+                assert!(first.ends_with("hello日本th"), "phone keyboard, input method, autocorrect, Backspace {what}");
+                assert!(!text_of(&h).contains("にほ") && !text_of(&h).contains("teh"), "{what}");
+                assert!(lines(&h)[1].starts_with("row "), "Enter, then Backspace joined the line back");
+            }
+            "swiped" => assert!(a.views[1].compact && a.views[1].drawer, "an edge swipe opened the phone's drawer"),
+            _ => {}
+        }
+    };
+    let out = out.join("\n");
+    assert!(status.success() && out.contains("\nOK "), "{out}");
+    for step in ["typed", "wheeled", "menu", "palette", "windows", "terminal", "link-opened", "flicked", "long-pressed", "soft-keyboard", "swiped"] {
+        assert!(seen.iter().any(|s| s == step), "{step} never ran: {out}");
+    }
+    let clip = |n| out.lines().find_map(|l| l.strip_prefix(&format!("CLIP{n} ")).map(String::from)).unwrap_or_default();
+    assert!(clip(1).contains("Hiéå row 0"), "triple-click + ⌘C reached the browser's clipboard: {}", clip(1));
+    assert!(clip(2).contains("trrr"), "⇧-click + ⌘X: {}", clip(2));
+    assert!(!text_of(&h).contains("trrr"), "and it was cut");
+    assert!(out.contains("OPENED \"https://example.com/rox\""), "the link opened in the browser: {out}");
+    assert!(App::take_launched().is_empty(), "nothing opened on the Mac");
+}
+
+/// A small project with a file open, a terminal and the tree: what the
+/// small-screen tests look at.
+fn small_screen_project() -> (tempfile::TempDir, PathBuf, Harness<'static, Root>) {
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    for d in [".git", "src/cart", "docs"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    for (f, body) in [
+        ("src/main.rs", "mod cart;\n\n/// Where it all starts.\nfn main() {\n    let total = cart::checkout(&[3, 4, 5]);\n    println!(\"total: {total}\");\n}\n"),
+        ("src/cart/mod.rs", "pub fn checkout(items: &[u32]) -> u32 {\n    items.iter().sum()\n}\n"),
+        ("src/cart/tax.rs", "pub const RATE: f32 = 0.2;\n"),
+        ("docs/guide.md", "# Guide\n"),
+        ("README.md", "# Shop\n"),
+        ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+    ] {
+        std::fs::write(root.join(f), body).unwrap();
+    }
+    let mut h = harness(Some(root.join("src/main.rs")));
+    h.state_mut().0.open_file(&root.join("src/cart/mod.rs"));
+    h.state_mut().0.open_file(&root.join("README.md"));
+    h.state_mut().0.select_tab(0);
+    (dir, root, h)
+}
+
+/// Phones and tablets: the window laid out at their sizes.
+#[test]
+#[ignore]
+fn headless_small_screens() {
+    let (_dir, _root, mut h) = small_screen_project();
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "a prompt", screen_has("$ "));
+    press(&mut h, CMD, Key::J); // back to the editor
+    for (name, w, ht) in [
+        ("phone", 390.0, 844.0),
+        ("phone-wide", 430.0, 932.0),
+        ("phone-landscape", 844.0, 390.0),
+        ("tablet", 768.0, 1024.0),
+        ("tablet-landscape", 1024.0, 768.0),
+        ("desktop", 1280.0, 820.0),
+    ] {
+        h.set_size(egui::vec2(w, ht));
+        shot(&mut h, &format!("s-{name}"));
+    }
+
+    // The tree, on a phone: a drawer over the editor, its own to this view.
+    h.set_size(egui::vec2(390.0, 844.0));
+    h.step();
+    let saved = app(&h).config.settings.sidebar;
+    press(&mut h, CMD, Key::B);
+    shot(&mut h, "s-phone-drawer");
+    assert!(app(&h).views[0].drawer && app(&h).focus == crate::app::Focus::Sidebar);
+    assert_eq!(app(&h).config.settings.sidebar, saved, "the drawer isn't the setting");
+    // A tap beside it puts it away.
+    click(&mut h, egui::pos2(370.0, 400.0), None);
+    shot(&mut h, "s-phone-drawer-closed");
+    assert!(!app(&h).views[0].drawer && app(&h).focus == crate::app::Focus::Editor);
+    // Opening a file from it puts it away too.
+    press(&mut h, CMD, Key::B);
+    press(&mut h, Modifiers::NONE, Key::End);
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(!app(&h).views[0].drawer);
+    assert!(app(&h).active_tab().is_some_and(|t| t.buf.name() == "README.md"), "opened from the drawer");
+    press(&mut h, CMD_SHIFT, Key::P);
+    shot(&mut h, "s-phone-palette");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    h.state_mut().0.tabs[0].buf.modified = true;
+    h.state_mut().0.select_tab(0);
+    let ctx = h.ctx.clone();
+    h.state_mut().0.run(crate::keymap::Command::CloseTab, &ctx);
+    shot(&mut h, "s-phone-dialog");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    h.state_mut().0.tabs[0].buf.modified = false;
+    // Wide again: the tree is back beside the editor as it was.
+    h.set_size(egui::vec2(1280.0, 820.0));
+    shot(&mut h, "s-desktop-after");
+    assert_eq!(app(&h).config.settings.sidebar, saved);
+}
+
+/// The other screens at phone size: start page, a folder's home page, the
+/// shortcuts sheet, Go to File.
+#[test]
+#[ignore]
+fn headless_small_screen_pages() {
+    let mut h = harness(None);
+    h.set_size(egui::vec2(390.0, 844.0));
+    shot(&mut h, "s-phone-welcome");
+    let (_dir, _root, mut h) = small_screen_project();
+    h.set_size(egui::vec2(390.0, 844.0));
+    press(&mut h, Modifiers::NONE, Key::F1);
+    shot(&mut h, "s-phone-help");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    press(&mut h, ALT, Key::F);
+    shot(&mut h, "s-phone-goto");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    h.state_mut().0.tabs.clear();
+    h.state_mut().0.active = None;
+    shot(&mut h, "s-phone-home");
+}
+
+/// A phone looking in gets its own compact layout — the tree as a drawer —
+/// while the Mac's window, the saved settings and the window's own drawer
+/// stay exactly as they were.
+#[test]
+#[ignore]
+fn headless_remote_phone_layout() {
+    use crate::remote::testing::{link, sign_in};
+    use tungstenite::Message;
+    let (mut h, port) = serve_remotely("open sesame", "fn main() {}\n");
+    h.state_mut().0.config.settings.sidebar = true;
+    let settings = std::fs::read_to_string(crate::config::settings_path()).unwrap_or_default();
+    let session = sign_in(port, "open sesame").expect("signed in");
+    let mut ws = link(port, std::process::id() as i32, &session);
+    ws.get_mut()
+        .sock
+        .set_read_timeout(Some(std::time::Duration::from_millis(30)))
+        .unwrap();
+    let send = |ws: &mut tungstenite::WebSocket<_>, json: &str| ws.send(Message::text(json)).unwrap();
+    send(&mut ws, r#"{"t":"size","w":390,"h":844,"dpr":1}"#);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !app(&h).views[1].compact {
+        assert!(std::time::Instant::now() < deadline, "the phone's copy never laid out");
+        h.step();
+    }
+    assert!(!app(&h).views[0].compact, "the Mac's window is still full size");
+    // ⌘B on the phone: its drawer comes out; the Mac keeps its tree column.
+    send(&mut ws, r#"{"t":"key","k":"b","code":"KeyB","down":true,"m":{"meta":true}}"#);
+    send(&mut ws, r#"{"t":"key","k":"b","code":"KeyB","down":false,"m":{"meta":true}}"#);
+    while !app(&h).views[1].drawer {
+        assert!(std::time::Instant::now() < deadline, "⌘B never opened the phone's drawer");
+        h.step();
+    }
+    // What the phone sees: every frame drawn (and acked), once they go quiet.
+    let (mut screen, mut got, mut quiet) = (crate::remote::frames::Screen::default(), false, 0);
+    while !got || quiet < 10 {
+        assert!(std::time::Instant::now() < deadline, "no frame came");
+        h.step();
+        match ws.read() {
+            Ok(Message::Binary(b)) => {
+                assert!(screen.apply(&b), "a frame");
+                ws.send(Message::text(crate::remote::ACK)).unwrap();
+                (got, quiet) = (true, 0);
+            }
+            _ => quiet += 1,
+        }
+    }
+    let frame = screen.image();
+    assert_eq!((frame.width(), frame.height()), (390, 844));
+    let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
+    std::fs::create_dir_all(&shots).unwrap();
+    frame.save(shots.join("s-remote-phone-drawer.png")).unwrap();
+    shot(&mut h, "s-remote-mac-unchanged");
+    let a = app(&h);
+    assert!(!a.views[0].drawer && !a.views[0].compact);
+    assert!(a.config.settings.sidebar, "the Mac's tree is still shown");
+    assert_eq!(
+        std::fs::read_to_string(crate::config::settings_path()).unwrap_or_default(),
+        settings,
+        "nothing saved"
+    );
+    drop(ws);
+}
+
+/// Keys typed and a shortcut landing in the same frame (a slow frame, or a
+/// browser's batch): the shortcut runs and swallows only its own text (⌥T's
+/// "†", right after its key); the typing before it still lands.
+#[test]
+#[ignore]
+fn headless_chord_keeps_other_typing_in_its_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    std::fs::write(root.join("a.rs"), "").unwrap();
+    let mut h = harness(Some(root.join("a.rs")));
+    let k = |key, modifiers| Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers };
+    // "ab", then ⌘S, in one frame.
+    h.event(Event::Text("ab".into()));
+    h.event(k(Key::S, CMD));
+    h.step();
+    assert_eq!(text_of(&h), "ab");
+    assert!(!h.state().0.active_tab().unwrap().buf.modified, "⌘S ran");
+    // "c", then ⌥T with its "†", in one frame.
+    h.event(Event::Text("c".into()));
+    h.event(k(Key::T, ALT));
+    h.event(Event::Text("†".into()));
+    h.step();
+    assert_eq!(text_of(&h), "abc", "the c stays, the † goes");
+    assert!(app(&h).terminal_open, "⌥T ran");
+}
+
+/// egui reports ⇧ ⌃ ⌥ ⌘ pressed on their own as keys (`ShiftLeft`…), on
+/// the Mac and from a browser alike. They aren't typing: pressing ⇧ to
+/// ⇧-click after scrolling away keeps the view where it is; and recording
+/// a shortcut records the chord, not the first modifier pressed.
+#[test]
+#[ignore]
+fn headless_modifier_keys_are_not_typing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    let text: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(root.join("a.rs"), text).unwrap();
+    let mut h = harness(Some(root.join("a.rs")));
+    let modifier = |key, pressed, modifiers| Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+    h.event(Event::PointerMoved(egui::pos2(700.0, 400.0)));
+    h.event(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -600.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: Modifiers::NONE,
+    });
+    for _ in 0..30 {
+        h.step();
+    }
+    let scrolled = app(&h).active_tab().unwrap().scroll[0].y;
+    assert!(scrolled > 300.0, "{scrolled}");
+    h.event(modifier(Key::ShiftLeft, true, Modifiers::NONE));
+    h.event(Event::ModifiersChanged(SHIFT));
+    h.step();
+    h.step();
+    assert_eq!(app(&h).active_tab().unwrap().scroll[0].y, scrolled, "⇧ alone jumped back to the caret");
+    h.event(modifier(Key::ShiftLeft, false, SHIFT));
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.step();
+
+    // Record ⌥E for Go to File, pressed as a person does: ⌥, then E.
+    let bindings = crate::config::dir().join("keybindings.json");
+    let before = std::fs::read_to_string(&bindings).ok();
+    press(&mut h, CMD_SHIFT, Key::P);
+    type_text(&mut h, "edit keyboard shortcuts");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    type_text(&mut h, "go to file");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(app(&h).capturing());
+    h.event(modifier(Key::AltLeft, true, Modifiers::NONE));
+    h.event(Event::ModifiersChanged(ALT));
+    h.step();
+    assert!(app(&h).capturing(), "⌥ alone isn't a shortcut");
+    h.event(modifier(Key::E, true, ALT));
+    h.step();
+    let combo = app(&h).config.keymap.combo_for(crate::keymap::Command::GoToFile).map(|k| k.to_config());
+    match before {
+        Some(b) => std::fs::write(&bindings, b).unwrap(),
+        None => {
+            let _ = std::fs::remove_file(&bindings);
+        }
+    }
+    assert_eq!(combo.as_deref(), Some("alt+e"));
+}
+
+/// A key that opens a list or a dialog never also acts inside it. From the
+/// start screen: ↓ to Recent Folders, ↵ opens the list — it doesn't also
+/// open the first folder in it. And a dialog that comes up in the same frame
+/// as an ↵ isn't answered by that ↵.
+#[test]
+#[ignore]
+fn headless_opening_key_stays_with_its_opener() {
+    use crate::palette::Mode;
+    // A recent folder to (wrongly) open.
+    let dir = tempfile::tempdir().unwrap();
+    let recent = dir.path().canonicalize().unwrap().join("old-project");
+    std::fs::create_dir_all(recent.join(".git")).unwrap();
+    crate::recent::record(&recent);
+
+    let mut h = harness(None);
+    h.step();
+    press(&mut h, Modifiers::NONE, Key::ArrowDown); // Recent Folders
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    h.step();
+    assert_eq!(app(&h).palette.as_ref().map(|p| p.mode), Some(Mode::Recent), "the list opened");
+    assert!(app(&h).project.is_none(), "and nothing in it was opened");
+    shot(&mut h, "k-recent-list");
+    // From there, ↵ is the list's: it opens the selected folder.
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    h.step();
+    assert!(app(&h).palette.is_none());
+
+    // A dialog opened in the same frame as an ↵: the ↵ doesn't answer it.
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("a.rs"), "\n").unwrap();
+    let mut h = harness(Some(root.join("a.rs")));
+    h.step();
+    // ⌘N (New File…) and ↵ in the very same frame (the harness's own key
+    // helpers spread presses over frames, so put them in by hand).
+    for (key, modifiers) in [(Key::N, CMD), (Key::Enter, Modifiers::NONE)] {
+        for pressed in [true, false] {
+            h.input_mut().events.push(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
+        }
+    }
+    h.step();
+    h.step();
+    assert!(
+        matches!(app(&h).ask, Some(crate::app::Ask::NewFile { .. })),
+        "the dialog waits for a real answer"
+    );
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(app(&h).ask.is_none());
+}
+
+/// Time and memory to open `MEASURE` (a file, or a folder whose `*.rs`
+/// files become its saved session of tabs). Skipped unless `MEASURE` is
+/// set; run one size per process so earlier allocations don't blur it:
+/// `MEASURE=/path/big.rs cargo test --release headless_measure_open -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn headless_measure_open() {
+    let Ok(target) = std::env::var("MEASURE") else { return };
+    let target = PathBuf::from(target).canonicalize().unwrap();
+    if target.is_dir() {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&target)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+            .collect();
+        files.sort();
+        crate::session::save(&target, &files, 0);
+    }
+    let footprint = || crate::sys::usage(std::process::id() as i32).unwrap().footprint_kb / 1024;
+    let before = footprint();
+    let start = std::time::Instant::now();
+    let mut h = harness(Some(target.clone()));
+    h.step();
+    h.step();
+    let opened = start.elapsed();
+    let at_open = footprint();
+    // Let background work (highlighting) finish, then look again.
+    let settle = std::time::Instant::now();
+    while settle.elapsed() < std::time::Duration::from_secs(4) {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    eprintln!(
+        "MEASURE {}: {} tabs, shown in {opened:?}, footprint +{} MB at open, +{} MB after 4 s",
+        target.display(),
+        app(&h).tabs.len(),
+        at_open.saturating_sub(before),
+        footprint().saturating_sub(before),
+    );
+}
+
+/// A project whose saved session has `n` tabs (`f0.rs`…), the first active.
+fn project_with_session(n: usize) -> (tempfile::TempDir, PathBuf, Vec<PathBuf>) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("lazy");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let files: Vec<PathBuf> = (0..n)
+        .map(|i| {
+            let f = root.join(format!("f{i}.rs"));
+            std::fs::write(&f, format!("fn f{i}() {{}}\n")).unwrap();
+            f
+        })
+        .collect();
+    crate::session::save(&root, &files, 0);
+    (dir, root, files)
+}
+
+/// Restored tabs read nothing until they're shown, yet everything about
+/// tabs works on them: names, switching, disk changes, split view, closing.
+#[test]
+#[ignore]
+fn headless_restored_tabs_load_when_shown() {
+    let (_dir, root, files) = project_with_session(4);
+    let mut h = harness(Some(root.clone()));
+    no_sidebar(&mut h);
+    h.step();
+    let loaded = |h: &Harness<'static, Root>| -> Vec<bool> {
+        app(h).tabs.iter().map(|t| t.is_loaded()).collect()
+    };
+    assert_eq!(loaded(&h), [true, false, false, false], "only the tab in front was read");
+    let names: Vec<String> = app(&h).tabs.iter().map(|t| t.buf.name()).collect();
+    assert_eq!(names, ["f0.rs", "f1.rs", "f2.rs", "f3.rs"], "named without reading");
+    assert!(app(&h).tabs[1].buf.lang.is_some(), "and their icons know the language");
+    shot(&mut h, "lazy-0-restored");
+
+    // Deleted before it was ever shown: struck through, nothing read.
+    std::fs::remove_file(&files[3]).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    h.step();
+    h.step();
+    assert!(app(&h).tabs[3].gone && !app(&h).tabs[3].is_loaded());
+
+    // Switching to one reads it, and it's an ordinary tab.
+    press(&mut h, CMD, Key::Num2);
+    assert_eq!(app(&h).active, Some(1));
+    assert_eq!(loaded(&h), [true, true, false, false]);
+    assert_eq!(app(&h).tabs[1].buf.rope.to_string(), "fn f1() {}\n");
+    type_text(&mut h, "x");
+    assert!(app(&h).tabs[1].buf.modified);
+    press(&mut h, CMD, Key::Z);
+
+    // Go to File on a tab not read yet just switches to it (and reads it).
+    h.state_mut().0.open_file(&files[2]);
+    h.step();
+    assert_eq!(app(&h).active, Some(2));
+    assert_eq!(app(&h).tabs.len(), 4);
+    assert!(app(&h).tabs[2].is_loaded());
+    shot(&mut h, "lazy-1-shown");
+
+    // Close All: nothing unsaved, so no questions, and no file was touched.
+    press(&mut h, CMD_SHIFT, Key::W);
+    h.step();
+    assert!(app(&h).prompt.is_none());
+    assert!(app(&h).tabs.is_empty());
+    assert_eq!(std::fs::read_to_string(&files[1]).unwrap(), "fn f1() {}\n");
+}
+
+/// Split view shows every tab, so it reads each one it shows.
+#[test]
+#[ignore]
+fn headless_split_view_loads_its_tiles() {
+    let (_dir, root, _files) = project_with_session(3);
+    let mut h = harness(Some(root));
+    no_sidebar(&mut h);
+    h.step();
+    assert!(!app(&h).tabs[2].is_loaded());
+    press(&mut h, CMD, Key::Backslash);
+    h.step();
+    assert!(app(&h).editor_grid);
+    assert!(app(&h).tabs.iter().all(|t| t.is_loaded()));
+    shot(&mut h, "lazy-2-split");
+}
+
+/// `lines` lines of `line n` text, with `marker` on line `marker_at`.
+fn write_numbered(path: &std::path::Path, lines: usize, marker_at: usize) {
+    use std::io::Write;
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
+    for n in 0..lines {
+        if n == marker_at {
+            writeln!(f, "let found_me_here = {n}; // marker").unwrap();
+        } else {
+            writeln!(f, "let value_{n} = compute({n}, \"text\"); // line {n}").unwrap();
+        }
+    }
+}
+
+/// A file far past `HUGE_BYTES` opens at once, read-only, holding only the
+/// lines on screen; the keyboard reaches its end, Go to Line and Find work.
+#[test]
+#[ignore]
+fn headless_huge_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("logs");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let path = root.join("huge.rs");
+    let lines = 2_400_000; // ~120 MB
+    write_numbered(&path, lines, 2_000_000);
+    let size = std::fs::metadata(&path).unwrap().len();
+    assert!(size > 100 << 20);
+
+    let footprint = || crate::sys::usage(std::process::id() as i32).unwrap().footprint_kb / 1024;
+    let before = footprint();
+    let start = std::time::Instant::now();
+    let mut h = harness(Some(path.clone()));
+    h.step();
+    let opened = start.elapsed();
+    let grew = footprint().saturating_sub(before);
+    eprintln!("huge file ({} MB): shown in {opened:?}, footprint +{grew} MB", size >> 20);
+    assert!(opened < std::time::Duration::from_secs(3), "{opened:?}");
+    assert!(grew < 100, "only what's on screen is held: +{grew} MB");
+    let view = |h: &Harness<'static, Root>| {
+        let t = app(h).active_tab().unwrap();
+        let v = t.huge.as_ref().expect("opened as the huge-file view");
+        (v.top, v.cursor, v.lines())
+    };
+    assert_eq!(view(&h).2, lines + 1, "the empty line after the last break counts");
+    shot(&mut h, "huge-0-open");
+
+    // To the end and back, by keyboard.
+    press(&mut h, CMD, Key::ArrowDown);
+    let (top, cursor, n) = view(&h);
+    assert_eq!(cursor, n - 1);
+    assert!(top <= cursor && cursor < top + 60);
+    let t = app(&h).active_tab().unwrap();
+    assert_eq!(t.line_text(lines - 1), format!("let value_{0} = compute({0}, \"text\"); // line {0}", lines - 1));
+    shot(&mut h, "huge-1-end");
+    press(&mut h, Modifiers::NONE, Key::PageUp);
+    assert!(view(&h).1 < n - 10);
+
+    // Read-only: typing changes nothing, and nothing can be saved over it.
+    type_text(&mut h, "oops");
+    press(&mut h, CMD, Key::S);
+    assert!(!app(&h).active_tab().unwrap().buf.modified);
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), size);
+    assert!(!app(&h).available(crate::keymap::Command::Paste));
+    assert!(app(&h).available(crate::keymap::Command::EditWholeFile));
+
+    // Go to Line.
+    press(&mut h, CMD, Key::L);
+    type_text(&mut h, "1234567");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(view(&h).1, 1_234_566);
+    assert_eq!(
+        app(&h).status_position().as_deref(),
+        Some("Ln 1234567 of 2400001  ·  read-only")
+    );
+
+    // Find searches the file on disk.
+    press(&mut h, CMD, Key::F);
+    type_text(&mut h, "FOUND_ME");
+    h.step();
+    let t = app(&h).active_tab().unwrap();
+    let found = t.huge.as_ref().unwrap().found;
+    assert_eq!(found.map(|f| (f.0, f.1)), Some((2_000_000, 4)), "case ignored");
+    assert_eq!(view(&h).1, 2_000_000);
+    shot(&mut h, "huge-2-found");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let t = app(&h).active_tab().unwrap();
+    assert_eq!(t.huge.as_ref().unwrap().found.map(|f| f.0), Some(2_000_000), "the only one: wraps to itself");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+}
+
+/// A big file that still fits in memory edits as ever, with highlighting,
+/// wrapping and widths worked out only around the view.
+#[test]
+#[ignore]
+fn headless_big_file_works_around_the_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("big");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let path = root.join("big.rs");
+    write_numbered(&path, 60_000, 50_000); // ~3 MB
+    let mut h = harness(Some(path.clone()));
+    no_sidebar(&mut h);
+    h.state_mut().0.config.settings.word_wrap = true;
+    h.step();
+    assert!(app(&h).active_tab().unwrap().huge.is_none());
+
+    press(&mut h, CMD, Key::L);
+    type_text(&mut h, "50001");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    type_text(&mut h, "/*x*/ ");
+    let t = app(&h).active_tab().unwrap();
+    assert!(t.line_text(50_000).starts_with("/*x*/ let found_me_here"));
+    assert!(t.buf.modified);
+    // Highlighting arrives for the lines on screen, not for the whole file.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app(&h).active_tab().unwrap().line_spans(50_000).is_empty() {
+        assert!(std::time::Instant::now() < deadline, "no highlighting near the view");
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+    let t = app(&h).active_tab().unwrap();
+    assert!(t.line_spans(10).is_empty(), "far from the view: not worked out");
+    assert!(t.view.contains(&50_000), "the caret's line is on screen: {:?}", t.view);
+    shot(&mut h, "big-around-view");
+    press(&mut h, CMD, Key::S);
+    assert!(std::fs::read_to_string(&path).unwrap().contains("/*x*/ let found_me_here"));
+}
+
+/// The remote picture, measured in a real (headless) Chrome at a retina
+/// laptop's size: key-to-frame latency, frame rates and bytes while typing,
+/// scrolling and streaming a terminal, and quiet when idle. Prints the
+/// numbers (`--nocapture`); fails only when something is far off.
+#[test]
+#[ignore]
+fn headless_remote_frames_in_chrome() {
+    let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    let node = ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists());
+    let (Some(node), true) = (node, std::path::Path::new(chrome).exists()) else {
+        eprintln!("skipped: needs Node and Google Chrome");
+        return;
+    };
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let (mut h, port) = serve_remotely("open sesame", include_str!("app.rs"));
+    let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
+    std::fs::create_dir_all(&shots).unwrap();
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/remote_frames.mjs");
+    let out_path = shots.join("chrome-frames.log");
+    let mut child = std::process::Command::new(node)
+        .arg(&script)
+        .arg(port.to_string())
+        .arg("open sesame")
+        .arg(&shots)
+        .arg(chrome)
+        .stdout(std::fs::File::create(&out_path).unwrap())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap();
+    // The window's event loop, as eframe would run it: a pass whenever
+    // something asks (here: as often as the harness can).
+    let status = loop {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+    };
+    let out = std::fs::read_to_string(&out_path).unwrap_or_default();
+    println!("{out}");
+    let (enc, remote) = (h.state().1.encode_stats(), &h.state().1);
+    println!(
+        "SERVER frames={} half-res={} kb/frame={:.1} encode ms/frame={:.2} render ms/frame={:.2}",
+        enc.frames,
+        enc.half,
+        enc.bytes as f64 / enc.frames.max(1) as f64 / 1024.0,
+        enc.encode_secs * 1000.0 / enc.frames.max(1) as f64,
+        remote.render_secs * 1000.0 / remote.renders.max(1) as f64,
+    );
+    assert!(status.success() && out.contains("\nOK"), "{out}");
+    let metric = |name: &str| -> serde_json::Value {
+        out.lines()
+            .filter_map(|l| l.strip_prefix("METRIC "))
+            .filter_map(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+            .find(|m| m["name"] == name)
+            .unwrap_or_else(|| panic!("no {name} metric: {out}"))
+    };
+    let p50 = metric("key-to-frame")["arrivedMs"]["p50"].as_f64().unwrap();
+    assert!(p50 < 150.0, "a key's frame took {p50} ms");
+    let exact = metric("exactness");
+    assert!(exact["reconnected"].as_bool().unwrap(), "{out}");
+    assert!(
+        exact["differ"].as_f64().unwrap() < exact["pixels"].as_f64().unwrap() * 0.002,
+        "what the page built differs from the whole frame: {exact}"
+    );
+    for name in ["typing", "scrolling", "terminal"] {
+        assert!(metric(name)["frames"].as_f64().unwrap() >= 5.0, "{name}: too few frames: {out}");
+    }
 }
