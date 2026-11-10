@@ -1,6 +1,6 @@
 //! Tab strips that hold more tabs than fit: they scroll sideways (wheel,
 //! trackpad, a finger, or the "‹ N" / "N ›" ends, which bring the next
-//! hidden tab in), keep a newly active tab in view, and let a tab be
+//! hidden tab in), keep the active tab in view, and let a tab be
 //! dragged to a new place. Shared by the editor's tabs and the terminals'.
 
 use super::*;
@@ -13,6 +13,10 @@ pub struct Strip {
     pub offset: f32,
     /// The active tab last frame: a new one is scrolled into view.
     shown: Option<usize>,
+    /// Keep the active tab in view as tabs change width (a terminal's name
+    /// growing as its program starts, tabs opening, the window resizing),
+    /// until the strip is scrolled by hand.
+    follow: bool,
     pub drag: Option<Drag>,
 }
 
@@ -36,9 +40,19 @@ pub(super) struct Layout {
 }
 
 impl Strip {
-    /// Take the scrolling over `room`, keep `active` in view, follow a drag,
-    /// and place tabs of `widths` (by index) `gap` apart.
-    pub(super) fn layout(&mut self, ui: &egui::Ui, room: Rect, widths: &[f32], gap: f32, active: Option<usize>) -> Layout {
+    /// Take the scrolling over `room`, keep `active` in view (clear of the
+    /// `end` markers, as wide as they are), follow a drag, and place tabs of
+    /// `widths` (by index) `gap` apart.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn layout(
+        &mut self,
+        ui: &egui::Ui,
+        room: Rect,
+        widths: &[f32],
+        gap: f32,
+        end: f32,
+        active: Option<usize>,
+    ) -> Layout {
         let n = widths.len();
         let starts = starts(widths, gap);
         let total = starts.last().map_or(0.0, |s| s + widths[n - 1]);
@@ -46,13 +60,24 @@ impl Strip {
         if pointer.is_some_and(|p| room.contains(p)) {
             // Up and down on a wheel go sideways here.
             let d = ui.input(|i| i.smooth_scroll_delta);
-            self.offset -= d.x + d.y;
-        }
-        if active != self.shown && self.drag.is_none() {
-            if let Some(a) = active.filter(|a| *a < n) {
-                self.offset = reveal(self.offset, starts[a], starts[a] + widths[a], room.width());
+            if d != egui::Vec2::ZERO {
+                self.offset -= d.x + d.y;
+                self.follow = false;
             }
+        }
+        if active != self.shown {
             self.shown = active;
+            self.follow = true;
+        }
+        if self.follow
+            && self.drag.is_none()
+            && let Some(a) = active.filter(|a| *a < n)
+        {
+            // With tabs past it on a side, that side's end marker covers
+            // the strip's edge: clear it too.
+            let left = starts[a] - if a > 0 { end } else { 0.0 };
+            let right = starts[a] + widths[a] + if a + 1 < n { end } else { 0.0 };
+            self.offset = reveal(self.offset, left, right, room.width());
         }
         let mut moved = None;
         if let Some(d) = &mut self.drag {
@@ -105,6 +130,17 @@ impl Strip {
         let hidden_left = rects.iter().filter(|r| r.left() < room.left() - 1.0).count();
         let hidden_right = rects.iter().filter(|r| r.right() > room.right() + 1.0).count();
         Layout { rects, hidden_left, hidden_right, moved }
+    }
+
+    /// Bring the active tab into view again, even if it's the same one
+    /// (chosen again after the strip was scrolled away from it).
+    pub fn reveal_again(&mut self) {
+        self.shown = None;
+    }
+
+    /// How much of the strip an end marker ("‹ N" and its fade) covers.
+    pub(super) fn end_width(s: f32) -> f32 {
+        72.0 * s
     }
 
     /// A tab's press turned into a drag.
@@ -160,6 +196,7 @@ impl Strip {
                     hidden.min_by(|a, b| a.left().total_cmp(&b.left()))
                 };
                 if let Some(t) = next {
+                    self.follow = false; // looking around, by hand
                     // Past the end marker too.
                     self.offset += if left { t.left() - room.left() - w } else { t.right() - room.right() + w };
                     ui.ctx().request_repaint();

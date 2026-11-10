@@ -16,6 +16,7 @@ use crate::theme::{Colors, mix};
 
 mod sidebar;
 pub(crate) mod tabstrip;
+use tabstrip::Strip;
 
 /// Nerd Font glyphs (VS Code codicons and friends).
 pub mod icon {
@@ -961,7 +962,7 @@ impl App {
         // More than fit: the strip scrolls (and tabs drag to a new place).
         let room = Rect::from_x_y_ranges(bar.left() + 8.0 * s..=bar.right(), bar.top()..=bar.bottom() - 1.0);
         let mut strip = self.view().tabs;
-        let lay = strip.layout(ui, room, &widths, 0.0, self.active);
+        let lay = strip.layout(ui, room, &widths, 0.0, Strip::end_width(s), self.active);
         let p = p.with_clip_rect(room);
         let (mut select, mut close, mut menu_pick, mut grab) = (None, None, None, None);
         let key = |c: Command| self.shortcut(c);
@@ -3527,7 +3528,7 @@ impl App {
         let inset = if touch { 2.0 } else { 4.0 } * s;
         let room = Rect::from_x_y_ranges(head.left() + 6.0 * s..=tabs_right, head.top() + inset..=head.bottom() - inset);
         let mut strip = self.view().terms;
-        let lay = strip.layout(ui, room, &widths, 4.0 * s, Some(self.active_terminal));
+        let lay = strip.layout(ui, room, &widths, 4.0 * s, Strip::end_width(s), Some(self.active_terminal));
         let p = p.with_clip_rect(room.expand2(vec2(0.0, inset)));
         let (mut select, mut close, mut menu_pick, mut grab) = (None, None, None, None);
         let dragged = strip.drag.map(|d| d.from);

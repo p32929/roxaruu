@@ -691,9 +691,8 @@ impl App {
                     n as usize - 1
                 };
                 if i < self.tabs.len() {
-                    self.active = Some(i);
+                    self.select_tab(i);
                     self.focus = Focus::Editor;
-                    self.save_session();
                 }
             }
             Command::SwitchFocus => self.switch_focus(ctx),
@@ -971,6 +970,8 @@ impl App {
             .position(|t| t.path().is_some_and(|p| p == path))
         {
             self.active = Some(i);
+            // Already open (from the tree, Go to File): show its tab.
+            self.views.iter_mut().for_each(|v| v.tabs.reveal_again());
             return;
         }
         match Tab::open(path) {
@@ -1107,6 +1108,8 @@ impl App {
     pub fn select_tab(&mut self, i: usize) {
         if i < self.tabs.len() {
             self.active = Some(i);
+            // Chosen: in view, even if it already was the active one.
+            self.views.iter_mut().for_each(|v| v.tabs.reveal_again());
             self.save_session();
         }
     }
@@ -1252,6 +1255,7 @@ impl App {
         }
         self.terminal_open = true;
         self.focus = Focus::Terminal;
+        self.views.iter_mut().for_each(|v| v.terms.reveal_again());
     }
 
     /// In the find bar, ⌥⌘C and ⌥⌘W toggle match case and whole word (as in

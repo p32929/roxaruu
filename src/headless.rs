@@ -2316,6 +2316,50 @@ fn headless_tab_strips_scroll_and_drag() {
     let (room, rects) = strip(&mut h, false);
     assert!(shown(room, rects[first_hidden]), "tab {first_hidden} came in");
 
+    // Switching tabs from the keyboard scrolls the new one into view: the
+    // previous tab (⌃⇧Tab), a numbered one, the last (⌘9) even when it was
+    // already the active one, scrolled away.
+    let keys: [(Modifiers, Key, usize); 4] = [
+        (Modifiers { shift: true, ..CTRL }, Key::Tab, 22),
+        (CMD, Key::Num9, 23),
+        (CMD, Key::Num5, 4),
+        (CTRL, Key::Tab, 5),
+    ];
+    for (mods, key, want) in keys {
+        to_start(&mut h);
+        h.event(Event::PointerMoved(egui::pos2(640.0, 400.0))); // off the strip
+        press(&mut h, mods, key);
+        assert_eq!(app(&h).active, Some(want), "{mods:?} {key:?}");
+        h.step();
+        let (room, rects) = strip(&mut h, false);
+        assert!(shown(room, rects[want]), "{mods:?} {key:?}: tab {want} at {:?} in {room:?}", rects[want]);
+        // To the right, the "N ›" end doesn't cover it either.
+        let end = 70.0;
+        assert!(rects[want].right() <= room.right() - if want < 23 { end } else { 0.0 } + 0.5, "{want} under the end marker");
+    }
+
+    // The strip changing under it (tabs growing, the window narrowing) keeps
+    // the active tab in view; scrolling by hand then isn't undone.
+    press(&mut h, CMD, Key::Num8); // tab 7, mid-strip
+    h.set_size(egui::vec2(700.0, 820.0));
+    h.step();
+    let (room, rects) = strip(&mut h, false);
+    assert!(shown(room, rects[7]), "still in view at a narrower width: {:?} in {room:?}", rects[7]);
+    h.set_size(egui::vec2(1280.0, 820.0));
+    h.step();
+    to_start(&mut h);
+    h.step();
+    let (room, rects) = strip(&mut h, false);
+    assert!(shown(room, rects[0]), "scrolled by hand, it stays where it was put");
+
+    // Opening a file that's already open (the tree, Go to File) shows its tab.
+    to_start(&mut h);
+    h.event(Event::PointerMoved(egui::pos2(640.0, 400.0)));
+    h.state_mut().0.open_file(&root.join(&names[18]));
+    h.step();
+    let (room, rects) = strip(&mut h, false);
+    assert!(shown(room, rects[18]), "an already-open file's tab comes into view");
+
     // Drag tab 0 right, past two tabs: it lands third, and is the active one.
     to_start(&mut h);
     let (room, rects) = strip(&mut h, false);
