@@ -314,6 +314,8 @@ pub struct TerminalPane {
     /// frame (i.e. the UI loop was parked) — the freeze, quantified.
     stamp: Arc<Mutex<Option<Instant>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    /// Typed before Windows' console started (see `spawn`); `None` after.
+    startup: Arc<Mutex<Option<Vec<u8>>>>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     rows: u16,
@@ -537,6 +539,11 @@ impl TerminalPane {
         let mut reader = pair.master.try_clone_reader()?;
         // Shared with the reader, which answers the terminal's own questions.
         let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(pair.master.take_writer()?));
+        // Windows' console wants its cursor question answered before anything
+        // typed: what's sent before it has spoken waits here, and the reader
+        // sends it after the answer. (A Unix terminal just buffers it.)
+        let startup: Arc<Mutex<Option<Vec<u8>>>> =
+            Arc::new(Mutex::new(if cfg!(windows) { Some(Vec::new()) } else { None }));
 
         // The emulator lives behind a lock and is fed by the reader thread, NOT
         // the UI thread. This is the core of the no-freeze design: PTY output is
@@ -566,6 +573,7 @@ impl TerminalPane {
             let newlines = newlines.clone();
             let stamp = stamp.clone();
             let answer = writer.clone();
+            let held = startup.clone();
             thread::spawn(move || {
                 let mut buf = [0u8; 8192];
                 loop {
@@ -598,6 +606,13 @@ impl TerminalPane {
                                 let reply = format!("\x1b[{};{}R", row + 1, col + 1).repeat(asks);
                                 let mut w = answer.lock().unwrap_or_else(|e| e.into_inner());
                                 let _ = w.write_all(reply.as_bytes()).and_then(|()| w.flush());
+                            }
+                            // The console has spoken: what was typed meanwhile goes now,
+                            // in order (sending waits on this lock).
+                            let mut held = held.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(typed) = held.take().filter(|t| !t.is_empty()) {
+                                let mut w = answer.lock().unwrap_or_else(|e| e.into_inner());
+                                let _ = w.write_all(&typed).and_then(|()| w.flush());
                             }
                             // Burst timing, for the watcher's "agent went quiet".
                             {
@@ -651,6 +666,7 @@ impl TerminalPane {
             view: Vec::new(),
             stamp,
             writer,
+            startup,
             master: pair.master,
             child,
             rows,
@@ -1302,6 +1318,11 @@ impl TerminalPane {
         // "terminal froze, a keypress un-froze it" cause. Log it so we can catch it.
         if bytes.contains(&0x13) {
             tracing::warn!("sending XOFF (Ctrl+S) to the shell — this suspends output");
+        }
+        let mut held = self.startup.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(typed) = held.as_mut() {
+            typed.extend_from_slice(bytes); // the console hasn't started yet
+            return;
         }
         let mut w = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         if let Err(e) = w.write_all(bytes).and_then(|()| w.flush()) {

@@ -171,7 +171,25 @@ HOME=$SP/home SHOTS=$SP/shots PROJECT=<a file inside a git repo> BIG=<a big sour
   terminal tests can be flaky under load: re-run alone before blaming the
   change, and fix the test if it's racy.
 
-## 4. Ground rules
+## 4. Every desktop: macOS, Windows, Linux
+
+Roxaruu runs everywhere VS Code does, every feature on every system.
+- Anything that asks the OS lives in `sys.rs`, with a version for each of
+  macOS, Windows and Linux (not an empty stand-in). Windows terminals run
+  Git Bash when it's installed, else PowerShell, else cmd (`windows_shell`).
+- Off macOS, Roxaruu's keys are Ctrl chords, which a terminal's shell wants
+  too: only `terminal::passes_the_shell` get past it, and hints in a
+  terminal never show one that doesn't (`key_reaches`).
+- `.github/workflows/build.yml` builds, tests and packages all three on
+  every push (`packaging/`: the macOS Info.plist and Linux menu entry
+  `install-local.sh` uses too, the Windows installer). It must stay green
+  on all three; a test that needs a Unix shell is marked
+  `#[cfg_attr(not(unix), ignore = "needs a Unix shell")]` and gets a Windows
+  counterpart where the feature matters there.
+- A tag `v*` publishes the downloads as a GitHub release (README says how
+  to install each).
+
+## 5. Ground rules
 
 - Don't run `install-local.sh` or `run.sh` without `--temp`: replacing the
   installed app closes the user's running windows. Build and test only.
@@ -201,5 +219,6 @@ HOME=$SP/home SHOTS=$SP/shots PROJECT=<a file inside a git repo> BIG=<a big sour
 | `termbridge.rs` | scripts' "open a Terminal" requests become tabs here |
 | `palette.rs`, `fuzzy.rs`, `search.rs`, `fstree.rs` | lists, matching, search in files, the tree |
 | `remote/` | remote access: lifecycle (`mod`), in-memory password + sessions (`auth`), HTTPS server for all windows, run by the window that turned it on (`hub`), a window's private link and its flow control (`endpoint`), browser input (`input`), off-screen drawing (`render`), what changed as lossless WebP regions, on its own thread (`frames`), waking the window at full rate even hidden (`clock`), the page (`page.html`: its window list is the name's button, or Switch Window's key; `login.html`) |
-| `sys.rs` | all `unsafe` and OS calls |
+| `sys.rs` | all `unsafe` and OS calls, for macOS, Windows and Linux |
+| `packaging/`, `.github/workflows/build.yml` | what the release builds package; the build, test and release pipeline |
 | `headless.rs` | headless UI walkthroughs |
