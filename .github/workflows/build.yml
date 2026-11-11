@@ -1,5 +1,6 @@
-# Builds Roxaruu on macOS, Windows and Linux on every push, runs the tests,
-# and packages what people download. A tag `v*` publishes them as a release.
+# Builds Roxaruu for macOS, Windows and Linux on every push, runs the tests,
+# and packages what people download (kept as this run's artifacts). Pushing a
+# tag `v*` (e.g. v0.3.0) also publishes them as a GitHub release.
 name: build
 
 on:
@@ -24,9 +25,14 @@ jobs:
           - { name: macOS, os: macos-14 }
           - { name: Windows, os: windows-latest }
           - { name: Linux, os: ubuntu-22.04 }
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
       - name: Linux libraries
         if: runner.os == 'Linux'
@@ -35,7 +41,85 @@ jobs:
           sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libxrandr-dev \
             libxi-dev libxcursor-dev libxinerama-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev \
             libgtk-3-dev libdbus-1-dev
+      - name: Version
+        run: echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_ENV"
+
       - name: Build
         run: cargo build --release
       - name: Unit tests
         run: cargo test --release
+
+      # ---- packages -------------------------------------------------------
+      - name: Package (macOS, one app for Apple Silicon and Intel)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p dist dmg/Roxaruu.app/Contents/MacOS dmg/Roxaruu.app/Contents/Resources
+          lipo -create -output dmg/Roxaruu.app/Contents/MacOS/roxaruu \
+            target/aarch64-apple-darwin/release/roxaruu target/x86_64-apple-darwin/release/roxaruu
+          cp assets/AppIcon.icns dmg/Roxaruu.app/Contents/Resources/AppIcon.icns
+          sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > dmg/Roxaruu.app/Contents/Info.plist
+          codesign --force --deep -s - dmg/Roxaruu.app
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname Roxaruu -srcfolder dmg -ov -format UDZO "dist/Roxaruu-$VERSION-macos.dmg"
+
+      - name: Package (Windows installer and zip)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p dist
+          python -m pip install --quiet pillow
+          python -c "from PIL import Image; Image.open('assets/icon.png').save('dist/roxaruu.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+          printf '@"%%~dp0roxaruu.exe" %%*\r\n' > dist/rox.cmd
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          [ -f "$ISCC" ] || choco install innosetup -y --no-progress
+          "$ISCC" "/DVersion=$VERSION" packaging/roxaruu.iss
+          7z a "dist/Roxaruu-$VERSION-windows-x64.zip" ./target/release/roxaruu.exe ./dist/rox.cmd
+          rm dist/roxaruu.ico dist/rox.cmd
+
+      - name: Package (Linux .deb and .tar.gz)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist pkg/DEBIAN pkg/usr/bin pkg/usr/share/applications pkg/usr/share/icons/hicolor/512x512/apps
+          cp target/release/roxaruu pkg/usr/bin/roxaruu
+          printf '#!/bin/sh\nexec /usr/bin/roxaruu "$@"\n' > pkg/usr/bin/rox
+          chmod 755 pkg/usr/bin/roxaruu pkg/usr/bin/rox
+          sed -e "s|@EXEC@|/usr/bin/roxaruu|" -e "s/@VERSION@/$VERSION/" packaging/roxaruu.desktop \
+            > pkg/usr/share/applications/roxaruu.desktop
+          cp assets/icon.png pkg/usr/share/icons/hicolor/512x512/apps/roxaruu.png
+          cat > pkg/DEBIAN/control <<EOF
+          Package: roxaruu
+          Version: $VERSION
+          Architecture: amd64
+          Maintainer: p32929 <https://github.com/p32929/roxaruu>
+          Depends: libxkbcommon0, libgl1, libdbus-1-3
+          Recommends: xdg-desktop-portal
+          Section: editors
+          Priority: optional
+          Description: A keyboard-first code editor with built-in terminals
+          EOF
+          dpkg-deb --build --root-owner-group pkg "dist/roxaruu_${VERSION}_amd64.deb"
+          tar -czf "dist/Roxaruu-$VERSION-linux-x64.tar.gz" -C pkg/usr .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Roxaruu-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

@@ -496,19 +496,17 @@ impl App {
         let keymap = &self.config.keymap;
         // With the terminal focused, Ctrl chords are the shell's (^C, ^R…).
         let shell = self.focus == Focus::Terminal && self.terminal_open && self.palette.is_none();
+        // (Off macOS a few of ours get past it: `passes_the_shell`.)
         let bound = |e: &egui::Event| match e {
-            egui::Event::Key { key, modifiers, .. }
-                if shell && terminal::belongs_to_shell(*key, *modifiers) =>
-            {
-                None
-            }
             egui::Event::Key {
                 key,
                 physical_key,
                 pressed: true,
                 modifiers,
                 ..
-            } => keymap.command_for(*key, *physical_key, *modifiers),
+            } => keymap
+                .command_for(*key, *physical_key, *modifiers)
+                .filter(|c| !(shell && terminal::belongs_to_shell(*key, *modifiers)) || terminal::passes_the_shell(*c)),
             // ⌘C/⌘X arrive as clipboard events, not keys (⌘V too, as Paste
             // with the text, which the editor or search box takes directly).
             egui::Event::Copy => Some(Command::Copy),
@@ -2218,7 +2216,12 @@ impl App {
             .chain(std::iter::once(Item {
                 icon: icon::FOLDER_OPEN,
                 label: "Open Another Folder…".into(),
-                detail: "choose one or several in Finder (⌘-click)".into(),
+                detail: if cfg!(target_os = "macos") {
+                    "choose one or several in Finder (⌘-click)"
+                } else {
+                    "choose one or several (Ctrl-click)"
+                }
+                .into(),
                 caps: self
                     .config
                     .keymap

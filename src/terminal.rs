@@ -376,6 +376,19 @@ pub fn belongs_to_shell(key: Key, m: Modifiers) -> bool {
     m.ctrl && key != Key::Tab && (mac || !m.shift)
 }
 
+/// Off macOS, Roxaruu's keys are Ctrl chords too, the shell's own. These few
+/// still reach the app from a terminal (like VS Code's "skip the shell"
+/// list): getting out of it and between places, tabs, saving, quitting, text
+/// size. The shell keeps the rest (^C ^R ^W ^K ^A ^E…). On a Mac they're ⌘
+/// chords, which never clash.
+pub fn passes_the_shell(c: crate::keymap::Command) -> bool {
+    use crate::keymap::Command::*;
+    matches!(
+        c,
+        SwitchFocus | GoToTab(_) | ToggleSidebar | FocusSidebar | Save | SaveAll | Quit | ZoomIn | ZoomOut | ResetZoom
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

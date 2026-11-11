@@ -361,14 +361,43 @@ impl TerminalPane {
         cwd: &Path,
         waker: Option<Waker>,
     ) -> Result<Self> {
-        let mut cmd = CommandBuilder::new_default_prog();
+        #[cfg(not(windows))]
+        let (mut cmd, shell): (_, Option<&str>) = (CommandBuilder::new_default_prog(), None);
+        // Windows: Git Bash when it's there, else PowerShell, else cmd.
+        #[cfg(windows)]
+        let (mut cmd, shell) = {
+            let (program, args, name) = crate::sys::windows_shell();
+            let mut cmd = CommandBuilder::new(program);
+            cmd.args(args);
+            // Git Bash's login profile otherwise starts in your home folder.
+            cmd.env("CHERE_INVOKING", "1");
+            (cmd, Some(name))
+        };
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
         // Route scripts that try to open new OS Terminal windows back into the app.
         for (k, v) in crate::termbridge::child_env() {
             cmd.env(k, v);
         }
-        Self::spawn(folder, rows, cols, cmd, waker)
+        let mut pane = Self::spawn(folder, rows, cols, cmd, waker)?;
+        if let Some(name) = shell {
+            pane.shell_name = name.to_string(); // what "nothing running" looks like
+        }
+        Ok(pane)
+    }
+
+    /// The process a terminal is in front of: the foreground process group's
+    /// leader (Unix), or on Windows, where a console has none, the shell's
+    /// newest descendant (else the shell itself).
+    #[cfg(unix)]
+    fn foreground_pid(&self) -> Option<i32> {
+        self.master.process_group_leader()
+    }
+
+    #[cfg(not(unix))]
+    fn foreground_pid(&self) -> Option<i32> {
+        let shell = self.child.process_id()?;
+        crate::sys::foreground_process(shell).or(Some(shell as i32))
     }
 
     /// Whether the shell has exited (e.g. the user typed `exit`).
@@ -431,7 +460,7 @@ impl TerminalPane {
     /// has typed), best-effort. `None` if it can't be determined — the
     /// caller falls back to whatever cwd it already has on hand.
     pub fn current_dir(&self) -> Option<PathBuf> {
-        let leader = self.master.process_group_leader()?;
+        let leader = self.foreground_pid()?;
         // Just after spawning, the child is still a copy of this app (not yet
         // the shell) and sits in the app's own directory — not an answer.
         if process_name(leader).is_some_and(|n| is_own_name(&n)) {
@@ -1124,11 +1153,7 @@ impl TerminalPane {
             return;
         }
         self.last_proc_check = Instant::now();
-        let name = self
-            .master
-            .process_group_leader()
-            .and_then(process_name)
-            .unwrap_or_default();
+        let name = self.foreground_pid().and_then(process_name).unwrap_or_default();
         // Treat the bare shell (login or not, e.g. "-zsh"/"zsh") as idle —
         // and our own name too: for a moment after spawning, before it execs
         // the shell, the child is still a copy of this process.
@@ -1606,8 +1631,8 @@ fn process_cwd(pid: i32) -> Option<PathBuf> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn process_cwd(_pid: i32) -> Option<PathBuf> {
-    None
+fn process_cwd(pid: i32) -> Option<PathBuf> {
+    crate::sys::process_cwd(pid)
 }
 
 /// Quote `path` so a shell receives it as **one** argument.

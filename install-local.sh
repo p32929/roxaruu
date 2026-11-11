@@ -161,20 +161,9 @@ linux)
     DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
     mkdir -p "$DATA/applications" "$DATA/icons/hicolor/512x512/apps"
     cp assets/icon.png "$DATA/icons/hicolor/512x512/apps/roxaruu.png"
-    cat > "$DATA/applications/roxaruu.desktop" <<DESKTOP
-[Desktop Entry]
-Type=Application
-Name=Roxaruu
-GenericName=Code Editor
-Comment=A keyboard-first editor with terminals
-Exec="$BIN_DIR/roxaruu" %F
-Icon=roxaruu
-Terminal=false
-Categories=Development;TextEditor;IDE;
-StartupWMClass=roxaruu
-Version=1.0
-X-Roxaruu-Version=$VERSION
-DESKTOP
+    # The app-menu entry: one file, shared with the release builds.
+    sed -e "s|@EXEC@|$BIN_DIR/roxaruu|" -e "s/@VERSION@/$VERSION/" packaging/roxaruu.desktop \
+        > "$DATA/applications/roxaruu.desktop"
     command -v update-desktop-database >/dev/null 2>&1 &&
         update-desktop-database "$DATA/applications" >/dev/null 2>&1 || true
     command -v gtk-update-icon-cache >/dev/null 2>&1 &&
@@ -209,62 +198,9 @@ mac)
     mkdir -p "$DEST.new/Contents/MacOS" "$DEST.new/Contents/Resources"
     cp "$BIN" "$DEST.new/Contents/MacOS/roxaruu"
     cp assets/AppIcon.icns "$DEST.new/Contents/Resources/AppIcon.icns"
-    cat > "$DEST.new/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>               <string>Roxaruu</string>
-    <key>CFBundleDisplayName</key>        <string>Roxaruu</string>
-    <key>CFBundleExecutable</key>         <string>roxaruu</string>
-    <key>CFBundleIconFile</key>           <string>AppIcon</string>
-    <key>CFBundleIdentifier</key>         <string>com.p32929.roxaruu</string>
-    <key>CFBundlePackageType</key>        <string>APPL</string>
-    <key>CFBundleVersion</key>            <string>$VERSION</string>
-    <key>CFBundleShortVersionString</key> <string>$VERSION</string>
-    <key>LSMinimumSystemVersion</key>     <string>10.15</string>
-    <key>NSHighResolutionCapable</key>    <true/>
-    <!-- Belt and braces with the activity the app holds: no App Nap. -->
-    <key>NSAppSleepDisabled</key>         <true/>
-    <key>LSApplicationCategoryType</key>  <string>public.app-category.developer-tools</string>
-    <!-- What macOS asks before Roxaruu, or a program run in its terminals
-         (Claude Code's voice, a script driving another app), may use
-         something private. An app without the line for one is refused it
-         silently, never asked ("No audio detected from microphone"). The
-         same set VS Code declares. -->
-    <key>NSDocumentsFolderUsageDescription</key> <string>Roxaruu opens code projects stored in your Documents folder.</string>
-    <key>NSDesktopFolderUsageDescription</key>   <string>Roxaruu opens code projects stored on your Desktop.</string>
-    <key>NSDownloadsFolderUsageDescription</key> <string>Roxaruu opens code projects stored in your Downloads folder.</string>
-    <key>NSNetworkVolumesUsageDescription</key>  <string>Roxaruu opens code projects stored on network drives.</string>
-    <key>NSRemovableVolumesUsageDescription</key> <string>Roxaruu opens code projects stored on external drives.</string>
-    <key>NSMicrophoneUsageDescription</key>      <string>A program running in a Roxaruu terminal (such as Claude Code's voice input) wants to use the microphone.</string>
-    <key>NSCameraUsageDescription</key>          <string>A program running in a Roxaruu terminal wants to use the camera.</string>
-    <key>NSSpeechRecognitionUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use speech recognition.</string>
-    <key>NSAppleEventsUsageDescription</key>     <string>A program running in a Roxaruu terminal wants to control another app.</string>
-    <key>NSBluetoothAlwaysUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use Bluetooth.</string>
-    <key>NSLocationUsageDescription</key>        <string>A program running in a Roxaruu terminal wants to know your location.</string>
-    <key>NSLocationWhenInUseUsageDescription</key> <string>A program running in a Roxaruu terminal wants to know your location.</string>
-    <key>NSContactsUsageDescription</key>        <string>A program running in a Roxaruu terminal wants to read your contacts.</string>
-    <key>NSCalendarsUsageDescription</key>       <string>A program running in a Roxaruu terminal wants to read your calendars.</string>
-    <key>NSRemindersUsageDescription</key>       <string>A program running in a Roxaruu terminal wants to read your reminders.</string>
-    <key>NSPhotoLibraryUsageDescription</key>    <string>A program running in a Roxaruu terminal wants to read your photos.</string>
-    <key>NSSystemAdministrationUsageDescription</key> <string>A program running in a Roxaruu terminal wants to change system settings.</string>
-    <!-- macOS 15+: ssh to a LAN address, a dev server or database on another
-         machine, a phone on the Wi-Fi — refused without this, never asked. -->
-    <key>NSLocalNetworkUsageDescription</key>    <string>A program running in a Roxaruu terminal wants to reach devices on your local network.</string>
-    <key>NSFileProviderDomainUsageDescription</key> <string>A program running in a Roxaruu terminal wants to open files in your cloud storage (iCloud Drive, Dropbox, OneDrive, Google Drive).</string>
-    <key>NSFileProviderPresenceUsageDescription</key> <string>A program running in a Roxaruu terminal wants to see which cloud storage files are in use.</string>
-    <key>NSAppleMusicUsageDescription</key>      <string>A program running in a Roxaruu terminal wants to use your music library.</string>
-    <key>NSBluetoothPeripheralUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use Bluetooth.</string>
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key> <string>A program running in a Roxaruu terminal wants to know your location.</string>
-    <key>NSCalendarsFullAccessUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use your calendars.</string>
-    <key>NSCalendarsWriteOnlyAccessUsageDescription</key> <string>A program running in a Roxaruu terminal wants to add events to your calendars.</string>
-    <key>NSRemindersFullAccessUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use your reminders.</string>
-    <key>NSPhotoLibraryAddUsageDescription</key> <string>A program running in a Roxaruu terminal wants to add to your photos.</string>
-    <key>NSFocusStatusUsageDescription</key>     <string>A program running in a Roxaruu terminal wants to know your Focus status.</string>
-</dict>
-</plist>
-PLIST
+    # What macOS knows of the app: one file, shared with the release builds
+    # (.github/workflows/build.yml).
+    sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > "$DEST.new/Contents/Info.plist"
 
     # Built on this Mac, it has no quarantine flag, so it opens without a
     # Gatekeeper prompt. Clear any extended attributes the build picked up.

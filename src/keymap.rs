@@ -110,8 +110,24 @@ pub struct CommandInfo {
     pub keys: &'static [&'static str],
 }
 
+/// The file manager's name here, in what Roxaruu says.
+pub const REVEAL_TITLE: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else if cfg!(windows) {
+    "Reveal in File Explorer"
+} else {
+    "Show in Files"
+};
+pub const OPEN_FOLDER_TITLE: &str = if cfg!(target_os = "macos") {
+    "Open in Finder"
+} else if cfg!(windows) {
+    "Open in File Explorer"
+} else {
+    "Open in Files"
+};
+
 macro_rules! commands {
-    ($($command:ident $(($arg:literal))?, $id:literal, $title:literal, [$($key:literal),*];)*) => {
+    ($($command:ident $(($arg:literal))?, $id:literal, $title:expr, [$($key:literal),*];)*) => {
         pub const COMMANDS: &[CommandInfo] = &[
             $(CommandInfo { command: Command::$command $(($arg))?, id: $id, title: $title, keys: &[$($key),*] },)*
         ];
@@ -149,7 +165,7 @@ commands! {
     NewFolder, "file.newFolder", "New Folder…", ["ctrl+shift+n"];
     RenameFile, "file.rename", "Rename File…", ["f2"];
     DeleteFile, "file.delete", "Move to Trash", ["ctrl+backspace"];
-    RevealInFinder, "file.reveal", "Reveal in Finder", ["ctrl+alt+r"];
+    RevealInFinder, "file.reveal", REVEAL_TITLE, ["ctrl+alt+r"];
     OpenInTerminal, "file.openInTerminal", "Open in Terminal (a New One, in That Folder)", ["alt+shift+t"];
     CopyPath, "file.copyPath", "Copy Path", ["ctrl+alt+c"];
     CopyRelativePath, "file.copyRelativePath", "Copy Relative Path", ["ctrl+alt+shift+c"];
@@ -250,6 +266,20 @@ pub struct Combo {
 }
 
 impl Combo {
+    /// The key and modifiers this combo is pressed with here: `ctrl` is ⌘ on
+    /// a Mac, Ctrl elsewhere.
+    pub fn chord(&self) -> (Key, Modifiers) {
+        let mac = cfg!(target_os = "macos");
+        let m = Modifiers {
+            alt: self.alt,
+            shift: self.shift,
+            ctrl: self.ctrl && !mac,
+            mac_cmd: self.ctrl && mac,
+            command: self.ctrl,
+        };
+        (self.key, m)
+    }
+
     /// Test-only: the key and modifiers that press this combo (`ctrl` as ⌘).
     #[cfg(test)]
     pub fn press(&self) -> (Key, Modifiers) {

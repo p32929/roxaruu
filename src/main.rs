@@ -4,6 +4,8 @@
 //! crash in an editor loses unsaved work, so fallible paths degrade instead.
 
 #![deny(unsafe_code)]
+// Windows: a desktop app, not a console program (no black window behind it).
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 #![cfg_attr(
     not(test),
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)

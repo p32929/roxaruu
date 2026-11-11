@@ -1870,7 +1870,16 @@ impl App {
         self.available(c)
             .then(|| self.config.keymap.combo_for(c))
             .flatten()
+            .filter(|k| self.key_reaches(c, k))
             .map(|k| (k.caps().concat(), what, Some(c)))
+    }
+
+    /// Whether `c`'s key gets to the app from where the keyboard is: off
+    /// macOS, a terminal keeps plain Ctrl chords for its shell (but for
+    /// `passes_the_shell`), so a hint there mustn't promise one.
+    fn key_reaches(&self, c: Command, k: &crate::keymap::Combo) -> bool {
+        let (key, m) = k.chord();
+        !(self.terminal_focused() && crate::terminal::belongs_to_shell(key, m)) || crate::terminal::passes_the_shell(c)
     }
 
     /// Every key in the status bar: the tree's section, then the rest.
@@ -3169,7 +3178,7 @@ impl App {
                 (Command::RenameFile, "Rename…", has_path),
                 (Command::CopyPath, "Copy Path", has_path),
                 (Command::CopyRelativePath, "Copy Relative Path", has_path),
-                (Command::RevealInFinder, "Reveal in Finder", has_path),
+                (Command::RevealInFinder, crate::keymap::REVEAL_TITLE, has_path),
                 (Command::OpenInTerminal, "Open in Terminal", has_path),
                 (Command::FocusSidebar, "Show in File Tree", has_path),
             ],

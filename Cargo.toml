@@ -53,15 +53,25 @@ egui-wgpu = "0.37"
 wgpu = "30.0.1"
 qrcode = { version = "0.14.1", default-features = false }
 
-# Native "Open Folder" panel. A folder picked there is granted by user intent,
-# which sidesteps the macOS Documents/Desktop permission prompt.
+# Native "Open Folder" panel, everywhere (on macOS a folder picked there is
+# granted by user intent, which sidesteps the Documents/Desktop prompt; on
+# Linux it's the desktop's own, through its portal).
+rfd = "0.15"
+
 [target.'cfg(target_os = "macos")'.dependencies]
-rfd = { version = "0.15", default-features = false }
 # Where the pointer is when Finder drops a file (winit doesn't say), and
 # holding off App Nap.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSProcessInfo", "NSString"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSScreen"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+notify-rust = "4.19.0"
+opener = { version = "0.9.0", features = ["reveal"] }
+sysinfo = "0.40.1"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_System_Power", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }

@@ -141,8 +141,8 @@ fn css_cursor(icon: egui::CursorIcon) -> &'static str {
 pub struct Remote {
     endpoint: Option<Endpoint>,
     hub: Option<hub::Hub>,
-    /// Keeps the Mac awake while serving.
-    awake: Option<std::process::Child>,
+    /// Keeps the computer awake while serving.
+    awake: Option<crate::sys::Awake>,
     /// The browser's copy of the window.
     ctx: egui::Context,
     started: Instant,
@@ -264,10 +264,7 @@ impl Remote {
         if self.hub.take().is_some() {
             instances::clear_remote_server(true);
         }
-        if let Some(mut child) = self.awake.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        self.awake = None;
     }
 
     /// Open this window's private link, so the server can list it.
@@ -328,18 +325,9 @@ impl Remote {
             }
         }
         instances::register_remote_server(self.port);
-        // A sleeping Mac drops off the Wi-Fi: stay awake while serving (the
-        // display may still sleep). Ends with this window.
-        #[cfg(target_os = "macos")]
-        {
-            self.awake = std::process::Command::new("/usr/bin/caffeinate")
-                .args(["-i", "-w", &std::process::id().to_string()])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .ok();
-        }
+        // A sleeping computer drops off the Wi-Fi: stay awake while serving
+        // (the display may still sleep). Ends with this window.
+        self.awake = Some(crate::sys::stay_awake());
     }
 
     /// Stop the server wherever it runs: here directly, elsewhere by

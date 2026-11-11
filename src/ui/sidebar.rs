@@ -811,9 +811,9 @@ impl App {
                 ui,
                 Command::RevealInFinder,
                 if dir {
-                    "Open in Finder"
+                    crate::keymap::OPEN_FOLDER_TITLE
                 } else {
-                    "Reveal in Finder"
+                    crate::keymap::REVEAL_TITLE
                 },
             );
             item(ui, Command::OpenInTerminal, "Open in Terminal");

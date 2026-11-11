@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Roxaruu
+GenericName=Code Editor
+Comment=A keyboard-first editor with terminals
+Exec="@EXEC@" %F
+Icon=roxaruu
+Terminal=false
+Categories=Development;TextEditor;IDE;
+StartupWMClass=roxaruu
+Version=1.0
+X-Roxaruu-Version=@VERSION@

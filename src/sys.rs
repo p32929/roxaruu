@@ -43,8 +43,62 @@ pub fn process_alive(pid: i32) -> bool {
 }
 
 #[cfg(not(unix))]
-pub fn process_alive(_pid: i32) -> bool {
-    false
+pub fn process_alive(pid: i32) -> bool {
+    with_process(pid, |_| ()).is_some()
+}
+
+/// Off macOS, what the system knows of process `pid` (one cross-platform
+/// library: `/proc` on Linux, the process APIs on Windows).
+#[cfg(not(target_os = "macos"))]
+fn with_process<T>(pid: i32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    if pid <= 0 {
+        return None;
+    }
+    let pid = Pid::from_u32(pid as u32);
+    let mut sys = System::new();
+    let kind = ProcessRefreshKind::nothing().with_memory().with_cpu().with_cwd(UpdateKind::Always);
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, kind);
+    sys.process(pid).map(f)
+}
+
+/// The working directory of process `pid` (a terminal's shell, to follow
+/// `cd`). macOS asks `lsof` (see `terminalpane`).
+#[cfg(not(target_os = "macos"))]
+pub fn process_cwd(pid: i32) -> Option<std::path::PathBuf> {
+    with_process(pid, |p| p.cwd().map(|c| c.to_path_buf())).flatten()
+}
+
+/// What a terminal's shell `shell` is running now, where there's no
+/// foreground process group to ask (Windows' consoles): its newest
+/// descendant, past the console host Windows puts beside it. `None`: just
+/// the shell.
+#[cfg(windows)]
+pub fn foreground_process(shell: u32) -> Option<i32> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let ignore = |p: &sysinfo::Process| {
+        let n = p.name().to_string_lossy().to_lowercase();
+        n == "conhost.exe" || n == "openconsole.exe"
+    };
+    // Walk down from the shell, always into the newest child.
+    let mut at = Pid::from_u32(shell);
+    let mut found = None;
+    loop {
+        let next = sys
+            .processes()
+            .values()
+            .filter(|p| p.parent() == Some(at) && !ignore(p))
+            .max_by_key(|p| p.start_time());
+        match next {
+            Some(p) => {
+                at = p.pid();
+                found = Some(at.as_u32() as i32);
+            }
+            None => return found,
+        }
+    }
 }
 
 /// The short name of process `pid` — `node`, `cargo`, `vim` — used to label a
@@ -76,8 +130,12 @@ pub fn process_name(pid: i32) -> Option<String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn process_name(_pid: i32) -> Option<String> {
-    None
+pub fn process_name(pid: i32) -> Option<String> {
+    with_process(pid, |p| {
+        let name = p.name().to_string_lossy().into_owned();
+        // Windows names end in .exe; the tab says "node", not "node.exe".
+        name.strip_suffix(".exe").map(str::to_string).unwrap_or(name)
+    })
 }
 
 /// Where the mouse pointer is, in points from the top-left of the window
@@ -193,8 +251,11 @@ pub fn usage(pid: i32) -> Option<Usage> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn usage(_pid: i32) -> Option<Usage> {
-    None
+pub fn usage(pid: i32) -> Option<Usage> {
+    with_process(pid, |p| Usage {
+        footprint_kb: p.memory() / 1024,
+        cpu: std::time::Duration::from_millis(p.accumulated_cpu_time()),
+    })
 }
 
 /// Keep macOS **App Nap** off for the life of the process.
@@ -284,8 +345,16 @@ pub fn notify(title: &str, body: &str) {
         .push((title.into(), body.into()));
 }
 
+/// Off macOS: the desktop's own notifications (Windows' toasts, Linux's
+/// notification service), with a sound, off the caller's thread.
 #[cfg(all(not(target_os = "macos"), not(test)))]
-pub fn notify(_title: &str, _body: &str) {}
+pub fn notify(title: &str, body: &str) {
+    let (title, body) = (title.to_string(), body.to_string());
+    std::thread::spawn(move || {
+        let sound = if cfg!(windows) { "Default" } else { "message-new-instant" };
+        let _ = notify_rust::Notification::new().summary(&title).body(&body).sound_name(sound).show();
+    });
+}
 
 /// Whether this app is the one in front, asked of macOS (any thread): the
 /// window can't say once you've gone to another Space or app, since macOS
@@ -295,7 +364,28 @@ pub fn app_active() -> Option<bool> {
     Some(objc2_app_kit::NSRunningApplication::currentApplication().isActive())
 }
 
-#[cfg(all(not(target_os = "macos"), not(test)))]
+/// Windows: whether the window in front is one of this process's.
+///
+/// Safety: both calls only read: the foreground window's handle (null if
+/// none), and the id of the process that owns it, written into a local.
+#[cfg(all(windows, not(test)))]
+pub fn app_active() -> Option<bool> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    #[allow(unsafe_code)]
+    unsafe {
+        let w = GetForegroundWindow();
+        if w.is_null() {
+            return Some(false);
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(w, &mut pid);
+        Some(pid == std::process::id())
+    }
+}
+
+/// Linux can't always say (Wayland keeps it private): the window's own
+/// focus has to do.
+#[cfg(all(not(target_os = "macos"), not(windows), not(test)))]
 pub fn app_active() -> Option<bool> {
     None
 }
@@ -307,6 +397,101 @@ pub static APP_ACTIVE: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(No
 #[cfg(test)]
 pub fn app_active() -> Option<bool> {
     *APP_ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Keeps the computer from sleeping while it's held (remote access: a
+/// sleeping computer drops off the network). The display may still sleep.
+pub struct Awake {
+    #[allow(dead_code)] // held for its Drop
+    child: Option<std::process::Child>,
+}
+
+impl Drop for Awake {
+    fn drop(&mut self) {
+        if let Some(c) = &mut self.child {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        #[cfg(windows)]
+        set_awake(false);
+    }
+}
+
+/// Stay awake, until the returned value is dropped: macOS `caffeinate`,
+/// Linux `systemd-inhibit`, Windows' own setting for this thread (the UI's,
+/// which lives as long as the window).
+pub fn stay_awake() -> Awake {
+    let quiet = |c: &mut std::process::Command| {
+        c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    };
+    let pid = std::process::id().to_string();
+    let child = if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("/usr/bin/caffeinate");
+        c.args(["-i", "-w", &pid]);
+        quiet(&mut c);
+        c.spawn().ok()
+    } else if cfg!(windows) {
+        #[cfg(windows)]
+        set_awake(true);
+        None
+    } else {
+        let mut c = std::process::Command::new("systemd-inhibit");
+        c.args(["--what=idle:sleep", "--who=Roxaruu", "--why=Remote access is on", "--mode=block", "sleep", "infinity"]);
+        quiet(&mut c);
+        c.spawn().ok()
+    };
+    Awake { child }
+}
+
+/// Safety: `SetThreadExecutionState` only sets flags for the calling thread.
+#[cfg(windows)]
+fn set_awake(on: bool) {
+    use windows_sys::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
+    #[allow(unsafe_code)]
+    unsafe {
+        SetThreadExecutionState(if on { ES_CONTINUOUS | ES_SYSTEM_REQUIRED } else { ES_CONTINUOUS });
+    }
+}
+
+/// The shell for a new terminal on Windows: Git Bash if it's installed (a
+/// real Unix shell, the one Git for Windows and Claude Code use), else
+/// PowerShell 7, else Windows PowerShell, else cmd. Elsewhere `None`: the
+/// user's own login shell (`$SHELL`).
+#[cfg(windows)]
+pub fn windows_shell() -> (std::path::PathBuf, Vec<&'static str>, &'static str) {
+    use std::path::PathBuf;
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    // Git for Windows' bash: its usual homes, then wherever `git` is on PATH
+    // (…\Git\cmd\git.exe → …\Git\bin\bash.exe).
+    let mut bash: Vec<PathBuf> = [env("ProgramFiles"), env("ProgramW6432"), env("ProgramFiles(x86)")]
+        .into_iter()
+        .flatten()
+        .map(|p| p.join("Git").join("bin").join("bash.exe"))
+        .chain(env("LOCALAPPDATA").map(|p| p.join("Programs").join("Git").join("bin").join("bash.exe")))
+        .collect();
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            if dir.join("git.exe").is_file()
+                && let Some(git) = dir.parent()
+            {
+                bash.push(git.join("bin").join("bash.exe"));
+            }
+        }
+    }
+    if let Some(b) = bash.into_iter().find(|b| b.is_file()) {
+        return (b, vec!["--login", "-i"], "bash");
+    }
+    let on_path = |exe: &str| {
+        std::env::var_os("PATH")
+            .and_then(|p| std::env::split_paths(&p).map(|d| d.join(exe)).find(|f| f.is_file()))
+    };
+    if let Some(p) = on_path("pwsh.exe") {
+        return (p, vec!["-NoLogo"], "pwsh");
+    }
+    if let Some(p) = on_path("powershell.exe") {
+        return (p, vec!["-NoLogo"], "powershell");
+    }
+    (env("ComSpec").unwrap_or_else(|| PathBuf::from("cmd.exe")), vec![], "cmd")
 }
 
 /// Bring the windows of process `pid` to the front.

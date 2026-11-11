@@ -88,15 +88,9 @@ impl App {
             }
             Command::DeleteFile => self.ask = Some(Ask::Delete { path }),
             Command::RevealInFinder => {
-                // Finder selects it; elsewhere, open its folder.
-                let parent = path.parent().unwrap_or(&path).to_path_buf();
-                let args: Vec<&std::ffi::OsStr> = if cfg!(target_os = "macos") {
-                    vec!["-R".as_ref(), path.as_os_str()]
-                } else {
-                    vec![parent.as_os_str()]
-                };
-                if !os_open(&args) {
-                    self.warn("Couldn't open Finder");
+                // The file manager opens its folder with it selected.
+                if !os_reveal(&path) {
+                    self.warn("Couldn't open the file manager");
                 }
             }
             // A new terminal there (a file's: its folder), what runs in the
@@ -387,10 +381,20 @@ impl Tab {
     }
 }
 
+#[cfg(unix)]
 fn same_file(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     match (std::fs::metadata(a), std::fs::metadata(b)) {
         (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+        _ => false,
+    }
+}
+
+/// Windows: the same file by its full real path (no inode numbers to ask).
+#[cfg(not(unix))]
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
 }
@@ -444,17 +448,28 @@ pub fn os_open(args: &[&std::ffi::OsStr]) -> bool {
         });
         true
     }
-    #[cfg(not(test))]
+    #[cfg(all(not(test), target_os = "macos"))]
     {
-        let opener = if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        std::process::Command::new(opener)
-            .args(args)
-            .status()
-            .is_ok_and(|s| s.success())
+        std::process::Command::new("open").args(args).status().is_ok_and(|s| s.success())
+    }
+    // Elsewhere: the system's default app (Windows' shell, Linux's
+    // xdg-open), for the one thing asked.
+    #[cfg(all(not(test), not(target_os = "macos")))]
+    {
+        args.first().is_some_and(|a| opener::open(a).is_ok())
+    }
+}
+
+/// Show `path` selected in the file manager (Finder, File Explorer, the
+/// Linux desktop's). Tests only record it.
+pub fn os_reveal(path: &Path) -> bool {
+    #[cfg(any(test, target_os = "macos"))]
+    {
+        os_open(&["-R".as_ref(), path.as_os_str()])
+    }
+    #[cfg(all(not(test), not(target_os = "macos")))]
+    {
+        opener::reveal(path).is_ok()
     }
 }
 
