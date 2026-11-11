@@ -20,7 +20,8 @@ mod fonts;
 mod fstree;
 mod fuzzy;
 mod huge;
-#[cfg(test)]
+// The UI walkthroughs drive real Unix shells (zsh), symlinks and file modes.
+#[cfg(all(test, unix))]
 mod headless;
 mod instances;
 mod keymap;
