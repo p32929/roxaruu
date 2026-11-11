@@ -101,7 +101,8 @@ jobs:
           Priority: optional
           Description: A keyboard-first code editor with built-in terminals
           EOF
-          dpkg-deb --build --root-owner-group pkg "dist/roxaruu_${VERSION}_amd64.deb"
+          # xz: zstd (the newer default) is unreadable to Debian 11 and older.
+          dpkg-deb -Zxz --build --root-owner-group pkg "dist/roxaruu_${VERSION}_amd64.deb"
           tar -czf "dist/Roxaruu-$VERSION-linux-x64.tar.gz" -C pkg/usr .
 
       - uses: actions/upload-artifact@v4
