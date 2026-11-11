@@ -42,15 +42,25 @@ fn pid_runs(pid: i32, names: &[&str]) -> bool {
     if !pid_alive(pid) {
         return false;
     }
-    // The system's own name for it (not `ps`: Windows has none, and Git
-    // Bash's counts processes its own way).
-    let Some(name) = crate::sys::process_name(pid) else {
-        // Can't verify — fall back to the liveness check alone rather than
-        // dropping every window's marker.
+    // Can't verify — fall back to the liveness check alone rather than
+    // dropping every window's marker.
+    let Some(name) = process_command(pid) else {
         return true;
     };
     let name = name.to_lowercase();
     names.iter().any(|n| name.contains(n))
+}
+
+/// The name `pid` was started by: `ps` on Unix (the name as run, a link's
+/// too); Windows has no `ps` (Git Bash's counts processes its own way), so
+/// the system's own name there.
+fn process_command(pid: i32) -> Option<String> {
+    if cfg!(windows) {
+        return crate::sys::process_name(pid);
+    }
+    let out = std::process::Command::new("ps").args(["-p", &pid.to_string(), "-o", "comm="]).output().ok()?;
+    let comm = String::from_utf8_lossy(&out.stdout);
+    Some(comm.trim().rsplit('/').next().unwrap_or("").to_string())
 }
 
 /// Mark this process as having `folder` open.

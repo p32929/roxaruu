@@ -99,6 +99,10 @@ pub enum Pulse {
     Quiet(Duration),
 }
 
+/// How long a Windows console may take to ask its first question before
+/// what's typed stops waiting for it.
+const CONSOLE_START: Duration = Duration::from_secs(2);
+
 /// Output this recent: still printing.
 const PRINTING_WITHIN: Duration = Duration::from_millis(1500);
 /// Nothing printed for this long while running: quiet.
@@ -316,6 +320,7 @@ pub struct TerminalPane {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     /// Typed before Windows' console started (see `spawn`); `None` after.
     startup: Arc<Mutex<Option<Vec<u8>>>>,
+    born: Instant,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     rows: u16,
@@ -574,6 +579,7 @@ impl TerminalPane {
             let stamp = stamp.clone();
             let answer = writer.clone();
             let held = startup.clone();
+            let born = Instant::now();
             thread::spawn(move || {
                 let mut buf = [0u8; 8192];
                 loop {
@@ -607,10 +613,14 @@ impl TerminalPane {
                                 let mut w = answer.lock().unwrap_or_else(|e| e.into_inner());
                                 let _ = w.write_all(reply.as_bytes()).and_then(|()| w.flush());
                             }
-                            // The console has spoken: what was typed meanwhile goes now,
-                            // in order (sending waits on this lock).
+                            // The console's question answered (or it never asked):
+                            // what was typed meanwhile goes now, in order (sending
+                            // waits on this lock).
                             let mut held = held.lock().unwrap_or_else(|e| e.into_inner());
-                            if let Some(typed) = held.take().filter(|t| !t.is_empty()) {
+                            if held.is_some()
+                                && (asks > 0 || born.elapsed() > CONSOLE_START)
+                                && let Some(typed) = held.take().filter(|t| !t.is_empty())
+                            {
                                 let mut w = answer.lock().unwrap_or_else(|e| e.into_inner());
                                 let _ = w.write_all(&typed).and_then(|()| w.flush());
                             }
@@ -667,6 +677,7 @@ impl TerminalPane {
             stamp,
             writer,
             startup,
+            born: Instant::now(),
             master: pair.master,
             child,
             rows,
@@ -1322,6 +1333,14 @@ impl TerminalPane {
         let mut held = self.startup.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(typed) = held.as_mut() {
             typed.extend_from_slice(bytes); // the console hasn't started yet
+            if self.born.elapsed() <= CONSOLE_START {
+                return;
+            }
+            // It never asked: don't hold the keys any longer.
+            let typed = std::mem::take(typed);
+            *held = None;
+            let mut w = self.writer.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = w.write_all(&typed).and_then(|()| w.flush());
             return;
         }
         let mut w = self.writer.lock().unwrap_or_else(|e| e.into_inner());
