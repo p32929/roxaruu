@@ -75,7 +75,8 @@ jobs:
           printf '@"%%~dp0roxaruu.exe" %%*\r\n' > dist/rox.cmd
           ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
           [ -f "$ISCC" ] || choco install innosetup -y --no-progress
-          "$ISCC" "/DVersion=$VERSION" packaging/roxaruu.iss
+          # (Git Bash would take "/DVersion" for a path and rewrite it.)
+          MSYS_NO_PATHCONV=1 "$ISCC" "/DVersion=$VERSION" packaging/roxaruu.iss
           7z a "dist/Roxaruu-$VERSION-windows-x64.zip" ./target/release/roxaruu.exe ./dist/rox.cmd
           rm dist/roxaruu.ico dist/rox.cmd
 
