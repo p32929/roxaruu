@@ -231,9 +231,13 @@ fn watch(
         if said.is_empty() && quiet && !recent && w.agent.load(Ordering::Relaxed) {
             said.push("finished, or waiting for you".into());
         }
+        // Gone to another app or Space: the window's last word on focus (and
+        // so on what you're looking at) can be stale — macOS stops drawing a
+        // window it can't show, so it never hears you left.
+        let away = !APP_FOCUSED.load(Ordering::Relaxed) || crate::sys::app_active() == Some(false);
         // Seen as it happened; and a ringing bell is one alert, not twenty.
         if said.is_empty()
-            || w.looking.load(Ordering::Relaxed)
+            || (w.looking.load(Ordering::Relaxed) && !away)
             || last.is_some_and(|t| t.elapsed() < Duration::from_millis(1500))
         {
             continue;
@@ -243,7 +247,7 @@ fn watch(
             .into_iter()
             .rfind(|m| !m.is_empty())
             .unwrap_or_else(|| "wants your attention".into());
-        if !APP_FOCUSED.load(Ordering::Relaxed) {
+        if away {
             let name = w.name.lock().unwrap_or_else(|e| e.into_inner()).clone();
             crate::sys::notify(&format!("Roxaruu · {name}"), &message);
         }

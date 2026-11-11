@@ -2149,6 +2149,56 @@ fn headless_agent_alerts() {
     let msg = app(&h).toasts.last().unwrap().msg.clone();
     assert!(msg.contains("claude"), "names the agent: {msg}");
     shot(&mut h, "a0-agent-toast");
+
+    // On screen in the window, but you've gone to another Space or app:
+    // you're not looking, so the OS is told (with its sound) when the agent
+    // finishes — even though the window, given no frames once it can't be
+    // seen, still believes it has the focus (only macOS knows you left).
+    h.state_mut().0.terminal_mut().unwrap().pane.send_input(&[3]); // ⌃C the last agent
+    wait_for(&mut h, "it stopped", |a| !a.terminals[0].pane.is_running());
+    press(&mut h, ALT, Key::T); // on screen
+    assert!(app(&h).terminal_open);
+    run(
+        &mut h,
+        "./claude -c 'for i in $(seq 1 16); do echo working $i; sleep 0.25; done; sleep 30'",
+    );
+    wait_for(&mut h, "the agent working", screen_has("working 2"));
+    *crate::sys::APP_ACTIVE.lock().unwrap() = Some(false); // macOS: another app in front
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !crate::sys::NOTIFIED.lock().unwrap().iter().any(|(t, b)| t.contains("claude") && b.contains("finished, or waiting")) {
+        assert!(std::time::Instant::now() < deadline, "no notification for the agent on screen in a window you left");
+        h.step(); // the window still thinks it's focused
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    *crate::sys::APP_ACTIVE.lock().unwrap() = None;
+    press(&mut h, ALT, Key::T); // hidden again, as the next part starts
+
+    // A browser looking in (remote access): its copy of the window always
+    // counts itself focused, but you're not at the Mac's window — the OS is
+    // still told. (Its passes used to tell the watchers you were looking.)
+    use std::sync::atomic::Ordering::Relaxed;
+    press(&mut h, ALT, Key::T); // the terminal on screen, in both
+    h.state_mut().0.terminal_mut().unwrap().pane.send_input(&[3]); // ⌃C the agent
+    wait_for(&mut h, "the agent stopped", |a| !a.terminals[0].pane.is_running());
+    let both = |h: &mut Harness<'static, Root>| {
+        h.input_mut().focused = false; // the Mac's window, in the background
+        h.step();
+        h.state_mut().0.remote_pass = true; // then the browser's pass
+        h.input_mut().focused = true;
+        h.step();
+        h.state_mut().0.remote_pass = false;
+    };
+    run(&mut h, "sleep 1; printf '\\033]9;remote-time ping\\007'");
+    both(&mut h);
+    assert!(!crate::terminalpane::APP_FOCUSED.load(Relaxed), "the browser's pass doesn't count as you at the Mac");
+    assert!(!app(&h).terminals[0].pane.watch.looking.load(Relaxed));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !notified("remote-time ping") {
+        assert!(std::time::Instant::now() < deadline, "no OS notification with a browser looking in");
+        both(&mut h);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    h.input_mut().focused = true;
 }
 
 /// ⌘B moves the keyboard into a tree that's already showing; only from
@@ -2654,6 +2704,91 @@ fn headless_terminal_says_whether_it_is_printing() {
     wait_for(&mut h, "stopped", |a| a.terminal().unwrap().pane.pulse().is_none());
 }
 
+/// A window with no folder: opening one replaces it, unless you have
+/// terminals there (opened before any folder) — then the folder gets a
+/// window of its own and these stay as they were.
+#[test]
+#[ignore]
+fn headless_folder_from_a_window_with_terminals() {
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let ctx = |h: &Harness<'static, Root>| h.ctx.clone();
+
+    // No terminals: the folder opens right here.
+    let mut h = harness(None);
+    App::take_launched();
+    let c = ctx(&h);
+    h.state_mut().0.open_folder(root.clone(), &c);
+    h.step();
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(root.clone()));
+    assert!(App::take_launched().is_empty(), "no new window");
+    drop(h);
+
+    // A terminal (even idle, even hidden): a new window for the folder.
+    let mut h = harness(None);
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "a prompt", at_prompt);
+    press(&mut h, ALT, Key::T); // hidden still counts
+    App::take_launched();
+    let c = ctx(&h);
+    h.state_mut().0.open_folder(root.clone(), &c);
+    h.step();
+    assert!(app(&h).project.is_none(), "this window stays folder-less");
+    assert_eq!(app(&h).terminals.len(), 1, "its terminal kept");
+    let launched = App::take_launched();
+    assert!(
+        launched.iter().any(|l| l[0] == "new window" && l[1] == root.to_string_lossy()),
+        "{launched:?}"
+    );
+    assert!(app(&h).toasts.iter().any(|t| t.msg.contains("keeps its terminals")));
+}
+
+/// Claude Code in a Roxaruu terminal says when it's done through its own
+/// hooks (added by the `claude` shim): a stand-in `claude` that runs the
+/// `Stop` hook it was given, as Claude Code does, raises "finished" here.
+#[test]
+#[ignore]
+fn headless_claude_hooks_say_when_it_is_done() {
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().canonicalize().unwrap().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    // The stand-in: shows what it was given, then runs the Stop hook's
+    // command from the settings file the way Claude Code does — in a session
+    // of its own, with no terminal (so it can't just write to /dev/tty).
+    std::fs::write(
+        bin.join("claude"),
+        "#!/bin/bash\necho \"args: $*\"\n[ \"$1\" = --settings ] || exit 0\n\
+         cmd=$(sed -n 's/.*\"Stop\":\\[{\"hooks\":\\[{\"command\":\"\\([^\"]*\\)\".*/\\1/p' \"$2\")\n\
+         [ -n \"$cmd\" ] || cmd=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"hooks\"][\"Stop\"][0][\"hooks\"][0][\"command\"])' \"$2\")\n\
+         echo \"tty: $ROXARUU_CLAUDE_TTY\"\n\
+         echo '{}' | perl -MPOSIX -e 'POSIX::setsid(); exec \"/bin/bash\", \"-c\", $ARGV[0]' \"$cmd\"\n\
+         echo stand-in done\n",
+    )
+    .unwrap();
+    std::process::Command::new("chmod").arg("+x").arg(bin.join("claude")).status().unwrap();
+    let mut h = harness(None);
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "a prompt", at_prompt);
+    press(&mut h, ALT, Key::T); // hidden: so the alert is raised, not just seen
+    h.state_mut().0.focus = crate::app::Focus::Editor;
+    h.step();
+    // Typed into the hidden terminal straight.
+    // The shim first (as it always is), then the stand-in before any real one.
+    let line = format!("PATH=\"$OXRU_BRIDGE_DIR:{}:$PATH\" claude --resume abc\r", bin.display());
+    h.state_mut().0.terminals[0].pane.send_input(line.as_bytes());
+    wait_for(&mut h, "the stand-in ran", screen_has("stand-in done"));
+    let screen = app(&h).terminals[0].pane.screen().contents();
+    assert!(screen.contains("args: --settings ") && screen.contains("claude-hooks.json --resume abc"), "{screen}");
+    assert!(screen.contains("tty: /dev/tty"), "the shim names the terminal for the hooks: {screen}");
+    wait_for(&mut h, "the toast", |a| a.toasts.iter().any(|t| t.msg.contains("Claude Code: finished")));
+    assert!(app(&h).terminals[0].pane.attention, "a bell on its tab");
+}
+
 /// Right-click a tab: close others / to the right / to the left / saved,
 /// for editor tabs and terminal tabs alike.
 #[test]
@@ -3127,8 +3262,11 @@ fn headless_focus_keys_everywhere() {
                 continue;
             }
             let (command, what) = hint.unwrap_or_else(|| panic!("no key from {from:?} to {to:?}"));
+            // To the tree or the terminal: in the status bar, under them.
+            // To the editor: on its own row (`go_hint`, below).
             assert!(
-                app(&h).status_hints().iter().any(|(_, w, c)| *c == Some(command) && *w == what),
+                to == Focus::Editor
+                    || app(&h).status_hints().iter().any(|(_, w, c)| *c == Some(command) && *w == what),
                 "the status bar in {from:?} shows {what}"
             );
             assert!(app(&h).go_hint(to).is_some(), "drawn on {to:?} from {from:?}");
@@ -4481,6 +4619,12 @@ fn headless_every_key_that_applies_shows() {
     h.state_mut().0.select_tab(0);
     type_text(&mut h, "y");
     check(&mut h, "the editor, two unsaved");
+    shot(&mut h, "keys-editor-unsaved");
+    // Saving's keys, by the editor: this file's, and all of them.
+    let row = app(&h).editor_hints();
+    for what in ["save", "save all"] {
+        assert!(row.iter().any(|(_, w)| *w == what), "{what} on the editor's row: {row:?}");
+    }
 
     // The editor's right-click menu: its items with their keys, and they run.
     let editor = egui::pos2(700.0, 300.0);

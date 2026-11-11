@@ -17,7 +17,8 @@
 #
 # Overrides: BIN_DIR (the commands), APP_DIR (macOS app folder),
 # XDG_DATA_HOME (Linux menu entry), PLATFORM (pretend to be another OS, for
-# testing the script). The macOS app is unsigned.
+# testing the script). The macOS app is signed with a key made on this Mac
+# (no Apple account), so macOS remembers what you allowed it across updates.
 #
 # `./run.sh --temp` runs the checkout without installing anything.
 set -eu
@@ -226,19 +227,114 @@ mac)
     <!-- Belt and braces with the activity the app holds: no App Nap. -->
     <key>NSAppSleepDisabled</key>         <true/>
     <key>LSApplicationCategoryType</key>  <string>public.app-category.developer-tools</string>
+    <!-- What macOS asks before Roxaruu, or a program run in its terminals
+         (Claude Code's voice, a script driving another app), may use
+         something private. An app without the line for one is refused it
+         silently, never asked ("No audio detected from microphone"). The
+         same set VS Code declares. -->
     <key>NSDocumentsFolderUsageDescription</key> <string>Roxaruu opens code projects stored in your Documents folder.</string>
     <key>NSDesktopFolderUsageDescription</key>   <string>Roxaruu opens code projects stored on your Desktop.</string>
     <key>NSDownloadsFolderUsageDescription</key> <string>Roxaruu opens code projects stored in your Downloads folder.</string>
+    <key>NSNetworkVolumesUsageDescription</key>  <string>Roxaruu opens code projects stored on network drives.</string>
+    <key>NSRemovableVolumesUsageDescription</key> <string>Roxaruu opens code projects stored on external drives.</string>
+    <key>NSMicrophoneUsageDescription</key>      <string>A program running in a Roxaruu terminal (such as Claude Code's voice input) wants to use the microphone.</string>
+    <key>NSCameraUsageDescription</key>          <string>A program running in a Roxaruu terminal wants to use the camera.</string>
+    <key>NSSpeechRecognitionUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use speech recognition.</string>
+    <key>NSAppleEventsUsageDescription</key>     <string>A program running in a Roxaruu terminal wants to control another app.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use Bluetooth.</string>
+    <key>NSLocationUsageDescription</key>        <string>A program running in a Roxaruu terminal wants to know your location.</string>
+    <key>NSLocationWhenInUseUsageDescription</key> <string>A program running in a Roxaruu terminal wants to know your location.</string>
+    <key>NSContactsUsageDescription</key>        <string>A program running in a Roxaruu terminal wants to read your contacts.</string>
+    <key>NSCalendarsUsageDescription</key>       <string>A program running in a Roxaruu terminal wants to read your calendars.</string>
+    <key>NSRemindersUsageDescription</key>       <string>A program running in a Roxaruu terminal wants to read your reminders.</string>
+    <key>NSPhotoLibraryUsageDescription</key>    <string>A program running in a Roxaruu terminal wants to read your photos.</string>
+    <key>NSSystemAdministrationUsageDescription</key> <string>A program running in a Roxaruu terminal wants to change system settings.</string>
+    <!-- macOS 15+: ssh to a LAN address, a dev server or database on another
+         machine, a phone on the Wi-Fi — refused without this, never asked. -->
+    <key>NSLocalNetworkUsageDescription</key>    <string>A program running in a Roxaruu terminal wants to reach devices on your local network.</string>
+    <key>NSFileProviderDomainUsageDescription</key> <string>A program running in a Roxaruu terminal wants to open files in your cloud storage (iCloud Drive, Dropbox, OneDrive, Google Drive).</string>
+    <key>NSFileProviderPresenceUsageDescription</key> <string>A program running in a Roxaruu terminal wants to see which cloud storage files are in use.</string>
+    <key>NSAppleMusicUsageDescription</key>      <string>A program running in a Roxaruu terminal wants to use your music library.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use Bluetooth.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key> <string>A program running in a Roxaruu terminal wants to know your location.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use your calendars.</string>
+    <key>NSCalendarsWriteOnlyAccessUsageDescription</key> <string>A program running in a Roxaruu terminal wants to add events to your calendars.</string>
+    <key>NSRemindersFullAccessUsageDescription</key> <string>A program running in a Roxaruu terminal wants to use your reminders.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key> <string>A program running in a Roxaruu terminal wants to add to your photos.</string>
+    <key>NSFocusStatusUsageDescription</key>     <string>A program running in a Roxaruu terminal wants to know your Focus status.</string>
 </dict>
 </plist>
 PLIST
 
-    # Unsigned: no key, no identity. (The binary keeps only the automatic
-    # placeholder signature the linker gives every Apple Silicon program,
-    # which macOS needs to run it at all.) Built on this Mac, it has no
-    # quarantine flag, so it opens without a Gatekeeper prompt. Clear any
-    # extended attributes the build picked up, too.
+    # Built on this Mac, it has no quarantine flag, so it opens without a
+    # Gatekeeper prompt. Clear any extended attributes the build picked up.
     xattr -cr "$DEST.new" 2>/dev/null || true
+
+    # Signed with this Mac's own key. macOS remembers what you allowed an app
+    # (the microphone, the local network, Full Disk Access…) by its
+    # signature; with only the linker's placeholder, every build looked like
+    # a new app and was asked again. The key is made here once, kept in a
+    # keychain of its own and used for nothing else; trusting it for code
+    # signing asks for your password once. Anything going wrong leaves the
+    # placeholder, as before.
+    SIGN_NAME="Roxaruu Local Signing"
+    SIGN_DIR="$HOME/Library/Application Support/Roxaruu/signing"
+    SIGN_KC="$SIGN_DIR/roxaruu.keychain-db"
+    signing_ready() {
+        security find-identity -v -p codesigning "$SIGN_KC" 2>/dev/null | grep -q "\"$SIGN_NAME\""
+    }
+    make_signing_key() {
+        mkdir -p "$SIGN_DIR" && chmod 700 "$SIGN_DIR" || return 1
+        security delete-keychain "$SIGN_KC" >/dev/null 2>&1 || true
+        rm -f "$SIGN_KC"
+        # The keychain's own password: random, readable only by you.
+        (umask 077; head -c 24 /dev/urandom | base64 > "$SIGN_DIR/password") || return 1
+        pw="$(cat "$SIGN_DIR/password")"
+        tmp="$(mktemp -d)" || return 1
+        cat > "$tmp/cert.cnf" <<CNF
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = $SIGN_NAME
+[ext]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+CNF
+        # macOS's own openssl: its .p12 is one the keychain can read.
+        /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 36500 \
+            -keyout "$tmp/key.pem" -out "$SIGN_DIR/cert.pem" -config "$tmp/cert.cnf" >/dev/null 2>&1 &&
+            /usr/bin/openssl pkcs12 -export -inkey "$tmp/key.pem" -in "$SIGN_DIR/cert.pem" \
+                -out "$tmp/id.p12" -passout "pass:$pw" -name "$SIGN_NAME" >/dev/null 2>&1 &&
+            security create-keychain -p "$pw" "$SIGN_KC" &&
+            security set-keychain-settings "$SIGN_KC" &&
+            security unlock-keychain -p "$pw" "$SIGN_KC" &&
+            security import "$tmp/id.p12" -k "$SIGN_KC" -P "$pw" -T /usr/bin/codesign >/dev/null &&
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$SIGN_KC" >/dev/null 2>&1
+        ok=$?
+        rm -rf "$tmp"
+        return $ok
+    }
+    signed=""
+    if command -v security >/dev/null 2>&1; then
+        [ -f "$SIGN_KC" ] && [ -f "$SIGN_DIR/password" ] || make_signing_key || true
+        [ -f "$SIGN_DIR/password" ] && security unlock-keychain -p "$(cat "$SIGN_DIR/password")" "$SIGN_KC" 2>/dev/null
+        if ! signing_ready && [ -f "$SIGN_DIR/cert.pem" ]; then
+            blue "Trusting Roxaruu's own signing key (once): macOS asks for your password…"
+            security add-trusted-cert -r trustRoot -p codeSign -k "$SIGN_KC" "$SIGN_DIR/cert.pem" || true
+        fi
+        if signing_ready &&
+            codesign --force --keychain "$SIGN_KC" -s "$SIGN_NAME" "$DEST.new" >/dev/null 2>&1 &&
+            codesign --verify "$DEST.new" >/dev/null 2>&1; then
+            signed=1
+            green "Signed with this Mac's own key: permissions you allow stay allowed across updates"
+        fi
+    fi
+    if [ -z "$signed" ]; then
+        echo "Note: not signed (the signing key isn't set up); macOS may ask for permissions again after updates."
+    fi
 
     # Update in place: same folder, new contents. Launchpad and the Apps
     # list keep track of the app by its folder; deleting and recreating it

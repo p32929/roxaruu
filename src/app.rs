@@ -105,6 +105,8 @@ pub struct View {
     /// The editor's and the terminals' tab strips: scroll, drag.
     pub tabs: crate::ui::tabstrip::Strip,
     pub terms: crate::ui::tabstrip::Strip,
+    /// The tree's width last frame: the status bar's tree section matches it.
+    pub tree_w: f32,
 }
 
 /// The file tree's own state, and its search box (Go to File). The tree
@@ -870,8 +872,9 @@ impl App {
 
     // ---- folders & files ------------------------------------------------
 
-    /// Open `dir` here, or — if this window already has a project — in a new
-    /// window, like Oxru: one project per window.
+    /// Open `dir` here, or — if this window already has a project, or its
+    /// terminals are in use (opened before any folder: they're yours, not
+    /// the folder's) — in a new window, like Oxru: one project per window.
     pub fn open_folder(&mut self, dir: PathBuf, ctx: &egui::Context) {
         if self.project.as_ref().is_some_and(|p| p.root == dir) {
             return;
@@ -885,9 +888,10 @@ impl App {
                 if shown { ", switched to it" } else { "" }
             ));
         }
-        if self.project.is_some() {
+        if self.project.is_some() || !self.terminals.is_empty() {
+            let why = if self.project.is_some() { "" } else { " (this one keeps its terminals)" };
             match files::spawn_window(&dir) {
-                Ok(_) => self.notify(format!("Opened {} in a new window", display_name(&dir))),
+                Ok(_) => self.notify(format!("Opened {} in a new window{why}", display_name(&dir))),
                 Err(e) => self.warn(format!("Couldn't open a new window: {e}")),
             }
             return;
@@ -924,8 +928,8 @@ impl App {
     }
 
     /// Several folders at once (ticked in Recent Folders, or picked together
-    /// in Finder): the first here if this window has none, each of the
-    /// others in its own window. One toast for them all.
+    /// in Finder): the first here if this window has none (and no
+    /// terminals), each of the others in its own window. One toast for them all.
     pub fn open_folders(&mut self, dirs: Vec<PathBuf>, ctx: &egui::Context) {
         let n = dirs.len();
         let before: Vec<String> = self.toasts.iter().map(|t| t.msg.clone()).collect();

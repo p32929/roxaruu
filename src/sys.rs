@@ -287,6 +287,28 @@ pub fn notify(title: &str, body: &str) {
 #[cfg(all(not(target_os = "macos"), not(test)))]
 pub fn notify(_title: &str, _body: &str) {}
 
+/// Whether this app is the one in front, asked of macOS (any thread): the
+/// window can't say once you've gone to another Space or app, since macOS
+/// stops giving a window it can't show any frames. `None`: can't tell.
+#[cfg(all(target_os = "macos", not(test)))]
+pub fn app_active() -> Option<bool> {
+    Some(objc2_app_kit::NSRunningApplication::currentApplication().isActive())
+}
+
+#[cfg(all(not(target_os = "macos"), not(test)))]
+pub fn app_active() -> Option<bool> {
+    None
+}
+
+/// Tests say whether the app is in front.
+#[cfg(test)]
+pub static APP_ACTIVE: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub fn app_active() -> Option<bool> {
+    *APP_ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Bring the windows of process `pid` to the front.
 #[cfg(target_os = "macos")]
 pub fn activate(pid: i32) -> bool {

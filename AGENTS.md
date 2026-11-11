@@ -35,10 +35,12 @@ of "forgot to update X"):
   keys (`defaults_never_conflict`, `command_ids_are_unique_and_titled`).
 - `icon::for_command` in `ui.rs` (the match is exhaustive).
 - `App::available` (when it can run) and `App::run` (what it does) in `app.rs`.
-- Show its key where it applies, always, for where the keyboard is now:
-  status bar hints for the focused area (`status_hints`), the tab strips
-  for tab actions (`tab_hints`, drawn with `Paint::hints_in`, which keeps
-  the most useful when room is short), palette footers (`palette_footer`),
+- Show its key where it applies, next to the area it's about: the editor's
+  keys on the row under its tabs (`editor_hints`, with its tab keys,
+  `tab_hints`), the tree's in the status bar under the tree (`tree_hints`),
+  the terminal's in the rest of the status bar (`bar_hints`, ending with
+  the app-wide ⇧⌘P and F1), the terminal's tab keys on its own row; each
+  row keeps the most useful first when room is short. Palette footers (`palette_footer`),
   right-click menus (`tab_menu`, `terminal_menu`, `sidebar_menu`,
   `editor_menu`), dialog buttons, and the empty-folder page
   (`project_home`). A command that can run where the keyboard is must show
@@ -83,7 +85,9 @@ of "forgot to update X"):
   egui context (`app.remote_pass` is set meanwhile). Anything tied to the
   window's own context must use `main_ctx` or be per-context (like the app
   icon texture); anything platform-only (window buttons, viewport commands)
-  must check `remote_pass`.
+  must check `remote_pass`, and so must anything about you at the Mac's
+  window (whether it's focused, what you're looking at): a browser's copy
+  always counts itself focused (`poll_attention`, `headless_agent_alerts`).
 - Lifecycle (see `remote/mod.rs`): off at every launch, never a setting.
   Turning it on (`ToggleRemoteAccess`) always asks for a password, held
   only in memory by the window that turned it on, which runs the server

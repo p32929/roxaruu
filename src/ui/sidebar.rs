@@ -341,25 +341,31 @@ impl App {
                         icon::SIDEBAR,
                         format!("Hide File Tree{}", caps(Command::ToggleSidebar)),
                         Act::Hide,
+                        Command::ToggleSidebar,
                     ),
                     (
                         icon::COLLAPSE_ALL,
                         format!("Collapse Folders{}", caps(Command::CollapseFolders)),
                         Act::Run(Command::CollapseFolders),
+                        Command::CollapseFolders,
                     ),
                     (
                         icon::NEW_FOLDER,
                         format!("New Folder…{}", caps(Command::NewFolder)),
                         Act::Run(Command::NewFolder),
+                        Command::NewFolder,
                     ),
                     (
                         icon::NEW_FILE,
                         format!("New File…{}", caps(Command::NewFile)),
                         Act::Run(Command::NewFile),
+                        Command::NewFile,
                     ),
                 ];
-                for (glyph, tip, a) in buttons {
-                    if pt.icon_button(ui, glyph, &tip, false) {
+                // With the keyboard here, each button wears its key.
+                for (glyph, tip, a, cmd) in buttons {
+                    let key = focused.then(|| self.shortcut(cmd)).flatten();
+                    if pt.icon_button_key(ui, glyph, &tip, key.as_deref()) {
                         act = Some(a);
                     }
                 }

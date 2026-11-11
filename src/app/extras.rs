@@ -116,12 +116,20 @@ impl App {
     pub(crate) fn poll_attention(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering::Relaxed;
         let focused = ctx.input(|i| i.focused);
-        crate::terminalpane::APP_FOCUSED.store(focused, Relaxed);
+        // Whether you're at this window is the window's own say: a browser's
+        // copy always counts itself focused, and while one was open it kept
+        // telling the watchers you were looking, so nothing was raised.
+        let own = !self.remote_pass;
+        if own {
+            crate::terminalpane::APP_FOCUSED.store(focused, Relaxed);
+        }
         for i in 0..self.terminals.len() {
             let shown = self.terminal_open && (self.terminal_grid || i == self.active_terminal);
             let t = &mut self.terminals[i];
             t.pane.refresh_foreground();
-            t.pane.watch.looking.store(focused && shown, Relaxed);
+            if own {
+                t.pane.watch.looking.store(focused && shown, Relaxed);
+            }
             let name = t.pane.display_name();
             for message in t.pane.take_fired() {
                 let key = self

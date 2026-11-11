@@ -42,6 +42,57 @@ fn bridge_root() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("oxru").join("bridge"))
 }
 
+/// The `claude` in Roxaruu's terminals: the real Claude Code (the next one on
+/// `PATH`), with hooks that say here when it has finished or needs you, so
+/// Roxaruu tells you (a toast, a bell on the tab, a macOS notification if
+/// you're away) exactly then, not by guessing from its silence. Added for
+/// the run (`--settings`, merged with the user's own); their settings files
+/// are never touched.
+const CLAUDE_SHIM: &str = r##"#!/bin/bash
+# Roxaruu claude shim — see src/termbridge.rs.
+here="$(cd "$(dirname "$0")" && pwd)"
+REAL=""
+IFS=:
+for d in $PATH; do
+  [ "$d" = "$here" ] && continue
+  if [ -x "$d/claude" ] && [ ! -d "$d/claude" ]; then REAL="$d/claude"; break; fi
+done
+unset IFS
+[ -n "$REAL" ] || { echo "claude: command not found" >&2; exit 127; }
+[ -n "$OXRU_TERMINAL" ] && [ -f "$here/claude-hooks.json" ] || exec "$REAL" "$@"
+# Claude Code runs its hooks cut off from the terminal (no /dev/tty): tell
+# them which one is this.
+ROXARUU_CLAUDE_TTY="$(tty 2>/dev/null)"
+export ROXARUU_CLAUDE_TTY
+exec "$REAL" --settings "$here/claude-hooks.json" "$@"
+"##;
+
+/// What Claude Code's hooks run: says `$1` (`stop`, or the hook's own
+/// message for `notification`) to the terminal Claude Code runs in (named
+/// by the shim: hooks have no terminal of their own), as a notification
+/// escape (OSC 9), which [`crate::terminalpane`] raises.
+const CLAUDE_NOTIFY: &str = r##"#!/bin/bash
+# Roxaruu: Claude Code's hooks say it here — see src/termbridge.rs.
+input="$(cat)"
+msg="$(printf '%s' "$input" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+case "$1" in
+  stop) msg="finished" ;;
+  *) [ -n "$msg" ] || msg="needs your attention" ;;
+esac
+tty="${ROXARUU_CLAUDE_TTY:-/dev/tty}"
+case "$tty" in /dev/*) ;; *) exit 0 ;; esac
+printf '\033]9;Claude Code: %s\007' "$msg" > "$tty" 2>/dev/null || true
+"##;
+
+/// The hooks the `claude` shim adds: on finishing (`Stop`) and on wanting
+/// you (`Notification`: a permission, a question, idle), run `notify`.
+fn claude_hooks(notify: &Path) -> String {
+    let run = |what: &str| {
+        serde_json::json!([{ "hooks": [{ "type": "command", "command": format!("'{}' {what}", notify.display()) }] }])
+    };
+    serde_json::json!({ "hooks": { "Stop": run("stop"), "Notification": run("notification") } }).to_string()
+}
+
 /// The fake `osascript`. Routes terminal-opening AppleScript to Oxru, runs the
 /// real `osascript` for anything else.
 ///
@@ -234,6 +285,15 @@ fn write_bridge_files(dir: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
     let open_shim = dir.join("open");
     std::fs::write(&open_shim, shim_source(OPEN_SHIM)).ok()?;
     make_executable(&open_shim).ok()?;
+
+    // Claude Code with its finished / needs-you hooks.
+    let notify = dir.join("claude-notify");
+    std::fs::write(&notify, CLAUDE_NOTIFY).ok()?;
+    make_executable(&notify).ok()?;
+    std::fs::write(dir.join("claude-hooks.json"), claude_hooks(&notify)).ok()?;
+    let claude = dir.join("claude");
+    std::fs::write(&claude, CLAUDE_SHIM).ok()?;
+    make_executable(&claude).ok()?;
 
     Some((path_guard, write_zdotdir(dir)))
 }
@@ -596,6 +656,39 @@ pub fn cleanup() {
 
 #[cfg(test)]
 mod tests {
+
+    /// `claude` in a Roxaruu terminal is the real one (the next on `PATH`,
+    /// never the shim again) with the hooks added; anywhere else, untouched.
+    #[test]
+    fn the_claude_shim_adds_the_hooks_only_here() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let (shims, real) = (dir.path().join("shims"), dir.path().join("real"));
+        std::fs::create_dir_all(&shims).unwrap();
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(shims.join("claude"), CLAUDE_SHIM).unwrap();
+        std::fs::write(shims.join("claude-hooks.json"), claude_hooks(&shims.join("claude-notify"))).unwrap();
+        std::fs::write(real.join("claude"), "#!/bin/sh\necho \"$@\"\n").unwrap();
+        make_executable(&shims.join("claude")).unwrap();
+        make_executable(&real.join("claude")).unwrap();
+        let run = |here: bool| {
+            let mut c = Command::new(shims.join("claude"));
+            c.args(["--resume", "x"]).env("PATH", format!("{}:{}:/usr/bin:/bin", shims.display(), real.display()));
+            if here {
+                c.env("OXRU_TERMINAL", "1");
+            } else {
+                c.env_remove("OXRU_TERMINAL");
+            }
+            String::from_utf8(c.output().unwrap().stdout).unwrap()
+        };
+        let hooks = shims.join("claude-hooks.json");
+        assert_eq!(run(true).trim(), format!("--settings {} --resume x", hooks.display()));
+        assert_eq!(run(false).trim(), "--resume x");
+        let json: serde_json::Value =
+            serde_json::from_str(&claude_hooks(Path::new("/a b/claude-notify"))).unwrap();
+        assert_eq!(json["hooks"]["Stop"][0]["hooks"][0]["command"], "'/a b/claude-notify' stop");
+        assert_eq!(json["hooks"]["Notification"][0]["hooks"][0]["command"], "'/a b/claude-notify' notification");
+    }
     use super::*;
     use std::process::Command;
 
