@@ -255,7 +255,10 @@ mod tests {
         assert_eq!(parse(&[], true).target, Some(here.clone()));
         assert_eq!(parse(&["."], true).target.map(|t| t.canonicalize().unwrap()), Some(here.canonicalize().unwrap()));
         assert_eq!(parse(&[], false).target, None, "from the Dock: empty");
-        assert_eq!(parse(&["/x/y.rs"], false).target, Some("/x/y.rs".into()));
+        // An absolute path here (a drive and backslashes on Windows) stays as it is.
+        let file = std::env::temp_dir().join("x").join("y.rs");
+        let f = file.to_string_lossy().into_owned();
+        assert_eq!(parse(&[&f], false).target, Some(file.clone()));
         assert!(parse(&["src"], true).target.unwrap().is_absolute());
     }
 
@@ -276,10 +279,12 @@ mod tests {
 
     #[test]
     fn foreground_flag_comes_first_and_keeps_the_target() {
-        let l = parse(&["--foreground", "/x"], true);
+        let dir = std::env::temp_dir().join("x");
+        let d = dir.to_string_lossy().into_owned();
+        let l = parse(&["--foreground", &d], true);
         assert!(l.foreground);
-        assert_eq!(l.target, Some("/x".into()));
-        assert!(!parse(&["/x"], true).foreground);
+        assert_eq!(l.target, Some(dir));
+        assert!(!parse(&[&d], true).foreground);
     }
 
     /// The detached copy gets `--foreground`, its own process group, and no

@@ -42,9 +42,28 @@ pub fn process_alive(pid: i32) -> bool {
     rc == 0
 }
 
-#[cfg(not(unix))]
+/// Windows: whether `pid` is a process that hasn't exited.
+///
+/// Safety: the handle is checked for null before use and always closed; the
+/// exit code is written into a local.
+#[cfg(windows)]
 pub fn process_alive(pid: i32) -> bool {
-    with_process(pid, |_| ()).is_some()
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    if pid <= 0 {
+        return false;
+    }
+    #[allow(unsafe_code)]
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+        if h.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        ok && code == STILL_ACTIVE as u32
+    }
 }
 
 /// Off macOS, what the system knows of process `pid` (one cross-platform
@@ -58,7 +77,10 @@ fn with_process<T>(pid: i32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T
     let pid = Pid::from_u32(pid as u32);
     let mut sys = System::new().ok()?;
     let kind = ProcessRefreshKind::nothing().with_memory().with_cpu().with_cwd(UpdateKind::Always);
-    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, kind);
+    // Windows lists every process to find one (asking for just one there
+    // found nothing on GitHub's runners); Linux reads /proc/<pid> alone.
+    let which = if cfg!(windows) { ProcessesToUpdate::All } else { ProcessesToUpdate::Some(&[pid]) };
+    sys.refresh_processes_specifics(which, true, kind);
     sys.process(pid).map(f)
 }
 

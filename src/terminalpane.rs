@@ -313,7 +313,7 @@ pub struct TerminalPane {
     /// here; [`pump`] takes it and logs if that output waited too long for a
     /// frame (i.e. the UI loop was parked) — the freeze, quantified.
     stamp: Arc<Mutex<Option<Instant>>>,
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     rows: u16,
@@ -535,7 +535,8 @@ impl TerminalPane {
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader()?;
-        let writer = pair.master.take_writer()?;
+        // Shared with the reader, which answers the terminal's own questions.
+        let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(pair.master.take_writer()?));
 
         // The emulator lives behind a lock and is fed by the reader thread, NOT
         // the UI thread. This is the core of the no-freeze design: PTY output is
@@ -564,6 +565,7 @@ impl TerminalPane {
             let pending = pending.clone();
             let newlines = newlines.clone();
             let stamp = stamp.clone();
+            let answer = writer.clone();
             thread::spawn(move || {
                 let mut buf = [0u8; 8192];
                 loop {
@@ -583,6 +585,20 @@ impl TerminalPane {
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner())
                                 .process(&buf[..n]);
+                            // "Where's the cursor?" (DSR 6). Windows' console asks it
+                            // as it starts and shows nothing until it's answered;
+                            // programs anywhere may ask too. Answered here, at once.
+                            let asks = buf[..n].windows(4).filter(|w| *w == b"\x1b[6n").count();
+                            if asks > 0 {
+                                let (row, col) = parser
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .screen()
+                                    .cursor_position();
+                                let reply = format!("\x1b[{};{}R", row + 1, col + 1).repeat(asks);
+                                let mut w = answer.lock().unwrap_or_else(|e| e.into_inner());
+                                let _ = w.write_all(reply.as_bytes()).and_then(|()| w.flush());
+                            }
                             // Burst timing, for the watcher's "agent went quiet".
                             {
                                 let mut a = activity.lock().unwrap_or_else(|e| e.into_inner());
@@ -1287,11 +1303,8 @@ impl TerminalPane {
         if bytes.contains(&0x13) {
             tracing::warn!("sending XOFF (Ctrl+S) to the shell — this suspends output");
         }
-        if let Err(e) = self
-            .writer
-            .write_all(bytes)
-            .and_then(|()| self.writer.flush())
-        {
+        let mut w = self.writer.lock().unwrap_or_else(|e| e.into_inner());
+        if let Err(e) = w.write_all(bytes).and_then(|()| w.flush()) {
             tracing::warn!(error = %e, bytes = bytes.len(), "terminal write failed");
         }
     }
@@ -1683,6 +1696,33 @@ pub const SHELL_WAIT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "Where's the cursor?" gets an answer (Windows' console waits for one
+    /// before it shows anything; programs ask it everywhere): bash asks, reads
+    /// the reply, and prints it.
+    #[cfg(unix)]
+    #[test]
+    fn the_cursor_position_question_is_answered() {
+        let mut cmd = CommandBuilder::new("bash");
+        cmd.args(["--norc", "--noprofile"]);
+        cmd.cwd(std::env::temp_dir());
+        let mut t = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
+        t.send_input(b"printf '\\033[6n'; IFS= read -rs -d R pos; echo \"at:${pos#*[}:\"\r");
+        let deadline = Instant::now() + SHELL_WAIT;
+        let answered = |t: &TerminalPane| {
+            let s = t.screen().contents();
+            s.lines().any(|l| {
+                l.strip_prefix("at:").and_then(|r| r.strip_suffix(':')).is_some_and(|p| {
+                    p.split(';').count() == 2 && p.split(';').all(|n| n.parse::<u16>().is_ok_and(|n| n > 0))
+                })
+            })
+        };
+        while !answered(&t) {
+            assert!(Instant::now() < deadline, "no answer: {:?}", t.screen().contents());
+            t.pump();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 
     /// Windows: a terminal runs the system's shell (Git Bash where it's
     /// installed, as on GitHub's runners; else PowerShell or cmd), runs what's
