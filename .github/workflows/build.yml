@@ -62,7 +62,9 @@ jobs:
           sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > dmg/Roxaruu.app/Contents/Info.plist
           codesign --force --deep -s - dmg/Roxaruu.app
           ln -s /Applications dmg/Applications
-          hdiutil create -volname Roxaruu -srcfolder dmg -ov -format UDZO "dist/Roxaruu-$VERSION-macos.dmg"
+          # Sized by hand: hdiutil's own guess runs out of room for big apps.
+          size=$(( $(du -sm dmg | cut -f1) + 64 ))
+          hdiutil create -volname Roxaruu -srcfolder dmg -size "${size}m" -ov -format UDZO "dist/Roxaruu-$VERSION-macos.dmg"
 
       - name: Package (Windows installer and zip)
         if: runner.os == 'Windows'
