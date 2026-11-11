@@ -91,13 +91,14 @@ pub fn process_cwd(pid: i32) -> Option<std::path::PathBuf> {
     with_process(pid, |p| p.cwd().map(|c| c.to_path_buf())).flatten()
 }
 
-/// What a terminal's shell `shell` is running now, where there's no
-/// foreground process group to ask (Windows' consoles): the command you ran,
-/// its newest child (not that command's own helpers — Claude Code's `rg`,
-/// `git`), past the console host Windows puts beside it. `None`: just the
-/// shell.
+/// What a terminal's shell `shell` (named `name`) is running now, where
+/// there's no foreground process group to ask (Windows' consoles): the
+/// command you ran — going down past the shell itself (Git for Windows'
+/// bash.exe is a launcher for the real bash) and the console host beside it,
+/// to the newest child that isn't the shell, but not into that command's own
+/// helpers (Claude Code's `rg`, `git`). `None`: just the shell.
 #[cfg(windows)]
-pub fn foreground_process(shell: u32) -> Option<i32> {
+pub fn foreground_process(shell: u32, name: &str) -> Option<i32> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let mut sys = System::new().ok()?;
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
@@ -105,12 +106,22 @@ pub fn foreground_process(shell: u32) -> Option<i32> {
         let n = p.name().to_string_lossy().to_lowercase();
         n == "conhost.exe" || n == "openconsole.exe"
     };
-    let shell = Pid::from_u32(shell);
-    sys.processes()
-        .values()
-        .filter(|p| p.parent() == Some(shell) && !ignore(p))
-        .max_by_key(|p| p.start_time())
-        .map(|p| p.pid().as_u32() as i32)
+    let is_shell = |p: &sysinfo::Process| {
+        let n = p.name().to_string_lossy().to_lowercase();
+        n.strip_suffix(".exe").unwrap_or(&n) == name.to_lowercase()
+    };
+    let mut at = Pid::from_u32(shell);
+    loop {
+        let child = sys
+            .processes()
+            .values()
+            .filter(|p| p.parent() == Some(at) && !ignore(p))
+            .max_by_key(|p| p.start_time())?;
+        if !is_shell(child) {
+            return Some(child.pid().as_u32() as i32);
+        }
+        at = child.pid();
+    }
 }
 
 /// The short name of process `pid` — `node`, `cargo`, `vim` — used to label a

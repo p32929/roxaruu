@@ -589,7 +589,8 @@ mod tests {
         };
         t.input(&[key(Key::E, ALT)]);
         t.input(&[key(Key::Z, Modifiers::NONE), Event::Text("zqzq".into())]);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // (As long as a shell can take to start: Git Bash on Windows is slow.)
+        let deadline = std::time::Instant::now() + crate::terminalpane::SHELL_WAIT;
         while !t.pane.screen().contents().contains("zqzq") {
             assert!(std::time::Instant::now() < deadline, "eaten: {:?}", t.pane.screen().contents());
             t.pane.pump();

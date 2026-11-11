@@ -397,7 +397,7 @@ impl TerminalPane {
     #[cfg(not(unix))]
     fn foreground_pid(&self) -> Option<i32> {
         let shell = self.child.process_id()?;
-        crate::sys::foreground_process(shell).or(Some(shell as i32))
+        crate::sys::foreground_process(shell, &self.shell_name).or(Some(shell as i32))
     }
 
     /// Whether the shell has exited (e.g. the user typed `exit`).
@@ -1711,8 +1711,10 @@ mod tests {
         let deadline = Instant::now() + SHELL_WAIT;
         let answered = |t: &TerminalPane| {
             let s = t.screen().contents();
+            // (The reply may share the line with its own echo, if it came
+            // before `read` turned echo off.)
             s.lines().any(|l| {
-                l.strip_prefix("at:").and_then(|r| r.strip_suffix(':')).is_some_and(|p| {
+                l.rsplit_once("at:").and_then(|(_, r)| r.strip_suffix(':')).is_some_and(|p| {
                     p.split(';').count() == 2 && p.split(';').all(|n| n.parse::<u16>().is_ok_and(|n| n > 0))
                 })
             })
