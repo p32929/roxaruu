@@ -92,9 +92,10 @@ pub fn process_cwd(pid: i32) -> Option<std::path::PathBuf> {
 }
 
 /// What a terminal's shell `shell` is running now, where there's no
-/// foreground process group to ask (Windows' consoles): its newest
-/// descendant, past the console host Windows puts beside it. `None`: just
-/// the shell.
+/// foreground process group to ask (Windows' consoles): the command you ran,
+/// its newest child (not that command's own helpers — Claude Code's `rg`,
+/// `git`), past the console host Windows puts beside it. `None`: just the
+/// shell.
 #[cfg(windows)]
 pub fn foreground_process(shell: u32) -> Option<i32> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
@@ -104,23 +105,12 @@ pub fn foreground_process(shell: u32) -> Option<i32> {
         let n = p.name().to_string_lossy().to_lowercase();
         n == "conhost.exe" || n == "openconsole.exe"
     };
-    // Walk down from the shell, always into the newest child.
-    let mut at = Pid::from_u32(shell);
-    let mut found = None;
-    loop {
-        let next = sys
-            .processes()
-            .values()
-            .filter(|p| p.parent() == Some(at) && !ignore(p))
-            .max_by_key(|p| p.start_time());
-        match next {
-            Some(p) => {
-                at = p.pid();
-                found = Some(at.as_u32() as i32);
-            }
-            None => return found,
-        }
-    }
+    let shell = Pid::from_u32(shell);
+    sys.processes()
+        .values()
+        .filter(|p| p.parent() == Some(shell) && !ignore(p))
+        .max_by_key(|p| p.start_time())
+        .map(|p| p.pid().as_u32() as i32)
 }
 
 /// The short name of process `pid` — `node`, `cargo`, `vim` — used to label a
