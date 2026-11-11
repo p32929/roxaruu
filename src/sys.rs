@@ -56,7 +56,7 @@ fn with_process<T>(pid: i32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T
         return None;
     }
     let pid = Pid::from_u32(pid as u32);
-    let mut sys = System::new();
+    let mut sys = System::new().ok()?;
     let kind = ProcessRefreshKind::nothing().with_memory().with_cpu().with_cwd(UpdateKind::Always);
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, kind);
     sys.process(pid).map(f)
@@ -76,7 +76,7 @@ pub fn process_cwd(pid: i32) -> Option<std::path::PathBuf> {
 #[cfg(windows)]
 pub fn foreground_process(shell: u32) -> Option<i32> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut sys = System::new();
+    let mut sys = System::new().ok()?;
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
     let ignore = |p: &sysinfo::Process| {
         let n = p.name().to_string_lossy().to_lowercase();
