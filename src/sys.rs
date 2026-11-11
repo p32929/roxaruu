@@ -98,6 +98,37 @@ pub fn pointer_in_window(inner: eframe::egui::Rect) -> Option<eframe::egui::Pos2
     Some(eframe::egui::pos2(x - inner.left(), y - inner.top()))
 }
 
+/// Where a new window opens (egui points, from the primary screen's
+/// top-left): 80% of the screen's width and height, centred in what the
+/// menu bar and Dock leave free. The screen in use (with the key window).
+#[cfg(target_os = "macos")]
+pub fn new_window_rect() -> Option<eframe::egui::Rect> {
+    use eframe::egui::{Rect, pos2, vec2};
+    use objc2_app_kit::NSScreen;
+    let mtm = objc2::MainThreadMarker::new()?;
+    let primary = NSScreen::screens(mtm).firstObject()?.frame();
+    let screen = NSScreen::mainScreen(mtm)?;
+    // Cocoa's origin is the primary screen's bottom-left, y up.
+    let flip = |r: objc2_foundation::NSRect| {
+        Rect::from_min_size(
+            pos2(r.origin.x as f32, (primary.size.height - r.origin.y - r.size.height) as f32),
+            vec2(r.size.width as f32, r.size.height as f32),
+        )
+    };
+    Some(window_rect(flip(screen.frame()), flip(screen.visibleFrame())))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn new_window_rect() -> Option<eframe::egui::Rect> {
+    None
+}
+
+/// 80% of `screen` each way (no bigger than `visible`), centred in `visible`.
+pub fn window_rect(screen: eframe::egui::Rect, visible: eframe::egui::Rect) -> eframe::egui::Rect {
+    let size = (screen.size() * 0.8).min(visible.size());
+    eframe::egui::Rect::from_center_size(visible.center(), size)
+}
+
 /// What process `pid` costs: memory as Activity Monitor's "Memory" column
 /// counts it (the physical footprint), and CPU time used so far.
 pub struct Usage {
@@ -273,6 +304,21 @@ pub fn activate(_pid: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_windows_take_80_percent_centred() {
+        use eframe::egui::{Rect, pos2};
+        // A 1512×982 screen; the menu bar takes 33 at the top, the Dock 70
+        // at the bottom.
+        let screen = Rect::from_min_max(pos2(0.0, 0.0), pos2(1512.0, 982.0));
+        let visible = Rect::from_min_max(pos2(0.0, 33.0), pos2(1512.0, 912.0));
+        let r = window_rect(screen, visible);
+        assert!((r.width() - 1209.6).abs() < 0.01 && (r.height() - 785.6).abs() < 0.01, "{r:?}");
+        assert_eq!(r.center(), visible.center());
+        // A tall Dock: never bigger than what's free.
+        let small = Rect::from_min_max(pos2(0.0, 33.0), pos2(1512.0, 700.0));
+        assert_eq!(window_rect(screen, small).height(), small.height());
+    }
 
     /// Holding the activity is a plain AppKit call that can't fail.
     #[test]

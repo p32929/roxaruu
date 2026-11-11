@@ -39,8 +39,11 @@ of "forgot to update X"):
   status bar hints for the focused area (`status_hints`), the tab strips
   for tab actions (`tab_hints`, drawn with `Paint::hints_in`, which keeps
   the most useful when room is short), palette footers (`palette_footer`),
-  right-click menus (`tab_menu`, `terminal_menu`, `sidebar_menu`), dialog
-  buttons, and the empty-folder page (`project_home`).
+  right-click menus (`tab_menu`, `terminal_menu`, `sidebar_menu`,
+  `editor_menu`), dialog buttons, and the empty-folder page
+  (`project_home`). A command that can run where the keyboard is must show
+  its key there, or be listed as app-wide / menu-only in
+  `headless_every_key_that_applies_shows`.
 - If it's tab-like, make it work for both editor tabs and terminals (see
   `close_around`, `NextTab`/`MoveTabLeft` with a terminal focused). Both
   strips scroll and drag through `ui/tabstrip.rs`; moving goes through
@@ -112,6 +115,9 @@ of "forgot to update X"):
   `copy_text`), gate edits on `App::editable`; an unread `buf` refuses to
   save (`a_lazy_tab_reads_nothing_until_loaded`,
   `headless_restored_tabs_load_when_shown`, `headless_huge_file`).
+- A file reopens where you were in it (caret and scroll): `session::Place`,
+  remembered by `save_session` and on closing a tab, put back when a tab is
+  first read (`load_tab`, `open_file`) — `headless_files_reopen_where_you_were`.
 - Work per edit or per frame follows the screen, not the file: past
   `WHOLE_FILE_LINES`, highlighting, word wrap and widths cover only the
   lines `around` the view (`headless_big_file_works_around_the_view`).
@@ -187,7 +193,7 @@ HOME=$SP/home SHOTS=$SP/shots PROJECT=<a file inside a git repo> BIG=<a big sour
 | `syntax.rs` | tree-sitter highlighting, languages |
 | `buffer.rs` / `editor.rs` | text, undo, carets / a tab: buffer + highlighting |
 | `huge.rs` | files too big to hold: line index, reading lines and searching on disk |
-| `terminal.rs` / `terminalpane.rs` | terminal input / one PTY + screen, agent watching |
+| `terminal.rs` / `terminalpane.rs` | terminal input / one PTY + screen, agent watching, what its program is doing (`Pulse`: printing, running, quiet) |
 | `termbridge.rs` | scripts' "open a Terminal" requests become tabs here |
 | `palette.rs`, `fuzzy.rs`, `search.rs`, `fstree.rs` | lists, matching, search in files, the tree |
 | `remote/` | remote access: lifecycle (`mod`), in-memory password + sessions (`auth`), HTTPS server for all windows, run by the window that turned it on (`hub`), a window's private link and its flow control (`endpoint`), browser input (`input`), off-screen drawing (`render`), what changed as lossless WebP regions, on its own thread (`frames`), waking the window at full rate even hidden (`clock`), the page (`page.html`: its window list is the name's button, or Switch Window's key; `login.html`) |

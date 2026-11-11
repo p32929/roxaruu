@@ -11,6 +11,7 @@ use crate::app::{Answer, App, Focus};
 use crate::editor::{char_to_col, col_to_char};
 use crate::fonts::{self, Weight};
 use crate::keymap::Command;
+use crate::terminalpane::Pulse;
 use crate::palette::{Mode, Pick};
 use crate::theme::{Colors, mix};
 
@@ -293,6 +294,7 @@ pub mod icon {
             Command::RenameFile => EDIT,
             Command::DeleteFile => TRASH,
             Command::RevealInFinder => FOLDER_OPEN,
+            Command::OpenInTerminal => TERMINAL,
             Command::CopyPath | Command::CopyRelativePath => COPY,
             Command::ToggleBuildFolders => EYE,
             Command::NextTab | Command::MoveTabRight => ARROW_RIGHT,
@@ -368,6 +370,31 @@ fn command_menu(
     }
     pick
 }
+
+/// A right-click menu in sections: each a separated group, or (titled) a
+/// submenu of its own; every item with its shortcut. Returns the one picked.
+fn sectioned_menu(ui: &mut egui::Ui, sections: &MenuSections, key: &dyn Fn(Command) -> Option<String>) -> Option<Command> {
+    let mut pick = None;
+    let mut first = true;
+    for (title, group) in sections {
+        match title {
+            None => {
+                if !std::mem::take(&mut first) {
+                    ui.separator();
+                }
+                pick = pick.or(command_menu(ui, std::slice::from_ref(group), key));
+            }
+            Some(title) => {
+                ui.menu_button(*title, |ui| {
+                    pick = pick.or(command_menu(ui, std::slice::from_ref(group), key));
+                });
+            }
+        }
+    }
+    pick
+}
+
+type MenuSections = Vec<(Option<&'static str>, Vec<(Command, &'static str, bool)>)>;
 
 /// A dialog button: its label, the key hint shown on it, and the keys that press it.
 struct Btn {
@@ -704,6 +731,7 @@ impl App {
         self.tick(&ctx);
         self.handle_keys(&ctx);
         self.end_peek();
+        self.end_maximize();
         self.terminal_rects.clear();
         // The drawer is the tree with the keyboard: it goes when the keyboard does.
         if self.focus != Focus::Sidebar {
@@ -1029,6 +1057,10 @@ impl App {
                         "\ndeleted on disk — {} saves it back",
                         key(Command::Save).unwrap_or_default()
                     )
+                } else if tab.buf.modified && active {
+                    format!("\nunsaved — {} saves it", key(Command::Save).unwrap_or_default())
+                } else if tab.buf.modified {
+                    "\nunsaved".into()
                 } else {
                     String::new()
                 };
@@ -1827,6 +1859,7 @@ impl App {
                 cmd(Command::NewTerminal, "new terminal"),
                 cmd(Command::SwitchTerminal, "switch terminal"),
                 cmd(Command::ClearTerminal, "clear terminal"),
+                cmd(Command::OpenTerminalLink, "open a link"),
                 cmd(
                     Command::MaximizeTerminal,
                     if self.terminal_max {
@@ -1875,6 +1908,7 @@ impl App {
                 go(Focus::Terminal),
                 cmd(Command::NewFile, "new file"),
                 cmd(Command::RenameFile, "rename"),
+                cmd(Command::OpenInTerminal, "open in terminal"),
                 cmd(Command::DeleteFile, "move to trash"),
                 cmd(Command::CollapseFolders, "collapse all"),
             ]
@@ -1885,15 +1919,22 @@ impl App {
                 // A huge file is read-only: nothing to replace.
                 if self.editable() { raw("⇥", "go to replace") } else { None },
                 raw("esc", "close find"),
+                cmd(Command::Save, "save").filter(|_| self.active_tab().is_some_and(|t| t.buf.modified)),
             ]
         } else if self.active.is_some() {
             vec![
                 if self.editable() { None } else { cmd(Command::EditWholeFile, "edit whole file") },
+                // Unsaved work first: this file, then the others too.
+                cmd(Command::Save, "save").filter(|_| self.active_tab().is_some_and(|t| t.buf.modified)),
+                cmd(Command::SaveAll, "save all").filter(|_| self.tabs.iter().filter(|t| t.buf.modified).count() > 1),
                 go(Focus::Sidebar),
                 go(Focus::Terminal),
+                cmd(Command::Find, "find"),
                 cmd(Command::GoToFile, "go to file"),
-                cmd(Command::Palette, "all commands"),
+                cmd(Command::SearchInFiles, "search in files"),
                 cmd(Command::GoToLine, "go to line"),
+                cmd(Command::Palette, "all commands"),
+                raw("right-click", "more"),
             ]
         } else if self.project.is_some() {
             vec![
@@ -1906,6 +1947,7 @@ impl App {
             vec![
                 cmd(Command::OpenFolder, "open folder"),
                 cmd(Command::RecentFolders, "recent folders"),
+                cmd(Command::ToggleTerminal, "terminal"),
                 cmd(Command::Palette, "all commands"),
             ]
         };
@@ -1987,9 +2029,13 @@ impl App {
 
         let mut picked = None;
         let position = self.status_position();
-        let lang = self
-            .active_tab()
-            .map(|t| t.buf.lang.map_or("Plain Text", |l| l.name).to_string());
+        // A terminal with the keyboard: what it's doing, where a file's
+        // language would be.
+        let lang = if self.terminal_focused() {
+            self.terminal().map(|t| t.pane.pulse().map_or("idle".into(), Pulse::label))
+        } else {
+            self.active_tab().map(|t| t.buf.lang.map_or("Plain Text", |l| l.name).to_string())
+        };
         // Remote access, with the key that shows its address and state.
         let key = self
             .shortcut(Command::ShowRemoteAddress)
@@ -2174,6 +2220,7 @@ impl App {
             (Command::FocusSidebar, "focus file tree"),
             (Command::SwitchFocus, self.terminal_verb()),
             (Command::Palette, "all commands"),
+            (Command::CloseFolder, "close folder"),
             (Command::Help, "all shortcuts"),
         ];
         let rows: Vec<(Command, Vec<String>, &str)> = actions
@@ -2477,6 +2524,12 @@ impl App {
         let now = ui.input(|inp| inp.time);
         let wrap = self.config.settings.word_wrap;
         let v = usize::from(self.remote_pass);
+        // The right-click menu, made before the tab is borrowed for drawing.
+        let menu = self.editor_menu();
+        let keys: Vec<(Command, String)> = menu
+            .iter()
+            .flat_map(|(_, g)| g.iter().filter(|e| e.2).filter_map(|e| Some((e.0, self.shortcut(e.0)?))))
+            .collect();
         let Some(tab) = self.tabs.get_mut(i) else {
             return false;
         };
@@ -2559,6 +2612,12 @@ impl App {
             egui::scroll_area::ScrollSource::MOUSE_WHEEL
                 | egui::scroll_area::ScrollSource::SCROLL_BAR,
         );
+        if std::mem::take(&mut tab.restore_in[v]) {
+            area = area.vertical_scroll_offset(tab.scroll[v].y.max(0.0));
+            if !wrap {
+                area = area.horizontal_scroll_offset(tab.scroll[v].x.max(0.0));
+            }
+        }
         let revealing = std::mem::take(&mut tab.reveal_in[v]);
         if revealing {
             let (top, bottom) = (caret_row as f32 * row_h, (caret_row + 1) as f32 * row_h);
@@ -2749,6 +2808,17 @@ impl App {
         );
         if resp.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::Text);
+        }
+        // Right-click: what you can do here, each with its key.
+        let key = |c: Command| keys.iter().find(|k| k.0 == c).map(|k| k.1.clone());
+        resp.context_menu(|ui| {
+            if let Some(c) = sectioned_menu(ui, &menu, &key) {
+                self.editor_pick = Some(c);
+            }
+        });
+        // A right-click makes this the tab (and the editor) its menu acts on.
+        if resp.secondary_clicked() {
+            return true;
         }
         let Some(ptr) = ui.input(|inp| inp.pointer.interact_pos()) else {
             return false;
@@ -3008,7 +3078,7 @@ impl App {
         if terminal {
             v.extend([
                 (&[Command::NewTerminal][..], "new", true),
-                (&[Command::NextTab], "next", n > 1),
+                (&[Command::NextTab, Command::PrevTab], "next / previous", n > 1),
                 (&[Command::MoveTabLeft, Command::MoveTabRight], "move", n > 1),
                 (&[Command::ToggleTerminalGrid], "side by side", n > 1),
             ]);
@@ -3016,8 +3086,9 @@ impl App {
             v.extend([
                 (&[Command::CloseAllTabs][..], "close all", n > 1),
                 (&[Command::CloseSavedTabs], "close saved", self.available(Command::CloseSavedTabs) && n > 1),
-                (&[Command::NextTab], "next", n > 1),
+                (&[Command::NextTab, Command::PrevTab], "next / previous", n > 1),
                 (&[Command::MoveTabLeft, Command::MoveTabRight], "move", n > 1),
+                (&[Command::ToggleSplit], "side by side", n > 1),
                 (&[Command::ReopenTab], "reopen", self.available(Command::ReopenTab)),
             ]);
         }
@@ -3057,12 +3128,62 @@ impl App {
                 (Command::MoveTabRight, "Move Right", i + 1 < n),
             ],
             vec![
+                (Command::RenameFile, "Rename…", has_path),
                 (Command::CopyPath, "Copy Path", has_path),
                 (Command::CopyRelativePath, "Copy Relative Path", has_path),
                 (Command::RevealInFinder, "Reveal in Finder", has_path),
+                (Command::OpenInTerminal, "Open in Terminal", has_path),
                 (Command::FocusSidebar, "Show in File Tree", has_path),
             ],
         ]
+    }
+
+    /// The editor's right-click menu: editing, finding, lines, cursors,
+    /// saving, the view, each with its key; an item is on when its command
+    /// can run, as its key would.
+    fn editor_menu(&self) -> MenuSections {
+        use Command::*;
+        let group = |title: Option<&'static str>, items: &[(Command, &'static str)]| {
+            (title, items.iter().map(|&(c, t)| (c, t, self.available(c))).collect())
+        };
+        vec![
+            group(None, &[(Undo, "Undo"), (Redo, "Redo")]),
+            group(None, &[(Cut, "Cut"), (Copy, "Copy"), (Paste, "Paste"), (SelectAll, "Select All")]),
+            group(None, &[(Find, "Find"), (Replace, "Replace"), (GoToLine, "Go to Line…")]),
+            group(
+                Some("Lines"),
+                &[
+                    (ToggleComment, "Comment / Uncomment"),
+                    (MoveLineUp, "Move Up"),
+                    (MoveLineDown, "Move Down"),
+                    (DuplicateLineUp, "Duplicate Up"),
+                    (DuplicateLineDown, "Duplicate Down"),
+                    (DeleteLine, "Delete"),
+                    (InsertLineAbove, "New Line Above"),
+                    (InsertLineBelow, "New Line Below"),
+                    (IndentLines, "Indent"),
+                    (OutdentLines, "Outdent"),
+                ],
+            ),
+            group(
+                Some("Cursors"),
+                &[
+                    (AddNextOccurrence, "Add Cursor at Next Match"),
+                    (AddCursorAbove, "Add Cursor Above"),
+                    (AddCursorBelow, "Add Cursor Below"),
+                ],
+            ),
+            group(None, &[(Save, "Save"), (SaveAll, "Save All")]),
+            group(None, &[(ToggleWordWrap, "Word Wrap On / Off"), (ToggleSplit, "Split View On / Off")]),
+        ]
+    }
+
+    /// Run what the editor's right-click menu picked (on the file in front).
+    fn run_editor_pick(&mut self, ctx: &egui::Context) {
+        if let Some(c) = self.editor_pick.take() {
+            self.focus = Focus::Editor;
+            self.run(c, ctx);
+        }
     }
 
     /// The right-click menu of terminal `i` (its tab, or its title side by
@@ -3080,6 +3201,12 @@ impl App {
             vec![
                 (Command::MoveTabLeft, "Move Left", i > 0),
                 (Command::MoveTabRight, "Move Right", i + 1 < n),
+            ],
+            vec![
+                (Command::Copy, "Copy", true),
+                (Command::Paste, "Paste", true),
+                (Command::SelectAll, "Select All", true),
+                (Command::OpenTerminalLink, "Open a Link…", true),
             ],
             vec![
                 (Command::ClearTerminal, "Clear", true),
@@ -3106,6 +3233,7 @@ impl App {
             if self.editor_tile(ui, active, keyboard) {
                 self.focus = Focus::Editor;
             }
+            self.run_editor_pick(ui.ctx());
             return area;
         }
         let pt = self.paint();
@@ -3183,6 +3311,7 @@ impl App {
             let ctx = ui.ctx().clone();
             self.run(c, &ctx);
         }
+        self.run_editor_pick(ui.ctx());
         active_rect
     }
 
@@ -3584,11 +3713,7 @@ impl App {
                 } else {
                     None
                 };
-                let status = if self.terminals[i].pane.is_running() {
-                    "running"
-                } else {
-                    "idle"
-                };
+                let status = self.terminals[i].pane.pulse().map_or("idle".into(), Pulse::label);
                 // Switch Terminal's list only with more than one.
                 let all = self
                     .available(Command::SwitchTerminal)
@@ -3633,8 +3758,11 @@ impl App {
                 g,
                 c.text,
             );
-            // Right slot: × on hover; else running (dot) or finished-unseen (✓).
+            // Right slot: × on hover; else what it's doing, in the accent:
+            // printing (the dot breathes), running but quiet (it holds
+            // still), or finished unseen (✓).
             let t = &self.terminals[i];
+            let pulse = t.pane.pulse();
             let (glyph, color, size) = if resp.hovered() {
                 (
                     icon::CLOSE,
@@ -3643,7 +3771,16 @@ impl App {
                 )
             } else if t.pane.attention {
                 (icon::BELL, c.accent, 12.0)
-            } else if t.pane.is_running() {
+            } else if pulse == Some(Pulse::Printing) {
+                // A slow breath between faint and full. Its output already
+                // wakes the window (5 times a second at most) while it's on
+                // screen; a background tab's doesn't, so it asks as often.
+                let breath = 0.6 + 0.4 * (ui.input(|i| i.time) * std::f64::consts::TAU / 1.6).cos() as f32;
+                if !t.visible.load(std::sync::atomic::Ordering::Relaxed) {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                (icon::DOT, c.accent.gamma_multiply(breath.max(0.2)), 8.0)
+            } else if pulse.is_some() {
                 (icon::DOT, c.accent, 8.0)
             } else if t.pane.finished_unseen() {
                 (icon::PASS, c.accent, 12.0)
@@ -3660,6 +3797,11 @@ impl App {
                 pt.font(size, Weight::Regular),
                 color,
             );
+            // It turns from printing to running to quiet with no output to
+            // wake the window: look again then.
+            if let Some(d) = t.pane.pulse_changes_in() {
+                ui.ctx().request_repaint_after(d);
+            }
         }
         if lay.hidden_left + lay.hidden_right > 0 {
             let keys = [Command::SwitchTerminal; 2].map(|c| self.shortcut(c).unwrap_or_default());
@@ -4591,7 +4733,7 @@ impl App {
                     ("← →", "Fold / unfold a folder"),
                     ("↵", "Open the file and go to it"),
                     ("space", "Open the file, stay in the tree"),
-                    ("right-click", "New, rename, reveal, copy path, trash"),
+                    ("right-click", "New, rename, reveal, open in terminal, copy path, trash"),
                     ("esc", "Back to the editor"),
                 ],
                 vec!["Files"],
@@ -4615,6 +4757,7 @@ impl App {
                     ("⇥  ⇧⇥", "Indent / outdent"),
                     ("double / triple click", "Select word / line"),
                     ("esc", "Back to one cursor"),
+                    ("right-click", "Edit, find, lines, cursors, save: each with its key"),
                 ],
                 vec!["Editing"],
             ),

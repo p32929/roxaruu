@@ -115,8 +115,10 @@ pub struct Sidebar {
     pub selected: Option<PathBuf>,
     /// The file last revealed, so switching tabs reveals the new one once.
     pub revealed: Option<PathBuf>,
-    /// Scroll the selected row into view next frame.
+    /// Scroll the selected row into view next frame; `center` it (the tree
+    /// following the file in front, so what's around it shows too).
     pub scroll: bool,
+    pub center: bool,
     /// The list's scroll position and height last frame.
     pub offset: f32,
     pub view: f32,
@@ -187,6 +189,8 @@ pub struct App {
     pub(crate) remote_pass: bool,
     /// Switch Window was run in a browser's copy: its page shows the list.
     pub(crate) remote_windows: bool,
+    /// Picked from the editor's right-click menu, run once it's drawn.
+    pub(crate) editor_pick: Option<Command>,
     /// Layout per view: `[the window, a browser's copy]` (see `View`).
     pub(crate) views: [View; 2],
     /// This window's own egui context: settings always go to it, even when
@@ -264,6 +268,7 @@ impl App {
             remote_want: None,
             remote_pass: false,
             remote_windows: false,
+            editor_pick: None,
             views: Default::default(),
             main_ctx: ctx.clone(),
             project: None,
@@ -754,6 +759,7 @@ impl App {
             | Command::RenameFile
             | Command::DeleteFile
             | Command::RevealInFinder
+            | Command::OpenInTerminal
             | Command::CopyPath
             | Command::CopyRelativePath
             | Command::ToggleBuildFolders => self.run_file_command(command, ctx),
@@ -791,6 +797,7 @@ impl App {
             | Command::FocusSidebar => self.project.is_some(),
             Command::RenameFile
             | Command::RevealInFinder
+            | Command::OpenInTerminal
             | Command::CopyPath
             | Command::CopyRelativePath => self.file_target().is_some(),
             // Only with a list open: in the editor ⌘⌫ deletes to the line start.
@@ -972,10 +979,12 @@ impl App {
             self.active = Some(i);
             // Already open (from the tree, Go to File): show its tab.
             self.views.iter_mut().for_each(|v| v.tabs.reveal_again());
+            self.sidebar.revealed = None;
             return;
         }
         match Tab::open(path) {
-            Ok(tab) => {
+            Ok(mut tab) => {
+                recall_place(&mut tab);
                 // New tabs open beside the current one.
                 let at = self.active.map_or(self.tabs.len(), |a| a + 1);
                 self.tabs.insert(at, tab);
@@ -989,10 +998,13 @@ impl App {
     /// Read tab `i`'s file if it isn't yet: it's being shown.
     pub(crate) fn load_tab(&mut self, i: usize) {
         let Some(tab) = self.tabs.get_mut(i) else { return };
+        let fresh = !tab.is_loaded();
         if let Err(e) = tab.ensure_loaded()
             && !tab.gone
         {
             self.warn(e);
+        } else if fresh {
+            recall_place(tab);
         }
     }
 
@@ -1066,6 +1078,7 @@ impl App {
         if let Some(p) = &self.project {
             crate::session::save(&p.root, &self.tab_paths(), self.active.unwrap_or(0));
         }
+        remember_places(self.tabs.iter());
     }
 
     fn save_active(&mut self) {
@@ -1108,8 +1121,10 @@ impl App {
     pub fn select_tab(&mut self, i: usize) {
         if i < self.tabs.len() {
             self.active = Some(i);
-            // Chosen: in view, even if it already was the active one.
+            // Chosen: in view, even if it already was the active one; and
+            // shown in the tree again, even if it's where it was.
             self.views.iter_mut().for_each(|v| v.tabs.reveal_again());
+            self.sidebar.revealed = None;
             self.save_session();
         }
     }
@@ -1644,6 +1659,14 @@ impl App {
         self.begin_close(paths, After::Nothing, ctx);
     }
 
+    /// A maximized terminal is for working in it: once the keyboard goes
+    /// elsewhere (the editor, the tree, a file opened), it's back to its size.
+    pub(crate) fn end_maximize(&mut self) {
+        if self.terminal_max && !self.terminal_focused() && self.palette.is_none() && !self.modal_open() {
+            self.terminal_max = false;
+        }
+    }
+
     fn after_terminal_removed(&mut self) {
         if self.terminals.is_empty() {
             self.terminal_open = false;
@@ -1834,6 +1857,7 @@ impl App {
 
     fn close_tab_now(&mut self, i: usize) {
         let tab = self.tabs.remove(i);
+        remember_places(std::iter::once(&tab)); // for ⇧⌘T, or opening it again
         if let Some(path) = tab.path() {
             self.closed.retain(|p| p != path);
             self.closed.push(path.clone());
@@ -2137,11 +2161,7 @@ impl App {
                 icon: icon::TERMINAL,
                 matched: fuzzy::positions(query, &label),
                 label,
-                detail: if self.terminals[i].pane.is_running() {
-                    "running".into()
-                } else {
-                    String::new()
-                },
+                detail: self.terminals[i].pane.pulse().map(|p| p.label()).unwrap_or_default(),
                 caps: if i < 9 {
                     self.config
                         .keymap
@@ -2393,6 +2413,23 @@ fn rel_path(root: &Path, path: &Path) -> String {
             .join("/"),
         // Outside the project: the full path.
         Err(_) => path.to_string_lossy().into_owned(),
+    }
+}
+
+/// Note where you are in each of `tabs` (only ones read: an unread tab's
+/// caret is just the top), so each file reopens there.
+fn remember_places<'a>(tabs: impl Iterator<Item = &'a Tab>) {
+    let places: Vec<_> =
+        tabs.filter(|t| t.is_loaded()).filter_map(|t| Some((t.path()?.clone(), t.place()))).collect();
+    if !places.is_empty() {
+        crate::session::remember(&places);
+    }
+}
+
+/// Put a just-read tab back where you last were in its file.
+fn recall_place(tab: &mut Tab) {
+    if let Some(place) = tab.path().and_then(|p| crate::session::recall(p)) {
+        tab.go_to_place(place);
     }
 }
 

@@ -75,8 +75,12 @@ fn main() -> eframe::Result {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Roxaruu")
-        .with_inner_size([1280.0, 820.0])
         .with_min_inner_size([520.0, 420.0]);
+    // 80% of the screen, centred; a fixed size if the screen can't be asked.
+    viewport = match sys::new_window_rect() {
+        Some(r) => viewport.with_inner_size(r.size()).with_position(r.min),
+        None => viewport.with_inner_size([1280.0, 820.0]),
+    };
     // macOS: our own bar replaces the title bar; the traffic lights float over it.
     if cfg!(target_os = "macos") {
         viewport = viewport

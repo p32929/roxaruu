@@ -99,6 +99,12 @@ impl App {
                     self.warn("Couldn't open Finder");
                 }
             }
+            // A new terminal there (a file's: its folder), what runs in the
+            // others left alone.
+            Command::OpenInTerminal => {
+                let dir = if path.is_dir() { path } else { path.parent().map_or(path.clone(), Path::to_path_buf) };
+                self.new_terminal_in(Some(dir), ctx);
+            }
             Command::CopyPath | Command::CopyRelativePath => {
                 let text = match &self.project {
                     Some(p)

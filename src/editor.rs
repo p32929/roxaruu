@@ -127,6 +127,9 @@ pub struct Tab {
     pub scroll: [egui::Vec2; 2],
     /// Scroll the caret into view on the next frame (of every view).
     pub reveal: bool,
+    /// Scroll each view to its `scroll` on its next frame (put back where
+    /// you were, `go_to_place`), per view until it has drawn.
+    pub restore_in: [bool; 2],
     /// `reveal`, per view, until that view has drawn: a phone looking in
     /// follows the caret too, whichever view draws first.
     pub reveal_in: [bool; 2],
@@ -161,6 +164,7 @@ impl Tab {
             scroll: [egui::Vec2::ZERO; 2],
             reveal_in: [false; 2],
             reveal: false,
+            restore_in: [false; 2],
             last_edit: Instant::now(),
             caret_epoch: 0.0,
             drag_from: None,
@@ -265,6 +269,22 @@ impl Tab {
     }
 
     /// The caret's line and column.
+    /// Where you are in it (the window's view), to come back to.
+    pub fn place(&self) -> crate::session::Place {
+        let (line, col) = self.caret();
+        crate::session::Place { line, col, scroll: (self.scroll[0].x, self.scroll[0].y) }
+    }
+
+    /// Back where you were: the caret, and the view scrolled as it was (not
+    /// to the caret), in every view.
+    pub fn go_to_place(&mut self, place: crate::session::Place) {
+        self.go_to(place.line, place.col..place.col);
+        self.scroll = [egui::vec2(place.scroll.0, place.scroll.1); 2];
+        self.reveal = false;
+        self.reveal_in = [false; 2];
+        self.restore_in = [true; 2];
+    }
+
     pub fn caret(&self) -> (usize, usize) {
         match &self.huge {
             Some(h) => (h.cursor, 0),

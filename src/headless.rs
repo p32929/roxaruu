@@ -651,6 +651,20 @@ fn headless_terminals_walkthrough() {
     press(&mut h, ALT, Key::G);
     press(&mut h, ALT, Key::M);
     shot(&mut h, "75-tabs-after-close");
+
+    // Maximized, the keyboard going elsewhere brings it back to its size:
+    // to the editor (⌘J), the tree (⇧⌘E); the palette over it doesn't.
+    for (mods, key) in [(CMD, Key::J), (CMD_SHIFT, Key::E)] {
+        press(&mut h, ALT, Key::M);
+        assert!(h.state().0.terminal_max && h.state().0.terminal_focused());
+        press(&mut h, CMD_SHIFT, Key::P);
+        assert!(h.state().0.terminal_max, "the palette leaves it maximized");
+        press(&mut h, Modifiers::NONE, Key::Escape);
+        press(&mut h, mods, key);
+        assert!(!h.state().0.terminal_max, "{mods:?} {key:?} restores it");
+        press(&mut h, CMD, Key::J); // back into the terminal
+        assert!(h.state().0.terminal_focused());
+    }
 }
 
 /// Step 6: a script that opens OS terminal windows gets tabs here instead.
@@ -1887,6 +1901,31 @@ fn headless_sidebar_walkthrough() {
     h.key_press(Key::Escape);
     h.step();
 
+    // Open in Terminal: a folder's menu opens a new terminal there; ⌥⇧T on
+    // a file (in the tree, or the one in front) opens one in its folder.
+    let terminal_in = |h: &mut Harness<'static, Root>, dir: &std::path::Path| {
+        let want = dir.canonicalize().unwrap();
+        wait_for(h, "the new terminal's folder", |a| {
+            a.terminal_focused() && a.terminal().and_then(|t| t.pane.current_dir()).as_deref() == Some(want.as_path())
+        });
+    };
+    let before = app(&h).terminals.len();
+    let docs = at(&h, "docs");
+    click_at(&mut h, row(docs), egui::PointerButton::Secondary);
+    h.get_by_label_contains("Open in Terminal").click();
+    h.step();
+    h.step();
+    assert_eq!(app(&h).terminals.len(), before + 1);
+    terminal_in(&mut h, &root.join("docs"));
+    h.state_mut().0.focus = Focus::Editor; // the tab in front: docs/guide.md
+    h.step();
+    h.state_mut().0.open_file(&root.join("src/cart/mod.rs"));
+    h.step();
+    press(&mut h, Modifiers { alt: true, shift: true, ..Default::default() }, Key::T);
+    assert_eq!(app(&h).terminals.len(), before + 2, "a new one, the others left as they were");
+    terminal_in(&mut h, &root.join("src/cart"));
+    press(&mut h, ALT, Key::T); // hide them again
+
     // A file made outside the app shows up on its own.
     std::fs::write(root.join("src/cart/coupon.rs"), "").unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -2450,6 +2489,169 @@ fn headless_quit_asks_first() {
     assert!(app(&h).prompt.is_some(), "then asked about the unsaved file");
     press(&mut h, Modifiers::NONE, Key::D); // don't save
     assert!(app(&h).allow_close, "and it closes");
+}
+
+/// A file reopens where you were in it: the caret's line and column, and the
+/// scroll; after closing its tab (⇧⌘T) and after a restart.
+#[test]
+#[ignore]
+fn headless_files_reopen_where_you_were() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let text: String = (0..400).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(root.join("long.rs"), &text).unwrap();
+    std::fs::write(root.join("other.rs"), "fn x() {}\n").unwrap();
+    let mut h = harness(Some(root.join("long.rs")));
+    let ctx = h.ctx.clone();
+    h.state_mut().0.run(crate::keymap::Command::GoToLine, &ctx);
+    h.step();
+    type_text(&mut h, "250:4");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    for _ in 0..3 {
+        h.step();
+    }
+    let place = app(&h).active_tab().unwrap().place();
+    assert_eq!((place.line, place.col), (249, 3));
+    assert!(place.scroll.1 > 1000.0, "scrolled down to it: {place:?}");
+    shot(&mut h, "p0-at-line-250");
+
+    // Close it, open something else, ⇧⌘T: back at line 250, scrolled as it was.
+    h.state_mut().0.open_file(&root.join("other.rs"));
+    h.step();
+    h.state_mut().0.select_tab(0);
+    h.step();
+    press(&mut h, CMD, Key::W);
+    assert_eq!(app(&h).tabs.len(), 1);
+    press(&mut h, CMD_SHIFT, Key::T);
+    for _ in 0..3 {
+        h.step();
+    }
+    let back = app(&h).active_tab().unwrap().place();
+    assert_eq!((back.line, back.col), (249, 3), "⇧⌘T");
+    assert!((back.scroll.1 - place.scroll.1).abs() < 1.0, "scrolled as it was: {back:?} vs {place:?}");
+    drop(h);
+
+    // Restart: the tab comes back, and so does where you were in it.
+    let mut h = harness(Some(root.clone()));
+    let i = app(&h).tabs.iter().position(|t| t.buf.name() == "long.rs").unwrap();
+    h.state_mut().0.select_tab(i);
+    for _ in 0..3 {
+        h.step();
+    }
+    let again = app(&h).active_tab().unwrap().place();
+    assert_eq!((again.line, again.col), (249, 3), "after a restart");
+    assert!((again.scroll.1 - place.scroll.1).abs() < 1.0, "{again:?}");
+    shot(&mut h, "p1-restored");
+}
+
+/// The tree follows the file in front: switching tabs (or opening one, from
+/// anywhere) opens its folders, selects it and scrolls to it, while the
+/// tree stays where the keyboard isn't.
+#[test]
+#[ignore]
+fn headless_tree_follows_the_active_file() {
+    use crate::app::Focus;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    // Enough rows that the tree scrolls.
+    for d in 0..30 {
+        std::fs::create_dir_all(root.join(format!("pkg{d:02}/src/deep"))).unwrap();
+        std::fs::write(root.join(format!("pkg{d:02}/src/deep/mod.rs")), "x\n").unwrap();
+    }
+    std::fs::write(root.join("zz_last.md"), "x\n").unwrap();
+    let files = [root.join("pkg03/src/deep/mod.rs"), root.join("pkg27/src/deep/mod.rs"), root.join("zz_last.md")];
+    let mut h = harness(Some(files[0].clone()));
+    h.state_mut().0.config.settings.sidebar = true;
+    for f in &files[1..] {
+        h.state_mut().0.open_file(f);
+    }
+    h.state_mut().0.focus = Focus::Editor;
+    h.step();
+    let row_visible = |h: &Harness<'static, Root>, path: &std::path::Path| {
+        let a = app(h);
+        let p = a.project.as_ref().unwrap();
+        let i = p.tree.index_of(path).unwrap_or(usize::MAX);
+        let row = 26.0;
+        let (top, bottom) = (i as f32 * row, (i + 1) as f32 * row);
+        a.sidebar.selected.as_deref() == Some(path) && top >= a.sidebar.offset - 0.5 && bottom <= a.sidebar.offset + a.sidebar.view + 0.5
+    };
+    for (n, f) in [(0, &files[0]), (1, &files[1]), (2, &files[2]), (0, &files[0])] {
+        // Folders folded by hand in between.
+        let ctx = h.ctx.clone();
+        h.state_mut().0.run(crate::keymap::Command::CollapseFolders, &ctx);
+        h.step();
+        h.state_mut().0.select_tab(n);
+        for _ in 0..4 {
+            h.step();
+        }
+        assert_eq!(app(&h).focus, Focus::Editor, "the keyboard stays");
+        assert!(row_visible(&h, f), "{} selected and in view: {:?} offset {}", f.display(), app(&h).sidebar.selected, app(&h).sidebar.offset);
+    }
+    shot(&mut h, "tf0-tree-follows");
+
+    // The tree scrolled away by hand, then the same tab chosen again: back.
+    h.event(Event::PointerMoved(egui::pos2(120.0, 400.0)));
+    for _ in 0..20 {
+        h.event(Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        });
+        h.step();
+    }
+    assert!(!row_visible(&h, &files[0]), "scrolled away");
+    h.event(Event::PointerMoved(egui::pos2(700.0, 400.0)));
+    h.state_mut().0.select_tab(0);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(row_visible(&h, &files[0]), "the same tab again shows it again");
+
+    // A file opened by another name for the same place (a symlinked folder).
+    let link = dir.path().canonicalize().unwrap().join("link");
+    std::os::unix::fs::symlink(&root, &link).unwrap();
+    h.state_mut().0.open_file(&link.join("zz_last.md"));
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(row_visible(&h, &files[2]), "through a symlink: {:?}", app(&h).sidebar.selected);
+    shot(&mut h, "tf1-tree-follows-again");
+}
+
+/// A terminal's tab says what its program is doing: printing, running,
+/// quiet a while (maybe stuck), and the tab list and status bar say so too.
+#[test]
+#[ignore]
+fn headless_terminal_says_whether_it_is_printing() {
+    use crate::terminalpane::{Pulse, QUIET_AFTER};
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let mut h = harness(None);
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "a prompt", at_prompt);
+    assert_eq!(app(&h).terminal().unwrap().pane.pulse(), None, "a bare prompt: nothing running");
+    // Prints for a few seconds, then goes silent.
+    run(&mut h, "for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 0.4; done; sleep 60");
+    wait_for(&mut h, "printing", |a| a.terminal().unwrap().pane.pulse() == Some(Pulse::Printing));
+    shot(&mut h, "tp0-printing");
+    let deadline = std::time::Instant::now() + QUIET_AFTER + std::time::Duration::from_secs(10);
+    let quiet = loop {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        if let Some(p @ Pulse::Quiet(_)) = app(&h).terminal().unwrap().pane.pulse() {
+            break p;
+        }
+        assert!(std::time::Instant::now() < deadline, "never went quiet: {:?}", app(&h).terminal().unwrap().pane.pulse());
+    };
+    assert!(quiet.label().starts_with("quiet for 1"), "{}", quiet.label());
+    shot(&mut h, "tp1-quiet");
+    // Stopped: nothing running any more.
+    h.state_mut().0.terminal_mut().unwrap().pane.send_input(&[3]); // ⌃C
+    wait_for(&mut h, "stopped", |a| a.terminal().unwrap().pane.pulse().is_none());
 }
 
 /// Right-click a tab: close others / to the right / to the left / saved,
@@ -4223,4 +4425,85 @@ fn headless_remote_frames_in_chrome() {
     for name in ["typing", "scrolling", "terminal"] {
         assert!(metric(name)["frames"].as_f64().unwrap() >= 5.0, "{name}: too few frames: {out}");
     }
+}
+
+/// Wherever the keyboard is, every command that can run there shows its key
+/// somewhere on screen (the status bar, the tab rows, buttons, the editor's
+/// right-click menu); the rest are app-wide, listed by the palette (⇧⌘P)
+/// and the F1 sheet, whose keys always show, or live in a right-click menu
+/// of a tab or the tree.
+#[test]
+#[ignore]
+fn headless_every_key_that_applies_shows() {
+    use crate::keymap::Command::*;
+    let elsewhere = [
+        // App-wide: the palette and F1.
+        SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
+        OpenProjectSettings, OpenConfigFolder, Todos, ClipboardHistory, ZoomIn, ZoomOut, ResetZoom, FullScreen,
+        MaximizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
+        ToggleTerminal, Palette, SearchInFiles, SwitchFocus,
+        // A tab's or the tree's right-click menu.
+        RenameFile, RevealInFinder, OpenInTerminal, CopyPath, CopyRelativePath,
+        // On each tab's tooltip (⌘1–8); ⌘9 is "the last".
+        GoToTab(9),
+        // ⌘S always saves; its hint shows while there's something to save.
+        Save,
+    ];
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    for f in ["a.rs", "b.rs"] {
+        std::fs::write(root.join(f), "fn x() {}\n").unwrap();
+    }
+    let check = |h: &mut Harness<'static, Root>, place: &str| {
+        crate::keymap::record_shown(true);
+        h.step();
+        let shown = crate::keymap::record_shown(false);
+        let missing: Vec<_> = crate::keymap::COMMANDS
+            .iter()
+            .map(|c| c.command)
+            .filter(|c| app(h).available(*c) && !shown.contains(c) && !elsewhere.contains(c))
+            .collect();
+        assert!(missing.is_empty(), "in {place}, these run but show their key nowhere: {missing:?}");
+    };
+    let mut h = harness(None);
+    check(&mut h, "the welcome page");
+    let mut h = harness(Some(root.clone()));
+    check(&mut h, "the empty-folder page");
+    h.state_mut().0.open_file(&root.join("a.rs"));
+    h.state_mut().0.open_file(&root.join("b.rs"));
+    h.step();
+    check(&mut h, "the editor");
+    type_text(&mut h, "x");
+    check(&mut h, "the editor, unsaved");
+    h.state_mut().0.select_tab(0);
+    type_text(&mut h, "y");
+    check(&mut h, "the editor, two unsaved");
+
+    // The editor's right-click menu: its items with their keys, and they run.
+    let editor = egui::pos2(700.0, 300.0);
+    click_at(&mut h, editor, egui::PointerButton::Secondary);
+    shot(&mut h, "keys-editor-menu");
+    assert!(h.query_all_by_label_contains("⌘Z").count() >= 2, "Undo and Redo show their keys");
+    h.get_by_label_contains("Select All").click();
+    h.step();
+    h.step();
+    assert!(app(&h).active_tab().unwrap().buf.selection().is_some(), "Select All from the menu");
+    click_at(&mut h, editor, egui::PointerButton::Secondary);
+    h.get_by_label_contains("Save All").click();
+    h.step();
+    h.step();
+    assert!(app(&h).tabs.iter().all(|t| !t.buf.modified), "Save All from the menu");
+    press(&mut h, CMD, Key::F);
+    check(&mut h, "the find bar");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    h.state_mut().0.focus_sidebar();
+    h.step();
+    check(&mut h, "the tree");
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "a prompt", at_prompt);
+    check(&mut h, "a terminal");
+    shot(&mut h, "keys-terminal");
 }

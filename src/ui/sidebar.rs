@@ -167,11 +167,18 @@ impl App {
             return;
         }
         self.sidebar.revealed = Some(path.clone());
-        if let Some(p) = &mut self.project
-            && p.tree.reveal(&path).is_some()
-        {
+        let Some(p) = &mut self.project else { return };
+        // The same file by another name (through a symlink, /var and
+        // /private/var) is still the one in the tree.
+        let found = p.tree.reveal(&path).map(|_| path.clone()).or_else(|| {
+            let real = path.canonicalize().ok()?;
+            let there = p.root.join(real.strip_prefix(p.root.canonicalize().ok()?).ok()?);
+            p.tree.reveal(&there).map(|_| there)
+        });
+        if let Some(path) = found {
             self.sidebar.selected = Some(path);
             self.sidebar.scroll = true;
+            self.sidebar.center = true;
         }
     }
 
@@ -441,6 +448,7 @@ impl App {
         }
         self.sidebar.searching |= !self.sidebar.query.is_empty();
         self.update_hits(); // for what was just typed
+        let center = std::mem::take(&mut self.sidebar.center);
         let Some(project) = &self.project else { return };
 
         // The rows.
@@ -472,7 +480,10 @@ impl App {
         {
             let (top, bottom) = (i as f32 * row_h, (i + 1) as f32 * row_h);
             let (off, view) = (self.sidebar.offset, self.sidebar.view);
-            if top < off {
+            let out_of_view = top < off || (bottom > off + view && view > 0.0);
+            if out_of_view && center {
+                area = area.vertical_scroll_offset((top + row_h / 2.0 - view / 2.0).max(0.0));
+            } else if top < off {
                 area = area.vertical_scroll_offset((top - row_h).max(0.0));
             } else if bottom > off + view && view > 0.0 {
                 area = area.vertical_scroll_offset(bottom - view + row_h);
@@ -497,7 +508,15 @@ impl App {
                         Stroke::new(1.0, c.accent.gamma_multiply(0.6)),
                         StrokeKind::Inside,
                     );
-                } else if is_sel || is_active {
+                } else if is_active {
+                    // The file in front: marked whatever has the keyboard.
+                    p.rect_filled(bg, 6.0 * s, c.accent.gamma_multiply(0.12));
+                    p.rect_filled(
+                        Rect::from_min_size(bg.left_top(), vec2(2.5 * s, bg.height())).shrink2(vec2(0.0, 3.0 * s)),
+                        1.5 * s,
+                        c.accent,
+                    );
+                } else if is_sel {
                     p.rect_filled(bg, 6.0 * s, c.hover);
                 } else if resp.hovered() {
                     p.rect_filled(bg, 6.0 * s, c.hover.gamma_multiply(0.6));
@@ -791,6 +810,7 @@ impl App {
                     "Reveal in Finder"
                 },
             );
+            item(ui, Command::OpenInTerminal, "Open in Terminal");
             item(ui, Command::CopyPath, "Copy Path");
             item(ui, Command::CopyRelativePath, "Copy Relative Path");
             ui.separator();

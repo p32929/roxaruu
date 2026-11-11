@@ -89,6 +89,52 @@ fn osc_notification(params: &[&[u8]]) -> Option<String> {
     }
 }
 
+/// What a running program is doing, told by its output: still printing,
+/// running (printed a moment ago), or quiet this long — maybe waiting, maybe
+/// stuck.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Pulse {
+    Printing,
+    Running,
+    Quiet(Duration),
+}
+
+/// Output this recent: still printing.
+const PRINTING_WITHIN: Duration = Duration::from_millis(1500);
+/// Nothing printed for this long while running: quiet.
+pub const QUIET_AFTER: Duration = Duration::from_secs(10);
+
+impl Pulse {
+    /// For a terminal running a program or not, its output last `since` ago.
+    fn of(running: bool, since: Option<Duration>) -> Option<Pulse> {
+        if !running {
+            return None;
+        }
+        Some(match since {
+            Some(d) if d < PRINTING_WITHIN => Pulse::Printing,
+            Some(d) if d >= QUIET_AFTER => Pulse::Quiet(d),
+            _ => Pulse::Running,
+        })
+    }
+
+    /// For the tab's tooltip and the status bar.
+    pub fn label(self) -> String {
+        match self {
+            Pulse::Printing => "printing".into(),
+            Pulse::Running => "running".into(),
+            Pulse::Quiet(d) => {
+                let s = d.as_secs();
+                let ago = match s {
+                    0..60 => format!("{s}s"),
+                    60..3600 => format!("{}m", s / 60),
+                    _ => format!("{}h {}m", s / 3600, s / 60 % 60),
+                };
+                format!("quiet for {ago}")
+            }
+        }
+    }
+}
+
 /// When the current burst of output started and when output last came.
 #[derive(Default)]
 struct Activity {
@@ -324,6 +370,30 @@ impl TerminalPane {
     /// Whether the shell has exited (e.g. the user typed `exit`).
     pub fn exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
+    /// What the running program is doing, by its output (none: nothing runs).
+    pub fn pulse(&self) -> Option<Pulse> {
+        Pulse::of(self.is_running(), self.since_output())
+    }
+
+    /// When `pulse` next changes with no output to say so (to look again
+    /// then, not every frame): printing turns running, running turns quiet,
+    /// and quiet counts on. Never sooner than the 5fps unattended output gets.
+    pub fn pulse_changes_in(&self) -> Option<Duration> {
+        let since = self.since_output().filter(|_| self.is_running())?;
+        let next = if since < PRINTING_WITHIN {
+            PRINTING_WITHIN - since
+        } else if since < QUIET_AFTER {
+            QUIET_AFTER - since
+        } else {
+            Duration::from_secs(1)
+        };
+        Some(next.max(Duration::from_millis(200)))
+    }
+
+    fn since_output(&self) -> Option<Duration> {
+        self.activity.lock().unwrap_or_else(|e| e.into_inner()).last.map(|t| t.elapsed())
     }
 
     /// Whether a foreground command (beyond the bare shell) is running — i.e.
@@ -1584,6 +1654,19 @@ pub const SHELL_WAIT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pulse_from_output() {
+        let s = Duration::from_secs;
+        assert_eq!(Pulse::of(false, Some(s(0))), None, "nothing running");
+        assert_eq!(Pulse::of(true, Some(Duration::from_millis(200))), Some(Pulse::Printing));
+        assert_eq!(Pulse::of(true, Some(s(5))), Some(Pulse::Running));
+        assert_eq!(Pulse::of(true, Some(s(10))), Some(Pulse::Quiet(s(10))));
+        assert_eq!(Pulse::of(true, None), Some(Pulse::Running), "nothing printed yet");
+        assert_eq!(Pulse::Quiet(s(42)).label(), "quiet for 42s");
+        assert_eq!(Pulse::Quiet(s(150)).label(), "quiet for 2m");
+        assert_eq!(Pulse::Quiet(s(3 * 3600 + 120)).label(), "quiet for 3h 2m");
+    }
     use std::time::{Duration, Instant};
 
     fn idle_term() -> TerminalPane {

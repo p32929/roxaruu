@@ -44,6 +44,7 @@ pub enum Command {
     RenameFile,
     DeleteFile,
     RevealInFinder,
+    OpenInTerminal,
     CopyPath,
     CopyRelativePath,
     ToggleBuildFolders,
@@ -149,6 +150,7 @@ commands! {
     RenameFile, "file.rename", "Rename File…", ["f2"];
     DeleteFile, "file.delete", "Move to Trash", ["ctrl+backspace"];
     RevealInFinder, "file.reveal", "Reveal in Finder", ["ctrl+alt+r"];
+    OpenInTerminal, "file.openInTerminal", "Open in Terminal (a New One, in That Folder)", ["alt+shift+t"];
     CopyPath, "file.copyPath", "Copy Path", ["ctrl+alt+c"];
     CopyRelativePath, "file.copyRelativePath", "Copy Relative Path", ["ctrl+alt+shift+c"];
     ToggleBuildFolders, "search.toggleBuildFolders", "Search: Include / Skip Build Folders", ["alt+h"];
