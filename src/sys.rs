@@ -133,8 +133,11 @@ pub fn process_name(pid: i32) -> Option<String> {
 pub fn process_name(pid: i32) -> Option<String> {
     with_process(pid, |p| {
         let name = p.name().to_string_lossy().into_owned();
-        // Windows names end in .exe; the tab says "node", not "node.exe".
-        name.strip_suffix(".exe").map(str::to_string).unwrap_or(name)
+        // Windows names end in .exe (or .EXE); the tab says "node", not "node.exe".
+        match name.len().checked_sub(4) {
+            Some(n) if name.is_char_boundary(n) && name[n..].eq_ignore_ascii_case(".exe") => name[..n].to_string(),
+            _ => name,
+        }
     })
 }
 

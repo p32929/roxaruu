@@ -1684,6 +1684,40 @@ pub const SHELL_WAIT: Duration = Duration::from_secs(30);
 mod tests {
     use super::*;
 
+    /// Windows: a terminal runs the system's shell (Git Bash where it's
+    /// installed, as on GitHub's runners; else PowerShell or cmd), runs what's
+    /// typed, and names the program running in it, then nothing once it ends.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_terminal_runs_commands_and_names_them() {
+        let dir = std::env::temp_dir();
+        let mut t = TerminalPane::new("t", 24, 100, &dir, None).expect("a shell starts");
+        let wait = |t: &mut TerminalPane, what: &str, done: &dyn Fn(&mut TerminalPane) -> bool| {
+            let deadline = Instant::now() + SHELL_WAIT;
+            while !done(t) {
+                assert!(Instant::now() < deadline, "timed out waiting for {what}: {:?}", t.screen().contents());
+                t.pump();
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+        t.send_input(b"echo roxaruu-says-hi\r");
+        wait(&mut t, "the echo", &|t| t.screen().contents().matches("roxaruu-says-hi").count() >= 2);
+        // ping runs for a while in every Windows shell.
+        t.send_input(b"ping -n 30 127.0.0.1\r");
+        wait(&mut t, "ping named", &|t| {
+            t.last_proc_check = Instant::now() - PROC_POLL * 2;
+            t.refresh_foreground();
+            t.proc.eq_ignore_ascii_case("ping")
+        });
+        assert!(t.is_running());
+        t.send_input(&[3]); // Ctrl+C
+        wait(&mut t, "back to the prompt", &|t| {
+            t.last_proc_check = Instant::now() - PROC_POLL * 2;
+            t.refresh_foreground();
+            !t.is_running()
+        });
+    }
+
     #[test]
     fn pulse_from_output() {
         let s = Duration::from_secs;
@@ -1708,6 +1742,7 @@ mod tests {
     /// The tab has to follow `cd`. It used to name the folder the terminal was
     /// spawned in, forever.
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn the_folder_label_follows_the_shells_working_directory() {
         // A real shell, told to cd somewhere else, then left at a prompt.
         let start = std::env::temp_dir();
@@ -1747,6 +1782,7 @@ mod tests {
     /// The read forks `lsof`, so it must not fire for a terminal that hasn't
     /// printed anything, nor while a command is running.
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn the_working_directory_is_only_re_read_when_it_could_have_changed() {
         let mut term = idle_term();
 
@@ -1985,6 +2021,7 @@ mod tests {
     /// arriving row, so a busy terminal dragged you back to the bottom within
     /// seconds.
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn scrolling_up_holds_the_text_still_while_output_arrives() {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
@@ -2032,6 +2069,7 @@ mod tests {
     /// then fall off the top as new ones arrive, so the history stops
     /// growing — the view must still hold the text still.
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn scroll_lock_holds_with_a_full_history() {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
@@ -2060,6 +2098,7 @@ mod tests {
 
     /// …and at the bottom it must still follow, or the terminal would freeze.
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn at_the_bottom_the_view_keeps_following_new_output() {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
@@ -2105,6 +2144,7 @@ mod tests {
 
     /// Marking text while scrolled up must not restart the auto-scroll.
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn a_selection_does_not_break_scroll_lock() {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
@@ -2145,6 +2185,7 @@ mod tests {
     /// the screen onto unrelated output, which reads as the terminal scrolling
     /// even though the view itself is holding still.
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn a_mark_stays_on_the_text_it_was_made_on() {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
@@ -2232,12 +2273,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn finished_unseen_starts_false() {
         let term = idle_term();
         assert!(!term.finished_unseen());
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn finished_unseen_flags_on_running_to_idle_transition() {
         let mut term = idle_term();
         term.set_proc("sleep".to_string());
@@ -2253,6 +2296,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn finished_unseen_stays_false_while_command_changes_but_keeps_running() {
         let mut term = idle_term();
         term.set_proc("sleep".to_string());
@@ -2264,6 +2308,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn mark_viewed_clears_finished_unseen() {
         let mut term = idle_term();
         term.set_proc("sleep".to_string());
@@ -2274,6 +2319,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn captures_command_output() {
         let dir = std::env::temp_dir();
         let mut cmd = CommandBuilder::new("/bin/sh");
@@ -2302,6 +2348,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn paste_delivers_text_to_shell() {
         // Pasting "printf PASTED\n" should reach the shell and run, just like
         // typing it — newlines normalized to CR so the line executes.
@@ -2332,6 +2379,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn selection_reads_across_scrollback() {
         // Mark text that runs off the top of the screen into scrollback and copy
         // it — the selection must span more than one screen.
@@ -2373,6 +2421,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn shift_click_extends_selection_across_scroll() {
         // Simulate: click a start point, wheel-scroll up into history, then
         // Shift+Click a point now on screen. The selection must span the lines
@@ -2415,6 +2464,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn detects_mouse_reporting_request() {
         // A program that turns on xterm mouse tracking (1000) with SGR encoding
         // (1006) must flip wants_mouse() — that's what makes the GUI forward the
@@ -2434,6 +2484,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
     fn display_name_reflects_running_command() {
         // Use a plain `/bin/sh` (not the user's login shell) so the test doesn't
         // depend on a slow/noisy `~/.zprofile`; we only need the foreground-proc

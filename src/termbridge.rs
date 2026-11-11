@@ -654,7 +654,8 @@ pub fn cleanup() {
     }
 }
 
-#[cfg(test)]
+// The bridge is for Unix shells (it isn't set up elsewhere: `init`).
+#[cfg(all(test, unix))]
 mod tests {
 
     /// `claude` in a Roxaruu terminal is the real one (the next on `PATH`,
