@@ -136,6 +136,21 @@ jobs:
           if (Test-Path $log) { Copy-Item $log smoke\windows.log; Get-Content $log }
           if (-not (Get-Process roxaruu -ErrorAction SilentlyContinue)) { throw "Roxaruu isn't running" }
           if (-not (Select-String -Path $log -Pattern "the window is up" -Quiet)) { throw "its window never drew" }
+          if (-not (Select-String -Path $log -Pattern "backend=Dx12" -Quiet)) { throw "it didn't draw through DirectX 12" }
+          Stop-Process -Name roxaruu -Force
+          # A GPU driver that kills the app (no error to catch): the next start
+          # must see the try that never drew and open with OpenGL instead.
+          $state = "$env:LOCALAPPDATA\Roxaruu\renderer"
+          Set-Content -NoNewline $state "wgpu:999999"
+          Start-Process $exe -ArgumentList "`"$PWD`""
+          Start-Sleep 20
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("smoke\windows-opengl.png")
+          Copy-Item $log smoke\windows.log; Get-Content $log -Tail 8
+          if (-not (Select-String -Path $log -Pattern "using OpenGL" -Quiet)) { throw "it didn't fall back to OpenGL" }
+          if ((Select-String -Path $log -Pattern "the window is up").Count -lt 2) { throw "its OpenGL window never drew" }
+          if ((Get-Content $state) -ne "glow") { throw "it didn't remember OpenGL: $(Get-Content $state)" }
           Stop-Process -Name roxaruu -Force
 
       - name: Open it (Linux)
@@ -154,6 +169,18 @@ jobs:
           log="$HOME/.local/share/Roxaruu/roxaruu.log"
           cp "$log" smoke/linux.log; cat "$log"
           grep -q "the window is up" "$log"
+          # A GPU driver that kills the app: the next start uses OpenGL.
+          printf 'wgpu:999999' > "$HOME/.local/share/Roxaruu/renderer"
+          xvfb-run -a -s "-screen 0 1600x1000x24" bash -c '
+            roxaruu --foreground "$PWD" & pid=$!
+            sleep 20
+            import -window root smoke/linux-opengl.png
+            kill -0 $pid || { echo "Roxaruu exited"; exit 1; }
+            kill $pid'
+          cp "$log" smoke/linux.log; tail -8 "$log"
+          grep -q "using OpenGL" "$log"
+          [ "$(grep -c "the window is up" "$log")" -ge 2 ]
+          [ "$(cat "$HOME/.local/share/Roxaruu/renderer")" = glow ]
 
       - name: Open it (macOS)
         if: runner.os == 'macOS'

@@ -59,7 +59,7 @@ qrcode = { version = "0.14.1", default-features = false }
 # granted by user intent, which sidesteps the Documents/Desktop prompt; on
 # Linux it's the desktop's own, through its portal).
 rfd = "0.15"
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "tracing-log"] }
 which = "8.0.6"
 keepawake = "0.6.1"
 dunce = "1.0.5"

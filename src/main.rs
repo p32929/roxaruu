@@ -57,12 +57,18 @@ static DRAWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new
 /// Set on the copy started with OpenGL after wgpu couldn't make a window.
 const RENDERER_ENV: &str = "ROXARUU_RENDERER";
 
+/// This run draws with OpenGL (glow) rather than wgpu.
+static GLOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// How long a window may take to first draw before its renderer counts as
+/// stuck (a driver that hangs rather than fails).
+const FIRST_DRAW_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
 fn main() -> eframe::Result {
     use std::io::IsTerminal;
     init_log();
     tracing::info!(version = VERSION, os = std::env::consts::OS, pid = std::process::id(), "starting");
-    let glow = std::env::var(RENDERER_ENV).is_ok_and(|r| r == "glow");
-    on_crash(glow);
+    on_crash();
     let from_shell = std::io::stdin().is_terminal();
     let launch = Launch::parse(std::env::args_os().skip(1), from_shell);
     match &launch.info {
@@ -111,6 +117,36 @@ fn main() -> eframe::Result {
     }
     // Terminals keep streaming while the window is in the background.
     sys::prevent_app_nap();
+    let glow = match std::env::var(RENDERER_ENV) {
+        Ok(r) => r == "glow",
+        Err(_) => {
+            let last = renderer_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+            match next_renderer(&last, sys::process_alive) {
+                Start::Wgpu => false,
+                Start::Glow => {
+                    if last.contains(':') {
+                        tracing::warn!(last = last.trim(), "the last start never drew; using OpenGL from now on");
+                    }
+                    true
+                }
+                Start::NeitherDraws => {
+                    GLOW.store(true, std::sync::atomic::Ordering::Relaxed);
+                    couldnt_start("Last time neither the GPU nor OpenGL showed a window.");
+                }
+            }
+        }
+    };
+    GLOW.store(glow, std::sync::atomic::Ordering::Relaxed);
+    remember_renderer(true);
+    // A driver can hang instead of failing: no window after a while is a
+    // renderer that can't start, like a crash.
+    std::thread::spawn(|| {
+        std::thread::sleep(FIRST_DRAW_WITHIN);
+        if !DRAWN.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::error!(secs = FIRST_DRAW_WITHIN.as_secs(), "no window yet");
+            couldnt_start("The window didn't appear.");
+        }
+    });
     let renderer = if glow { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
     tracing::info!(?renderer, "opening the window");
     let result = eframe::run_native(
@@ -118,10 +154,15 @@ fn main() -> eframe::Result {
         eframe::NativeOptions {
             viewport,
             renderer,
+            wgpu_options: wgpu_options(),
             centered: true,
             ..Default::default()
         },
         Box::new(move |cc| {
+            if let Some(rs) = &cc.wgpu_render_state {
+                let a = rs.adapter.get_info();
+                tracing::info!(gpu = %a.name, backend = ?a.backend, driver = %a.driver_info, "graphics");
+            }
             sys::quit_closes_the_window();
             // The detached copy's launcher has already exited: come to the
             // front ourselves rather than open behind the terminal.
@@ -142,7 +183,7 @@ fn main() -> eframe::Result {
     if let Err(e) = &result {
         tracing::error!(error = %e, "the window couldn't open");
         if !DRAWN.load(std::sync::atomic::Ordering::Relaxed) {
-            couldnt_start(glow, &e.to_string());
+            couldnt_start(&e.to_string());
         }
     }
     result
@@ -154,6 +195,44 @@ fn main() -> eframe::Result {
 /// once it passes 2 MB.
 pub(crate) fn log_path() -> Option<std::path::PathBuf> {
     dirs::data_local_dir().map(|d| d.join("Roxaruu").join("roxaruu.log"))
+}
+
+/// Which renderer this computer gets, kept beside the log: `wgpu:<pid>` /
+/// `glow:<pid>` while that process tries it, `wgpu` / `glow` once it drew.
+/// A driver can kill the process outright (no panic to catch): the next
+/// start sees a try whose process is gone and moves on to OpenGL.
+fn renderer_path() -> Option<std::path::PathBuf> {
+    log_path().map(|p| p.with_file_name("renderer"))
+}
+
+/// Note this run's renderer: trying it, or (`trying` false) it drew.
+fn remember_renderer(trying: bool) {
+    let Some(path) = renderer_path() else { return };
+    let name = if GLOW.load(std::sync::atomic::Ordering::Relaxed) { "glow" } else { "wgpu" };
+    let text = if trying { format!("{name}:{}", std::process::id()) } else { name.to_string() };
+    let _ = std::fs::write(path, text);
+}
+
+#[derive(Debug, PartialEq)]
+enum Start {
+    Wgpu,
+    Glow,
+    NeitherDraws,
+}
+
+/// What to start with after `last` (the renderer file); `alive` says
+/// whether a process still runs (one still trying isn't a failure).
+fn next_renderer(last: &str, alive: impl Fn(i32) -> bool) -> Start {
+    let (name, pid) = match last.trim().split_once(':') {
+        Some((n, p)) => (n, p.parse().ok()),
+        None => (last.trim(), None),
+    };
+    let failed = pid.is_some_and(|p| !alive(p));
+    match (name, failed) {
+        ("glow", true) => Start::NeitherDraws,
+        ("wgpu", true) | ("glow", false) => Start::Glow,
+        _ => Start::Wgpu,
+    }
 }
 
 fn init_log() {
@@ -176,13 +255,13 @@ fn init_log() {
 
 /// A crash is logged; one on the main thread before the window has drawn is
 /// a window that can't start (see `couldnt_start`).
-fn on_crash(glow: bool) {
+fn on_crash() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         tracing::error!(%info, thread = std::thread::current().name().unwrap_or("?"), "crashed");
         default(info);
         if std::thread::current().name() == Some("main") && !DRAWN.load(std::sync::atomic::Ordering::Relaxed) {
-            couldnt_start(glow, &info.to_string());
+            couldnt_start(&info.to_string());
         }
     }));
 }
@@ -191,8 +270,8 @@ fn on_crash(glow: bool) {
 /// Direct3D), try once more with OpenGL in a fresh copy (a process can open
 /// only one event loop); with OpenGL too, say so in a dialog, with the log,
 /// rather than vanish.
-fn couldnt_start(glow: bool, why: &str) {
-    if !glow {
+fn couldnt_start(why: &str) -> ! {
+    if !GLOW.load(std::sync::atomic::Ordering::Relaxed) {
         let relaunched = std::env::current_exe().and_then(|exe| {
             std::process::Command::new(exe)
                 .arg("--foreground")
@@ -207,6 +286,10 @@ fn couldnt_start(glow: bool, why: &str) {
             }
             Err(e) => tracing::error!(error = %e, "couldn't start a copy with OpenGL"),
         }
+    }
+    // Next start tries everything again (a driver update may have fixed it).
+    if let Some(p) = renderer_path() {
+        let _ = std::fs::remove_file(p);
     }
     let log = log_path().map(|p| p.display().to_string()).unwrap_or_default();
     let _ = rfd::MessageDialog::new()
@@ -324,6 +407,20 @@ impl Root {
     }
 }
 
+/// wgpu as eframe sets it up, but on Windows through DirectX 12 only: the
+/// system's own graphics, which every Windows 10/11 has. Vulkan, wgpu's other
+/// choice there, comes from the GPU vendor and is where overlays and old
+/// drivers crash or hang. (`WGPU_BACKEND` still overrides.)
+fn wgpu_options() -> egui_wgpu::WgpuConfiguration {
+    let mut config = egui_wgpu::WgpuConfiguration::default();
+    if cfg!(windows)
+        && let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut config.wgpu_setup
+    {
+        setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12);
+    }
+    config
+}
+
 /// Off macOS the screen's size is known only once the window is on it:
 /// 80% of it, around where the window was centred (`centered`).
 fn fit_to_screen(ctx: &egui::Context) {
@@ -351,6 +448,7 @@ impl eframe::App for Root {
         self.0.frame(ui);
         if !DRAWN.swap(true, std::sync::atomic::Ordering::Relaxed) {
             tracing::info!("the window is up");
+            remember_renderer(false);
             fit_to_screen(ui.ctx());
         }
     }
@@ -360,6 +458,19 @@ impl eframe::App for Root {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+
+    #[test]
+    fn a_renderer_that_never_drew_is_not_tried_again() {
+        let dead = |_| false;
+        let alive = |_| true;
+        assert_eq!(next_renderer("", dead), Start::Wgpu);
+        assert_eq!(next_renderer("wgpu", dead), Start::Wgpu);
+        assert_eq!(next_renderer("wgpu:42\n", alive), Start::Wgpu, "another window is still starting");
+        assert_eq!(next_renderer("wgpu:42", dead), Start::Glow);
+        assert_eq!(next_renderer("glow", dead), Start::Glow);
+        assert_eq!(next_renderer("glow:42", alive), Start::Glow);
+        assert_eq!(next_renderer("glow:42", dead), Start::NeitherDraws);
+    }
 
     fn parse(args: &[&str], from_shell: bool) -> Launch {
         Launch::parse(args.iter().map(OsString::from), from_shell)
