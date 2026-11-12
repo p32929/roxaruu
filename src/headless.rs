@@ -3286,6 +3286,33 @@ fn headless_focus_keys_everywhere() {
     shot(&mut h, "f0-focus-keys-from-editor");
 }
 
+/// A window on a virtual screen (`rox --remote on` on a server) closes once
+/// remote access is off, as nobody can see it — but not over unsaved files.
+#[test]
+#[ignore]
+fn headless_an_unseen_window_closes_when_remote_access_goes() {
+    let _restore = keep_settings();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("notes.txt");
+    std::fs::write(&file, "hi\n").unwrap();
+    let mut h = harness(Some(file));
+    h.step();
+    // Unsaved: it stays, so the edit isn't lost.
+    h.state_mut().0.tabs[0].buf.modified = true;
+    h.state_mut().2 = Some(true); // remote access was on; now it isn't
+    h.step();
+    assert!(!app(&h).allow_close, "kept over an unsaved file");
+    // Nothing unsaved: it goes.
+    h.state_mut().0.tabs[0].buf.modified = false;
+    h.state_mut().2 = Some(true);
+    h.step();
+    assert!(app(&h).allow_close, "closed once nobody could see it");
+    // A window on a real screen never closes by itself.
+    let mut h = harness(None);
+    h.step();
+    assert!(!app(&h).allow_close);
+}
+
 /// No shortcut is drawn twice on the screen: each shows in the one row it
 /// belongs to (the keys every row has, like ↵ and esc, aside).
 fn each_key_once(when: &str) {

@@ -1732,6 +1732,20 @@ impl App {
         self.ask = Some(Ask::Quit);
     }
 
+    /// Close a window nobody can see (on a virtual screen, remote access
+    /// now off) — unless that would lose unsaved files, which wait for the
+    /// next time someone looks in.
+    pub(crate) fn close_unseen(&mut self, ctx: &egui::Context) {
+        if self.tabs.iter().any(|t| t.buf.modified) {
+            tracing::warn!("remote access is off; this window on a virtual screen stays, it has unsaved files");
+            return;
+        }
+        tracing::info!("remote access is off and nobody can see this window: closing it");
+        self.save_session();
+        self.allow_close = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
     /// What closing this window would stop, one line each, for its dialog.
     pub(crate) fn quit_losses(&self) -> Vec<String> {
         let mut v = Vec::new();

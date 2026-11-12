@@ -145,7 +145,7 @@ fn main() -> eframe::Result {
             return Ok(());
         }
     }
-    let target = launch.target.clone();
+    let (target, virtual_screen) = (launch.target.clone(), launch.virtual_screen);
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Roxaruu")
@@ -224,6 +224,7 @@ fn main() -> eframe::Result {
                 cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             let mut root = Root::new(app::App::new(&cc.egui_ctx, target));
+            root.2 = virtual_screen.then_some(false);
             if let Some(password) = password {
                 root.0.remote_want = Some(remote::Want::On(password));
             }
@@ -432,6 +433,8 @@ struct Launch {
     foreground: bool,
     /// `--remote on|off` (with `--password`).
     remote: Option<RemoteArg>,
+    /// `--virtual-screen`: started on Xvfb by `detach` (no real screen).
+    virtual_screen: bool,
     /// `roxaruu [folder | file]`. Bare `roxaruu` (or `rox`) in a terminal
     /// opens the folder you're in, same as `roxaruu .`; from the Dock or
     /// Finder there's no terminal, and it opens empty.
@@ -441,12 +444,14 @@ struct Launch {
 impl Launch {
     fn parse(args: impl Iterator<Item = std::ffi::OsString>, from_shell: bool) -> Launch {
         let (mut info, mut foreground, mut remote, mut password, mut target) = (None, false, None, None, None);
+        let mut virtual_screen = false;
         let mut args = args.peekable();
         while let Some(a) = args.next() {
             match a.to_str() {
                 Some("-h" | "--help") => info = info.or(Some(Info::Help)),
                 Some("-V" | "--version") => info = info.or(Some(Info::Version)),
                 Some("--foreground") => foreground = true,
+                Some("--virtual-screen") => virtual_screen = true,
                 Some("--remote") => match args.next().as_ref().and_then(|v| v.to_str()) {
                     Some("on") => remote = Some(true),
                     Some("off") => remote = Some(false),
@@ -463,7 +468,7 @@ impl Launch {
             // Absolute, so the copy opens the same thing wherever it starts.
             .map(|t| std::path::absolute(&t).unwrap_or(t));
         let remote = remote.map(|on| if on { RemoteArg::On(password) } else { RemoteArg::Off });
-        Launch { info, foreground, remote, target }
+        Launch { info, foreground, remote, virtual_screen, target }
     }
 }
 
@@ -496,6 +501,9 @@ fn detach(target: &Option<std::path::PathBuf>, password: Option<&str>) -> bool {
     }
     args.extend(target.iter().map(|t| t.clone().into_os_string()));
     let xvfb = no_screen().then(|| which::which("xvfb-run").ok()).flatten();
+    if xvfb.is_some() {
+        args.push("--virtual-screen".into());
+    }
     let cmd = match xvfb {
         Some(xvfb) => {
             let mut c = std::process::Command::new(xvfb);
@@ -545,14 +553,16 @@ fn say_where_remote_is() {
 
 /// The window: the app, and its side of remote access (which stops when
 /// this is dropped: the window closed or the app quit).
-pub(crate) struct Root(pub(crate) app::App, remote::Remote);
+/// `.2`: on a virtual screen (`--virtual-screen`), whether remote access was
+/// on last pass — nobody can see such a window but through it.
+pub(crate) struct Root(pub(crate) app::App, remote::Remote, Option<bool>);
 
 impl Root {
     pub(crate) fn new(app: app::App) -> Root {
         // Remote access starts off, and no password from an earlier build
         // stays on disk.
         remote::forget_saved_password();
-        Root(app, remote::Remote::default())
+        Root(app, remote::Remote::default(), None)
     }
 }
 
@@ -601,6 +611,14 @@ impl eframe::App for Root {
     /// access draws the browser's copy of the window from here.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.1.update(&mut self.0, ctx, frame);
+        // On a virtual screen the window is for remote access only: once
+        // that's off, it goes (so `--remote on` again doesn't add another).
+        if let Some(was_on) = &mut self.2 {
+            let on = self.0.remote.on;
+            if std::mem::replace(was_on, on) && !on {
+                self.0.close_unseen(ctx);
+            }
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -678,6 +696,8 @@ mod tests {
         assert!(matches!(parse(&["--remote", "maybe"], true).info, Some(Info::Unknown(_))));
         assert!(matches!(parse(&["--remote"], true).info, Some(Info::Unknown(_))));
         assert!(help().contains("--remote on --password"));
+        assert!(parse(&["--foreground", "--virtual-screen", "--remote", "on"], false).virtual_screen);
+        assert!(!parse(&["--remote", "on"], false).virtual_screen);
     }
 
     #[test]
