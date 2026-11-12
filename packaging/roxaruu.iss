@@ -28,6 +28,10 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; Updating while Roxaruu is open: ask it to close, and close it if it
+; doesn't (Windows' request doesn't reach an egui window), rather than fail
+; on a roxaruu.exe in use. Interactive installs still say so first.
+CloseApplications=force
 
 [Tasks]
 Name: "addtopath"; Description: "Add the ""rox"" command to PATH (open a folder from a terminal: rox .)"

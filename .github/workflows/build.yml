@@ -151,7 +151,11 @@ jobs:
           if (-not (Select-String -Path $log -Pattern "drawing the safe way" -Quiet)) { throw "it didn't fall back to software DirectX" }
           if ((Select-String -Path $log -Pattern "the window is up").Count -lt 2) { throw "its software DirectX window never drew" }
           if ((Get-Content $state) -ne "safe") { throw "it didn't remember the safe way: $(Get-Content $state)" }
-          Stop-Process -Name roxaruu -Force
+          # Updating while it's open: the installer closes it, rather than
+          # failing on a roxaruu.exe in use.
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/LOG=smoke\windows-update.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content smoke\windows-update.log -Tail 20; throw "updating with Roxaruu open failed ($($p.ExitCode))" }
+          Stop-Process -Name roxaruu -Force -ErrorAction SilentlyContinue
 
       - name: Open it (Linux)
         if: runner.os == 'Linux'
