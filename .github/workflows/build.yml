@@ -1,6 +1,8 @@
-# Builds Roxaruu for macOS, Windows and Linux on every push, runs the tests,
-# and packages what people download (kept as this run's artifacts). Pushing a
-# tag `v*` (e.g. v0.3.0) also publishes them as a GitHub release.
+# Builds, tests and packages Roxaruu for Windows and Linux on every push
+# (kept as this run's artifacts). macOS is tested on the Mac it's developed
+# on (AGENTS.md: each platform's tests run where you work, CI does the rest),
+# so it joins only for a release tag `v*` (e.g. v0.3.0), which also publishes
+# everything as a GitHub release, or a manual run.
 name: build
 
 on:
@@ -21,10 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: macOS, os: macos-latest }
-          - { name: Windows, os: windows-latest }
-          - { name: Linux, os: ubuntu-22.04 }
+        include: ${{ fromJSON((startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && '[{"name":"macOS","os":"macos-latest"},{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]' || '[{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]') }}
     defaults:
       run:
         shell: bash
