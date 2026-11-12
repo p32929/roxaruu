@@ -164,7 +164,9 @@ same list twice, make one table and read it from both places.
   simulated keys and clicks, assertions on app state, PNG screenshots to
   look at. **Never open a real window** (it steals focus from the user).
 - Guard tests protect the connections above; extend them, don't delete them.
-- Before calling anything done, run all of it:
+- Before calling anything done, run all of it — `.githooks/test-all` runs
+  the tests fast (every test, in a few processes side by side,
+  each with its own scratch HOME; pre-push and CI use it). By hand:
 
 ```sh
 cargo clippy --release --all-targets          # must be clean

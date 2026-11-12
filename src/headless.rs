@@ -2152,7 +2152,7 @@ fn headless_agent_alerts() {
     press(&mut h, ALT, Key::T);
     run(
         &mut h,
-        "./claude -c 'for i in $(seq 1 16); do echo working $i; sleep 0.25; done; sleep 30; true'",
+        "./claude -c 'for i in $(seq 1 8); do echo working $i; sleep 0.25; done; sleep 30; true'",
     );
     wait_for(&mut h, "the agent", screen_has("working 2"));
     press(&mut h, ALT, Key::T);
@@ -2175,7 +2175,7 @@ fn headless_agent_alerts() {
     assert!(app(&h).terminal_open);
     run(
         &mut h,
-        "./claude -c 'for i in $(seq 1 16); do echo working $i; sleep 0.25; done; sleep 30; true'",
+        "./claude -c 'for i in $(seq 1 8); do echo working $i; sleep 0.25; done; sleep 30; true'",
     );
     wait_for(&mut h, "the agent working", screen_has("working 2"));
     *crate::sys::APP_ACTIVE.lock().unwrap() = Some(false); // macOS: another app in front
@@ -2712,7 +2712,7 @@ fn headless_terminal_says_whether_it_is_printing() {
         }
         assert!(std::time::Instant::now() < deadline, "never went quiet: {:?}", app(&h).terminal().unwrap().pane.pulse());
     };
-    assert!(quiet.label().starts_with("quiet for 1"), "{}", quiet.label());
+    assert_eq!(quiet.label(), format!("quiet for {}s", QUIET_AFTER.as_secs()));
     shot(&mut h, "tp1-quiet");
     // Stopped: nothing running any more.
     h.state_mut().0.terminal_mut().unwrap().pane.send_input(&[3]); // ⌃C

@@ -17,16 +17,10 @@ root=$(git rev-parse --show-toplevel)
 cd "$root"
 echo "pre-push: $platform tests, here (CI tests the other systems)"
 cargo clippy --release --all-targets -- -D warnings
-cargo build --release # the tests use roxaruu-hook beside them
 if [ "$platform" = Windows ]; then
+  cargo build --release # the tests use roxaruu-hook beside them
   cargo test --release
 else
-  # Tests write settings and shell files: a scratch home, never yours.
-  scratch=$(mktemp -d)
-  trap 'rm -rf "$scratch"' EXIT
-  mkdir -p "$scratch/home"
-  CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
-    HOME="$scratch/home" SHOTS="$scratch/shots" PROJECT="$root/src/main.rs" BIG="$root/src/ui.rs" \
-    cargo test --release -- --include-ignored --test-threads=1
+  "$(dirname "$0")/test-all" # every test, in a few processes, scratch homes
 fi
 echo "pre-push: $platform tests passed"

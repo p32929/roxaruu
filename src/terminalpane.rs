@@ -43,7 +43,7 @@ pub type Waker = std::sync::Arc<dyn Fn(bool) + Send + Sync>;
 const BURST_GAP: Duration = Duration::from_millis(1500);
 /// An agent that printed for this long, then stopped for this long, has
 /// finished or is waiting for an answer.
-const AGENT_QUIET: Duration = Duration::from_secs(3);
+const AGENT_QUIET: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 3 });
 
 /// What programs in the terminal asked to tell the user: the bell, and the
 /// notification escapes — OSC 9 (iTerm2), OSC 777 (Ghostty, rxvt) and
@@ -116,8 +116,9 @@ const CONSOLE_START: Duration = Duration::from_secs(2);
 
 /// Output this recent: still printing.
 const PRINTING_WITHIN: Duration = Duration::from_millis(1500);
-/// Nothing printed for this long while running: quiet.
-pub const QUIET_AFTER: Duration = Duration::from_secs(10);
+/// Nothing printed for this long while running: quiet. (Tests don't sit
+/// through ten real seconds of silence.)
+pub const QUIET_AFTER: Duration = Duration::from_secs(if cfg!(test) { 3 } else { 10 });
 
 impl Pulse {
     /// For a terminal running a program or not, its output last `since` ago.
@@ -1787,6 +1788,23 @@ pub fn shell_escape(path: &std::path::Path) -> String {
 pub const SHELL_WAIT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
+/// Pump until the output just asked for has come and stopped (quiet for
+/// half a second), instead of waiting out a fixed time.
+fn settle(term: &mut TerminalPane) {
+    let deadline = Instant::now() + SHELL_WAIT;
+    let quiet = |t: &TerminalPane, d| t.since_output().is_some_and(|s| s >= d);
+    // Started: something printed since asking (else, the deadline).
+    while Instant::now() < deadline && quiet(term, Duration::from_millis(300)) {
+        term.pump();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    while Instant::now() < deadline && !quiet(term, Duration::from_millis(500)) {
+        term.pump();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1879,8 +1897,8 @@ mod tests {
         let s = Duration::from_secs;
         assert_eq!(Pulse::of(false, Some(s(0))), None, "nothing running");
         assert_eq!(Pulse::of(true, Some(Duration::from_millis(200))), Some(Pulse::Printing));
-        assert_eq!(Pulse::of(true, Some(s(5))), Some(Pulse::Running));
-        assert_eq!(Pulse::of(true, Some(s(10))), Some(Pulse::Quiet(s(10))));
+        assert_eq!(Pulse::of(true, Some(QUIET_AFTER - Duration::from_millis(1))), Some(Pulse::Running));
+        assert_eq!(Pulse::of(true, Some(QUIET_AFTER)), Some(Pulse::Quiet(QUIET_AFTER)));
         assert_eq!(Pulse::of(true, None), Some(Pulse::Running), "nothing printed yet");
         assert_eq!(Pulse::Quiet(s(42)).label(), "quiet for 42s");
         assert_eq!(Pulse::Quiet(s(150)).label(), "quiet for 2m");
@@ -2204,11 +2222,7 @@ mod tests {
 
         // Now stream a lot more output past it.
         term.send_input(b"for i in $(seq 1 80); do echo \"NOISE-$i\"; done\n");
-        let deadline = Instant::now() + SHELL_WAIT;
-        while Instant::now() < deadline {
-            term.pump();
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        settle(&mut term);
 
         assert_eq!(
             visible_text(&term),
@@ -2244,11 +2258,7 @@ mod tests {
         term.scroll_lines(15);
         let before = visible_text(&term);
         term.send_input(b"for i in $(seq 1 80); do echo \"NOISE-$i\"; done\n");
-        let deadline = Instant::now() + SHELL_WAIT;
-        while Instant::now() < deadline {
-            term.pump();
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        settle(&mut term);
         assert_eq!(visible_text(&term), before, "the view moved with a full history");
     }
 
@@ -2307,11 +2317,7 @@ mod tests {
         cmd.cwd(std::env::temp_dir());
         let mut term = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
         term.send_input(b"for i in $(seq 1 60); do echo \"LINE-$i\"; done\n");
-        let deadline = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < deadline {
-            term.pump();
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        settle(&mut term);
 
         term.scroll_lines(15);
         // Mark a couple of rows, the way a mouse drag does.
@@ -2323,11 +2329,7 @@ mod tests {
         assert_eq!(after_copy, before, "reading the selection moved the view");
 
         term.send_input(b"for i in $(seq 1 80); do echo \"NOISE-$i\"; done\n");
-        let deadline = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < deadline {
-            term.pump();
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        settle(&mut term);
         assert_eq!(
             visible_text(&term),
             before,
@@ -2409,21 +2411,22 @@ mod tests {
     /// Only a burst that went on a while, then stopped, counts; once.
     #[test]
     fn quiet_after_work() {
-        let ago = |s: f32| Some(Instant::now() - Duration::from_secs_f32(s));
+        // In multiples of AGENT_QUIET: work as long as it, then as much silence.
+        let ago = |q: f32| Some(Instant::now() - AGENT_QUIET.mul_f32(q));
         let mut a = Activity {
-            burst: ago(10.0),
-            last: ago(4.0),
+            burst: ago(3.0),
+            last: ago(1.3),
         };
         assert!(a.went_quiet());
         assert!(!a.went_quiet(), "reported once");
         let mut a = Activity {
-            burst: ago(5.0),
-            last: ago(4.0),
+            burst: ago(1.6),
+            last: ago(1.3),
         };
-        assert!(!a.went_quiet(), "a one-second blip isn't work");
+        assert!(!a.went_quiet(), "a blip isn't work");
         let mut a = Activity {
-            burst: ago(10.0),
-            last: ago(1.0),
+            burst: ago(3.0),
+            last: ago(0.3),
         };
         assert!(!a.went_quiet(), "still going");
     }

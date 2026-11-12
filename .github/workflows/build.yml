@@ -81,15 +81,9 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then
             cargo test --release
           else
-            export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
-            export SHOTS="$PWD/shots" PROJECT="$PWD/src/main.rs" BIG="$PWD/src/ui.rs" SHELL="$(command -v zsh)"
-            # Tests write settings and shell files: a scratch home, never the runner's.
-            export HOME="$RUNNER_TEMP/home"
-            mkdir -p "$HOME"
-            # Ubuntu's global zshrc runs compinit, which stops to ask about
-            # the runner's folders: skip it (the tests write their own .zshrc).
-            echo 'skip_global_compinit=1' > "$HOME/.zshenv"
-            cargo test --release -- --include-ignored --test-threads=1
+            # Every test, in a few processes, each with a scratch home (as
+            # the pre-push hook runs them).
+            SHOTS="$PWD/shots" SHELL="$(command -v zsh)" .githooks/test-all
           fi
       - name: Keep the tests' screenshots
         if: always() && runner.os != 'Windows'
