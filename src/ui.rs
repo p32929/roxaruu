@@ -1503,6 +1503,17 @@ impl App {
                 };
                 self.modal(ctx, icon::CLOSE, &title, &body, &[CANCEL, ok("Close Window")], None, None, None)
             }
+            Ask::NeedShell => self.modal(
+                ctx,
+                icon::TERMINAL,
+                "Install Git Bash to use terminals",
+                "On Windows, Roxaruu's terminals run Git Bash (or WSL). Install Git for Windows, \
+                 which brings Git Bash, then open a terminal again.",
+                &[CANCEL, ok("Download Git")],
+                None,
+                None,
+                None,
+            ),
             Ask::OpenUrl(url) => {
                 let body = url.clone();
                 self.modal(

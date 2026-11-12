@@ -27,9 +27,10 @@ Get the file for your system from the
 
 Or unzip `Roxaruu-<version>-windows-x64.zip` anywhere and run `roxaruu.exe`.
 
-Terminals run Windows PowerShell, which every Windows has. If you use Git
-Bash, WSL, PowerShell 7 or Command Prompt, pick it in **Settings → Terminal
-shell**.
+Terminals run Git Bash, so install [Git for Windows](https://git-scm.com/downloads/win)
+if you haven't (Roxaruu offers the link when you open a terminal without it).
+If you use WSL, pick it in **Settings → Terminal shell**; without Git Bash,
+terminals use WSL by themselves.
 
 ### Linux (64-bit)
 

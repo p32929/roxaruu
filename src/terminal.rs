@@ -533,8 +533,8 @@ mod tests {
             Duration::from_millis(200),
             "the prompt arrived unattended"
         );
-        // Type at the prompt, as a person would: PowerShell prints well before
-        // it reads input, and an echo that late isn't typing's any more.
+        // Type at the prompt, as a person would: a Windows shell prints well
+        // before it reads input, and an echo that late isn't typing's any more.
         let mut shown = String::new();
         let mut since = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(30);

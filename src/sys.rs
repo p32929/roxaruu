@@ -446,10 +446,9 @@ pub fn stay_awake() -> Awake {
 
 /// What a new terminal runs for the `terminalShell` setting `choice`:
 /// `(program, arguments, name)`, or `None` for the user's own login shell
-/// (`$SHELL`, the default off Windows). On Windows the default is Windows
-/// PowerShell, which every Windows has; Git Bash, WSL, PowerShell 7 and cmd
-/// are there to choose. A choice that isn't on this computer falls back to
-/// the default.
+/// (`$SHELL`). On Windows a terminal is Git Bash or WSL, never PowerShell
+/// or cmd: Git Bash unless "wsl" is chosen, each standing in for the other;
+/// `None` there means neither is installed (`no_terminal_shell`).
 pub fn shell_for(choice: &str) -> Option<(std::path::PathBuf, Vec<String>, String)> {
     let named = |p: std::path::PathBuf, args: &[&str], name: &str| {
         Some((p, args.iter().map(|a| a.to_string()).collect::<Vec<String>>(), name.to_string()))
@@ -457,19 +456,9 @@ pub fn shell_for(choice: &str) -> Option<(std::path::PathBuf, Vec<String>, Strin
     let choice = choice.trim();
     #[cfg(windows)]
     {
-        let default = || named(windows_powershell(), &["-NoLogo"], "powershell");
-        match choice.to_ascii_lowercase().as_str() {
-            "" | "powershell" => default(),
-            "pwsh" => which::which("pwsh").ok().map_or_else(default, |p| named(p, &["-NoLogo"], "pwsh")),
-            "cmd" => named(
-                std::env::var_os("ComSpec").map(Into::into).unwrap_or_else(|| "cmd.exe".into()),
-                &[],
-                "cmd",
-            ),
-            "gitbash" => git_bash().map_or_else(default, |p| named(p, &["--login", "-i"], "bash")),
-            "wsl" => wsl().map_or_else(default, |p| named(p, &[], "wsl")),
-            _ => any_shell(choice).or_else(default),
-        }
+        let bash = || git_bash().and_then(|p| named(p, &["--login", "-i"], "bash"));
+        let wsl = || wsl().and_then(|p| named(p, &[], "wsl"));
+        if choice.eq_ignore_ascii_case("wsl") { wsl().or_else(bash) } else { bash().or_else(wsl) }
     }
     #[cfg(not(windows))]
     {
@@ -481,8 +470,15 @@ pub fn shell_for(choice: &str) -> Option<(std::path::PathBuf, Vec<String>, Strin
     }
 }
 
+/// Windows without Git Bash or WSL: there's no shell for a terminal (the
+/// app asks you to install one instead).
+pub fn no_terminal_shell() -> bool {
+    cfg!(windows) && shell_for("").is_none()
+}
+
 /// A shell by name (on `PATH`) or path; a login shell where that's a flag
 /// it knows.
+#[cfg(not(windows))]
 fn any_shell(choice: &str) -> Option<(std::path::PathBuf, Vec<String>, String)> {
     let path = which::which(choice).ok().or_else(|| {
         let p = std::path::PathBuf::from(choice);
@@ -490,7 +486,7 @@ fn any_shell(choice: &str) -> Option<(std::path::PathBuf, Vec<String>, String)> 
     })?;
     let name = path.file_stem()?.to_string_lossy().to_lowercase();
     let login = ["bash", "zsh", "fish", "sh", "ksh", "dash"].contains(&name.as_str());
-    let args = if login && !cfg!(windows) { vec!["-l".to_string()] } else { Vec::new() };
+    let args = if login { vec!["-l".to_string()] } else { Vec::new() };
     Some((path, args, name))
 }
 
@@ -500,10 +496,6 @@ pub fn shell_choices() -> Vec<&'static str> {
     let mut v = vec![""];
     #[cfg(windows)]
     {
-        v.push("cmd");
-        if which::which("pwsh").is_ok() {
-            v.push("pwsh");
-        }
         if git_bash().is_some() {
             v.push("gitbash");
         }
@@ -519,31 +511,36 @@ pub fn shell_choices() -> Vec<&'static str> {
 /// How Settings shows a choice.
 pub fn shell_title(choice: &str) -> String {
     match choice.trim().to_ascii_lowercase().as_str() {
-        "" if cfg!(windows) => "Windows PowerShell (the system's)".into(),
+        "" if cfg!(windows) => "Git Bash (WSL without it)".into(),
         "" => "Your login shell".into(),
-        "powershell" => "Windows PowerShell".into(),
-        "pwsh" => "PowerShell 7".into(),
-        "cmd" => "Command Prompt (cmd)".into(),
         "gitbash" => "Git Bash".into(),
         "wsl" => "WSL (Linux)".into(),
         _ => choice.to_string(),
     }
 }
 
-/// Windows PowerShell, part of every Windows.
-#[cfg(windows)]
-fn windows_powershell() -> std::path::PathBuf {
-    let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
-    let p = root.join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
-    if p.is_file() { p } else { "powershell.exe".into() }
-}
-
-/// WSL, when it's set up.
+/// WSL, when a Linux is installed in it (`wsl.exe` alone comes with every
+/// Windows 11, and only offers to install one). Each installed Linux is a
+/// key under Lxss.
 #[cfg(windows)]
 fn wsl() -> Option<std::path::PathBuf> {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryInfoKeyW};
     let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from)?;
     let p = root.join("System32").join("wsl.exe");
-    p.is_file().then_some(p)
+    let key: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\0".encode_utf16().collect();
+    let mut h = std::ptr::null_mut();
+    let mut linuxes = 0u32;
+    // SAFETY: a NUL-terminated key name and out-pointers that live through
+    // the calls; the key is closed once read.
+    unsafe {
+        if RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_READ, &mut h) != 0 {
+            return None;
+        }
+        let null = std::ptr::null_mut();
+        RegQueryInfoKeyW(h, null.cast(), null.cast(), std::ptr::null(), &mut linuxes, null.cast(), null.cast(), null.cast(), null.cast(), null.cast(), null.cast(), null.cast());
+        RegCloseKey(h);
+    }
+    (linuxes > 0 && p.is_file()).then_some(p)
 }
 
 /// Git for Windows' bash, when it's installed: its usual homes, then
@@ -583,6 +580,19 @@ pub fn activate(_pid: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Windows terminals are Git Bash (GitHub's runners have it), whatever
+    /// was chosen before: never PowerShell or cmd.
+    #[cfg(windows)]
+    #[test]
+    fn windows_terminals_run_git_bash() {
+        for choice in ["", "powershell", "cmd", "pwsh", "gitbash"] {
+            let (path, _, name) = shell_for(choice).expect("Git Bash is installed");
+            assert_eq!(name, "bash", "{choice:?} ran {path:?}");
+        }
+        assert!(!no_terminal_shell());
+        assert!(!shell_choices().iter().any(|c| ["cmd", "pwsh", "powershell"].contains(c)));
+    }
 
     #[test]
     fn new_windows_take_80_percent_centred() {

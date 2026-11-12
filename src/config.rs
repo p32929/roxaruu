@@ -24,9 +24,9 @@ pub struct Settings {
     /// Redraw rate for terminal output nobody is typing into (typing is
     /// always instant). One of [`TERMINAL_FPS`].
     pub terminal_fps: u32,
-    /// What new terminals run: "" for the system's own (PowerShell on
-    /// Windows, your login shell elsewhere); on Windows "powershell", "pwsh",
-    /// "cmd", "gitbash" or "wsl"; or any shell's name or path.
+    /// What new terminals run: "" for the default (Git Bash on Windows,
+    /// else WSL; your login shell elsewhere); "wsl" on Windows; elsewhere
+    /// any shell's name or path.
     pub terminal_shell: String,
     /// Tint the line the caret is on.
     pub current_line: bool,
@@ -432,9 +432,8 @@ pub(crate) fn settings_template() -> String {
            // \"codeFontSize\": {},\n\n  \
            // Redraws per second for terminal output you aren't typing into: {}\n  \
            // \"terminalFps\": {},\n\n  \
-           // What new terminals run: \"\" for the system's own (PowerShell on Windows,\n  \
-           // your login shell elsewhere); on Windows also \"powershell\", \"pwsh\", \"cmd\",\n  \
-           // \"gitbash\" or \"wsl\" (if installed); or any shell's name or path\n  \
+           // What new terminals run: \"\" for the default (Git Bash on Windows, else WSL;\n  \
+           // your login shell elsewhere); \"wsl\" on Windows; elsewhere any shell's name or path\n  \
            // \"terminalShell\": \"\",\n\n  \
            // \"currentLine\": {},\n  \
            // \"indentGuides\": {},\n  \

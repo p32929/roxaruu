@@ -1610,6 +1610,10 @@ impl App {
                 "Too many terminals open (max {MAX_TERMINALS}) — close some first"
             ));
         }
+        if crate::sys::no_terminal_shell() {
+            self.ask = Some(Ask::NeedShell);
+            return;
+        }
         let cwd = cwd
             .or_else(|| self.terminal().and_then(|t| t.pane.current_dir()))
             .or_else(|| self.project.as_ref().map(|p| p.root.clone()))

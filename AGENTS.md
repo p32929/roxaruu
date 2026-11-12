@@ -174,15 +174,17 @@ HOME=$SP/home SHOTS=$SP/shots PROJECT=<a file inside a git repo> BIG=<a big sour
 ## 4. Every desktop: macOS, Windows, Linux
 
 Roxaruu runs everywhere VS Code does, every feature on every system.
-- Works out of the box: nothing for the user to install. Use what each
-  system has (PowerShell, its notifications, its file dialogs), and for
-  anything cross-platform prefer an existing crate (`sysinfo`, `opener`,
-  `notify-rust`, `rfd`, `which`, `keepawake`) to hand-written OS code.
+- Works out of the box: nothing for the user to install, but for Windows
+  terminals (below). Use what each system has (its notifications, its file
+  dialogs), and for anything cross-platform prefer an existing crate
+  (`sysinfo`, `opener`, `notify-rust`, `rfd`, `which`, `keepawake`) to
+  hand-written OS code.
 - Anything that asks the OS lives in `sys.rs`, with a version for each of
   macOS, Windows and Linux (not an empty stand-in). Terminals run the
-  `terminalShell` setting (`sys::shell_for`): by default Windows PowerShell
-  on Windows, the login shell elsewhere; Git Bash, WSL, PowerShell 7, cmd
-  when chosen.
+  `terminalShell` setting (`sys::shell_for`): the login shell on macOS and
+  Linux; on Windows only Git Bash or WSL (Git Bash first), never PowerShell
+  or cmd (the owner's call: they're bad terminals). With neither installed,
+  opening a terminal asks you to install Git (`Ask::NeedShell`).
 - No shell scripts in what ships for every system: Claude Code's hooks go
   through `roxaruu-hook` (src/bin), a console program installed beside the
   app, which `claude` is in Roxaruu's terminals (`termbridge`).

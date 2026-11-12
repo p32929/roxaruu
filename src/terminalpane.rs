@@ -393,8 +393,8 @@ impl TerminalPane {
         cwd: &Path,
         waker: Option<Waker>,
     ) -> Result<Self> {
-        // The `terminalShell` setting; by default the system's own (Windows
-        // PowerShell; elsewhere your login shell).
+        // The `terminalShell` setting; by default Git Bash on Windows (else
+        // WSL), your login shell elsewhere.
         let choice = SHELL.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let (mut cmd, shell) = match crate::sys::shell_for(&choice) {
             Some((program, args, name)) => {
@@ -402,6 +402,7 @@ impl TerminalPane {
                 cmd.args(args);
                 (cmd, Some(name))
             }
+            None if cfg!(windows) => anyhow::bail!("terminals need Git Bash or WSL"),
             None => (CommandBuilder::new_default_prog(), None),
         };
         // Git Bash's login profile otherwise starts in your home folder.
@@ -1822,9 +1823,8 @@ mod tests {
         }
     }
 
-    /// Windows: a terminal runs the system's shell (Git Bash where it's
-    /// installed, as on GitHub's runners; else PowerShell or cmd), runs what's
-    /// typed, and names the program running in it, then nothing once it ends.
+    /// Windows: a terminal runs Git Bash (on GitHub's runners too), runs
+    /// what's typed, and names the program running in it, then nothing once it ends.
     #[cfg(windows)]
     #[test]
     fn a_windows_terminal_runs_commands_and_names_them() {

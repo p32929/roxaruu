@@ -25,7 +25,12 @@ pub enum Ask {
     RemoteAddress,
     /// ⌘Q or the close button: close this window? (What's running stops.)
     Quit,
+    /// A terminal on Windows without Git Bash or WSL: install Git.
+    NeedShell,
 }
+
+/// Where Git for Windows (and its Git Bash) comes from.
+pub const GIT_FOR_WINDOWS: &str = "https://git-scm.com/downloads/win";
 
 impl App {
     /// What Rename, Delete, Reveal and Copy Path act on: in the file tree,
@@ -142,6 +147,10 @@ impl App {
             Ask::Delete { path } => self.delete(&path, ctx),
             Ask::OpenUrl(url) => {
                 self.open_url(url, ctx);
+                Ok(())
+            }
+            Ask::NeedShell => {
+                self.open_url(GIT_FOR_WINDOWS.into(), ctx);
                 Ok(())
             }
             Ask::RemotePassword { password } => self.start_remote(&password),
