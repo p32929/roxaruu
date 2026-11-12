@@ -54,11 +54,16 @@ pub(crate) const ICON: &[u8] = include_bytes!("../assets/icon.png");
 /// start (see `main`).
 static DRAWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Set on the copy started with OpenGL after wgpu couldn't make a window.
+/// Set (to `safe`) on the copy started after the GPU couldn't make a window.
 const RENDERER_ENV: &str = "ROXARUU_RENDERER";
 
-/// This run draws with OpenGL (glow) rather than wgpu.
-static GLOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// This run draws the safe way, not through the GPU's driver: Windows' own
+/// software DirectX (WARP, in every Windows 10/11; OpenGL there may be 1.1),
+/// OpenGL elsewhere (Mesa draws it in software if it must).
+static SAFE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Already saying the window can't open (the watchdog mustn't say it twice).
+static GIVING_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// How long a window may take to first draw before its renderer counts as
 /// stuck (a driver that hangs rather than fails).
@@ -117,26 +122,26 @@ fn main() -> eframe::Result {
     }
     // Terminals keep streaming while the window is in the background.
     sys::prevent_app_nap();
-    let glow = match std::env::var(RENDERER_ENV) {
-        Ok(r) => r == "glow",
+    let safe = match std::env::var(RENDERER_ENV) {
+        Ok(r) => r == "safe",
         Err(_) => {
             let last = renderer_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
             match next_renderer(&last, sys::process_alive) {
-                Start::Wgpu => false,
-                Start::Glow => {
+                Start::Gpu => false,
+                Start::Safe => {
                     if last.contains(':') {
-                        tracing::warn!(last = last.trim(), "the last start never drew; using OpenGL from now on");
+                        tracing::warn!(last = last.trim(), "the last start never drew; drawing the safe way from now on");
                     }
                     true
                 }
                 Start::NeitherDraws => {
-                    GLOW.store(true, std::sync::atomic::Ordering::Relaxed);
-                    couldnt_start("Last time neither the GPU nor OpenGL showed a window.");
+                    SAFE.store(true, std::sync::atomic::Ordering::Relaxed);
+                    couldnt_start("Last time no window appeared, with the GPU or without.");
                 }
             }
         }
     };
-    GLOW.store(glow, std::sync::atomic::Ordering::Relaxed);
+    SAFE.store(safe, std::sync::atomic::Ordering::Relaxed);
     remember_renderer(true);
     // A driver can hang instead of failing: no window after a while is a
     // renderer that can't start, like a crash.
@@ -147,14 +152,14 @@ fn main() -> eframe::Result {
             couldnt_start("The window didn't appear.");
         }
     });
-    let renderer = if glow { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
-    tracing::info!(?renderer, "opening the window");
+    let renderer = if safe && !cfg!(windows) { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
+    tracing::info!(?renderer, safe, "opening the window");
     let result = eframe::run_native(
         "Roxaruu",
         eframe::NativeOptions {
             viewport,
             renderer,
-            wgpu_options: wgpu_options(),
+            wgpu_options: wgpu_options(safe),
             centered: true,
             ..Default::default()
         },
@@ -197,10 +202,10 @@ pub(crate) fn log_path() -> Option<std::path::PathBuf> {
     dirs::data_local_dir().map(|d| d.join("Roxaruu").join("roxaruu.log"))
 }
 
-/// Which renderer this computer gets, kept beside the log: `wgpu:<pid>` /
-/// `glow:<pid>` while that process tries it, `wgpu` / `glow` once it drew.
-/// A driver can kill the process outright (no panic to catch): the next
-/// start sees a try whose process is gone and moves on to OpenGL.
+/// How this computer draws, kept beside the log: `gpu:<pid>` / `safe:<pid>`
+/// while that process tries it, `gpu` / `safe` once it drew. A GPU driver
+/// can kill the process outright (no panic to catch): the next start sees a
+/// try whose process is gone and draws the safe way (`SAFE`) from then on.
 fn renderer_path() -> Option<std::path::PathBuf> {
     log_path().map(|p| p.with_file_name("renderer"))
 }
@@ -208,15 +213,15 @@ fn renderer_path() -> Option<std::path::PathBuf> {
 /// Note this run's renderer: trying it, or (`trying` false) it drew.
 fn remember_renderer(trying: bool) {
     let Some(path) = renderer_path() else { return };
-    let name = if GLOW.load(std::sync::atomic::Ordering::Relaxed) { "glow" } else { "wgpu" };
+    let name = if SAFE.load(std::sync::atomic::Ordering::Relaxed) { "safe" } else { "gpu" };
     let text = if trying { format!("{name}:{}", std::process::id()) } else { name.to_string() };
     let _ = std::fs::write(path, text);
 }
 
 #[derive(Debug, PartialEq)]
 enum Start {
-    Wgpu,
-    Glow,
+    Gpu,
+    Safe,
     NeitherDraws,
 }
 
@@ -229,9 +234,9 @@ fn next_renderer(last: &str, alive: impl Fn(i32) -> bool) -> Start {
     };
     let failed = pid.is_some_and(|p| !alive(p));
     match (name, failed) {
-        ("glow", true) => Start::NeitherDraws,
-        ("wgpu", true) | ("glow", false) => Start::Glow,
-        _ => Start::Wgpu,
+        ("safe", true) => Start::NeitherDraws,
+        ("gpu", true) | ("safe", false) => Start::Safe,
+        _ => Start::Gpu,
     }
 }
 
@@ -266,25 +271,29 @@ fn on_crash() {
     }));
 }
 
-/// The window couldn't open. With wgpu (the GPU through Vulkan, Metal or
-/// Direct3D), try once more with OpenGL in a fresh copy (a process can open
-/// only one event loop); with OpenGL too, say so in a dialog, with the log,
-/// rather than vanish.
+/// The window couldn't open. Through the GPU: try once more the safe way
+/// (`SAFE`) in a fresh copy (a process can open only one event loop); the
+/// safe way too: say so in a dialog, with the log, rather than vanish.
 fn couldnt_start(why: &str) -> ! {
-    if !GLOW.load(std::sync::atomic::Ordering::Relaxed) {
+    if GIVING_UP.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        loop {
+            std::thread::park(); // the first to give up shows the dialog and exits
+        }
+    }
+    if !SAFE.load(std::sync::atomic::Ordering::Relaxed) {
         let relaunched = std::env::current_exe().and_then(|exe| {
             std::process::Command::new(exe)
                 .arg("--foreground")
                 .args(std::env::args_os().skip(1).filter(|a| a != "--foreground"))
-                .env(RENDERER_ENV, "glow")
+                .env(RENDERER_ENV, "safe")
                 .spawn()
         });
         match relaunched {
             Ok(_) => {
-                tracing::warn!("trying again with OpenGL");
+                tracing::warn!("trying again the safe way");
                 std::process::exit(0);
             }
-            Err(e) => tracing::error!(error = %e, "couldn't start a copy with OpenGL"),
+            Err(e) => tracing::error!(error = %e, "couldn't start a copy the safe way"),
         }
     }
     // Next start tries everything again (a driver update may have fixed it).
@@ -296,7 +305,7 @@ fn couldnt_start(why: &str) -> ! {
         .set_level(rfd::MessageLevel::Error)
         .set_title("Roxaruu couldn't start")
         .set_description(format!(
-            "Roxaruu couldn't open its window on this computer's graphics (tried the GPU, then OpenGL).\n\n{why}\n\nDetails are in {log}"
+            "Roxaruu couldn't open its window on this computer's graphics (tried the GPU, then without it).\n\n{why}\n\nDetails are in {log}"
         ))
         .show();
     std::process::exit(1);
@@ -410,13 +419,23 @@ impl Root {
 /// wgpu as eframe sets it up, but on Windows through DirectX 12 only: the
 /// system's own graphics, which every Windows 10/11 has. Vulkan, wgpu's other
 /// choice there, comes from the GPU vendor and is where overlays and old
-/// drivers crash or hang. (`WGPU_BACKEND` still overrides.)
-fn wgpu_options() -> egui_wgpu::WgpuConfiguration {
+/// drivers crash or hang. (`WGPU_BACKEND` still overrides.) `safe`: Windows'
+/// software DirectX (WARP), which needs no GPU driver at all.
+fn wgpu_options(safe: bool) -> egui_wgpu::WgpuConfiguration {
     let mut config = egui_wgpu::WgpuConfiguration::default();
     if cfg!(windows)
         && let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut config.wgpu_setup
     {
         setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::DX12);
+        if safe {
+            setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters, _| {
+                adapters
+                    .iter()
+                    .find(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
+                    .cloned()
+                    .ok_or_else(|| "no software DirectX (WARP)".to_string())
+            }));
+        }
     }
     config
 }
@@ -463,13 +482,13 @@ mod tests {
     fn a_renderer_that_never_drew_is_not_tried_again() {
         let dead = |_| false;
         let alive = |_| true;
-        assert_eq!(next_renderer("", dead), Start::Wgpu);
-        assert_eq!(next_renderer("wgpu", dead), Start::Wgpu);
-        assert_eq!(next_renderer("wgpu:42\n", alive), Start::Wgpu, "another window is still starting");
-        assert_eq!(next_renderer("wgpu:42", dead), Start::Glow);
-        assert_eq!(next_renderer("glow", dead), Start::Glow);
-        assert_eq!(next_renderer("glow:42", alive), Start::Glow);
-        assert_eq!(next_renderer("glow:42", dead), Start::NeitherDraws);
+        assert_eq!(next_renderer("", dead), Start::Gpu);
+        assert_eq!(next_renderer("gpu", dead), Start::Gpu);
+        assert_eq!(next_renderer("gpu:42\n", alive), Start::Gpu, "another window is still starting");
+        assert_eq!(next_renderer("gpu:42", dead), Start::Safe);
+        assert_eq!(next_renderer("safe", dead), Start::Safe);
+        assert_eq!(next_renderer("safe:42", alive), Start::Safe);
+        assert_eq!(next_renderer("safe:42", dead), Start::NeitherDraws);
     }
 
     fn parse(args: &[&str], from_shell: bool) -> Launch {
