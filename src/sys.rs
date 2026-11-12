@@ -76,7 +76,13 @@ fn with_process<T>(pid: i32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T
     }
     let pid = Pid::from_u32(pid as u32);
     let mut sys = System::new().ok()?;
-    let kind = ProcessRefreshKind::nothing().with_memory().with_cpu().with_cwd(UpdateKind::Always);
+    let kind = ProcessRefreshKind::nothing()
+        .with_memory()
+        .with_cpu()
+        .with_cwd(UpdateKind::Always)
+        // For `process_name` (a fork not yet the shell); Windows lists every
+        // process here, where asking each for it would cost.
+        .with_exe(if cfg!(target_os = "linux") { UpdateKind::Always } else { UpdateKind::Never });
     // Windows lists every process to find one (asking for just one there
     // found nothing on GitHub's runners); Linux reads /proc/<pid> alone.
     let which = if cfg!(windows) { ProcessesToUpdate::All } else { ProcessesToUpdate::Some(&[pid]) };
@@ -155,6 +161,13 @@ pub fn process_name(pid: i32) -> Option<String> {
 #[cfg(not(target_os = "macos"))]
 pub fn process_name(pid: i32) -> Option<String> {
     with_process(pid, |p| {
+        // Just forked, not yet the shell, the child is a copy of this app,
+        // named (on Linux) after the thread that started it: go by the program.
+        if let (Some(exe), Ok(me)) = (p.exe(), std::env::current_exe())
+            && exe == me
+        {
+            return me.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        }
         let name = p.name().to_string_lossy().into_owned();
         // Windows names end in .exe (or .EXE); the tab says "node", not "node.exe".
         match name.len().checked_sub(4) {
