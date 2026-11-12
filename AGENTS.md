@@ -214,7 +214,9 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   too: only `terminal::passes_the_shell` get past it, and hints in a
   terminal never show one that doesn't (`key_reaches`).
 - `.github/workflows/build.yml` builds, tests and packages all three on
-  every push, then installs each package and opens the app (it must still
+  every push — every test: on macOS and Linux with `--include-ignored`
+  (the UI walkthroughs, screenshots kept with the run), on Windows all that
+  builds there — then installs each package and opens the app (it must still
   run with its window drawn; screenshots kept with the run) (`packaging/`: the macOS Info.plist and Linux menu entry
   `install-local.sh` uses too, the Windows installer). It must stay green
   on all three; a test that needs a Unix shell is marked

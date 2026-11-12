@@ -332,14 +332,13 @@ mod tests {
         assert!(!ep.ready(), "two frames in flight");
         let before = woken.load(Ordering::Relaxed);
         ws.send(Message::text(ACK)).unwrap();
-        while !ep.ready() {
-            assert!(std::time::Instant::now() < deadline, "the ack never counted");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        // The wake first: asking `ready()` meanwhile would stop the window
+        // waiting (it can go), and a window that isn't waiting isn't woken.
         while woken.load(Ordering::Relaxed) == before {
             assert!(std::time::Instant::now() < deadline, "the ack didn't wake the waiting window");
             std::thread::sleep(Duration::from_millis(5));
         }
+        assert!(ep.ready(), "the ack counted");
         assert!(ep.take_inbox().is_empty(), "an ack isn't input");
         drop(ws);
         while ep.clients() != 0 {
