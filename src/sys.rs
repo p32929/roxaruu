@@ -378,7 +378,9 @@ pub fn notify(title: &str, body: &str) {
     let (title, body) = (title.to_string(), body.to_string());
     std::thread::spawn(move || {
         let sound = if cfg!(windows) { "Default" } else { "message-new-instant" };
-        let _ = notify_rust::Notification::new().summary(&title).body(&body).sound_name(sound).show();
+        if let Err(e) = notify_rust::Notification::new().summary(&title).body(&body).sound_name(sound).show() {
+            tracing::warn!(error = %e, "couldn't show a notification");
+        }
     });
 }
 

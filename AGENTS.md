@@ -191,8 +191,14 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 - The window must open: the GPU through wgpu (DirectX 12 on Windows), else
   the safe way (`main::SAFE`: Windows' software DirectX, OpenGL elsewhere),
   else a dialog saying why (`main::couldnt_start`). A start that died or hung
-  before drawing is remembered, so the next one goes the safe way. Every run
-  logs to `<local data>/Roxaruu`; CI rehearses a crashed GPU start.
+  before drawing is remembered, so the next one goes the safe way. CI
+  rehearses a crashed GPU start.
+- Every run logs to `<local data>/Roxaruu/roxaruu.log` (the one before it:
+  `.log.1`), ours at debug (`ROXARUU_LOG=trace|info` to change): every
+  command run, every toast, folders, files, terminals (what ran, where),
+  remote access, and anything the OS refused. Something new that can fail
+  or that you'd want to see when debugging on someone else's machine gets
+  a `tracing` line; never a password or file contents.
 - Off macOS, Roxaruu's keys are Ctrl chords, which a terminal's shell wants
   too: only `terminal::passes_the_shell` get past it, and hints in a
   terminal never show one that doesn't (`key_reaches`).

@@ -73,6 +73,14 @@ fn main() -> eframe::Result {
     use std::io::IsTerminal;
     init_log();
     tracing::info!(version = VERSION, os = std::env::consts::OS, pid = std::process::id(), "starting");
+    tracing::info!(
+        args = ?std::env::args_os().skip(1).collect::<Vec<_>>(),
+        exe = ?std::env::current_exe().ok(),
+        cwd = ?std::env::current_dir().ok(),
+        config = %config::dir().display(),
+        home = ?config::home(),
+        "where"
+    );
     on_crash();
     let from_shell = std::io::stdin().is_terminal();
     let launch = Launch::parse(std::env::args_os().skip(1), from_shell);
@@ -245,16 +253,29 @@ fn init_log() {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 2 << 20) {
-        let _ = std::fs::remove_file(&path);
+    // Full: the last one becomes roxaruu.log.1, so what led up to a problem
+    // is still there after the next start.
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 10 << 20) {
+        let _ = std::fs::rename(&path, path.with_extension("log.1"));
     }
     let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else {
         return;
     };
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    // Ours in detail (`ROXARUU_LOG=trace` for more, `info` for less); the
+    // libraries' (wgpu, winit) only when they matter.
+    let ours = std::env::var("ROXARUU_LOG").ok().and_then(|l| l.parse().ok()).unwrap_or(tracing::Level::DEBUG);
+    let filter = tracing_subscriber::filter::Targets::new()
+        .with_default(tracing::Level::INFO)
+        .with_target("roxaruu", ours);
     let _ = tracing_subscriber::fmt()
         .with_writer(std::sync::Mutex::new(file))
         .with_ansi(false)
-        .with_max_level(tracing::Level::INFO)
+        .with_thread_names(true)
+        .with_max_level(tracing::Level::TRACE)
+        .finish()
+        .with(filter)
         .try_init();
 }
 

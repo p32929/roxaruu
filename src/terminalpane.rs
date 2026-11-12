@@ -416,7 +416,9 @@ impl TerminalPane {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let id = format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
         cmd.env("ROXARUU_TERM", &id);
-        let mut pane = Self::spawn(folder, rows, cols, cmd, waker)?;
+        tracing::info!(cmd = ?cmd.get_argv(), cwd = %cwd.display(), id, "terminal");
+        let mut pane = Self::spawn(folder, rows, cols, cmd, waker)
+            .inspect_err(|e| tracing::warn!(error = %e, "terminal didn't start"))?;
         if let Some(dir) = crate::termbridge::alerts_dir() {
             *pane.watch.inbox.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.join(id));
         }

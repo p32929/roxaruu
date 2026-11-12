@@ -376,6 +376,10 @@ impl App {
         let root = self.root().map(Path::to_path_buf);
         self.config = config::load(Some(&self.config), root.as_deref());
         self.fingerprint = config::fingerprint(root.as_deref());
+        tracing::debug!(errors = ?self.config.errors, "config read");
+        for e in &self.config.errors {
+            tracing::warn!(error = %e, "config");
+        }
         self.apply(ctx);
     }
 
@@ -559,6 +563,7 @@ impl App {
     }
 
     pub fn run(&mut self, command: Command, ctx: &egui::Context) {
+        tracing::debug!(?command, "run");
         #[cfg(test)]
         if DRY_RUN.with(|d| {
             d.borrow_mut()
@@ -878,6 +883,7 @@ impl App {
     /// terminals are in use (opened before any folder: they're yours, not
     /// the folder's) — in a new window, like Oxru: one project per window.
     pub fn open_folder(&mut self, dir: PathBuf, ctx: &egui::Context) {
+        tracing::info!(dir = %dir.display(), "open folder");
         if self.project.as_ref().is_some_and(|p| p.root == dir) {
             return;
         }
@@ -988,6 +994,7 @@ impl App {
             self.sidebar.revealed = None;
             return;
         }
+        tracing::debug!(path = %path.display(), "open file");
         match Tab::open(path) {
             Ok(mut tab) => {
                 recall_place(&mut tab);
@@ -2443,10 +2450,12 @@ fn recall_place(tab: &mut Tab) {
 /// folder, or several (Ctrl/⌘- or ⇧-click).
 #[cfg(not(test))]
 fn pick_folders() -> Vec<PathBuf> {
-    rfd::FileDialog::new()
+    let picked = rfd::FileDialog::new()
         .set_title("Open Folders")
         .pick_folders()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    tracing::info!(?picked, "folder picker");
+    picked
 }
 
 /// Tests never open the real picker.

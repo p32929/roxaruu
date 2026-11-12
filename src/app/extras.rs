@@ -165,6 +165,11 @@ impl App {
     }
 
     fn toast(&mut self, msg: String, error: bool) {
+        if error {
+            tracing::warn!(msg, "shown");
+        } else {
+            tracing::info!(msg, "shown");
+        }
         self.toasts.retain(|t| t.msg != msg);
         self.toasts.push(Toast {
             msg,

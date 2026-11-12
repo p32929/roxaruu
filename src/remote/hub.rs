@@ -84,6 +84,7 @@ fn now() -> u64 {
 type Tls = StreamOwned<ServerConnection, TcpStream>;
 
 fn handle(tcp: TcpStream, setup: &Setup, failures: &AtomicU32, stop: &AtomicBool) {
+    let from = tcp.peer_addr().ok();
     let _ = tcp.set_nonblocking(false);
     let _ = tcp.set_read_timeout(Some(Duration::from_secs(20)));
     let Ok(conn) = ServerConnection::new(setup.tls.clone()) else {
@@ -108,6 +109,7 @@ fn handle(tcp: TcpStream, setup: &Setup, failures: &AtomicU32, stop: &AtomicBool
             let body = req.body(&mut tls, 8 * 1024).unwrap_or_default();
             let password = form_field(&body, "password").unwrap_or_default();
             if secrets.verify(&password) {
+                tracing::info!(?from, "remote sign-in");
                 failures.store(0, Ordering::Relaxed);
                 let cookie = format!(
                     "{COOKIE}={}; Path=/; Max-Age={SESSION_SECS}; HttpOnly; Secure; SameSite=Strict",
@@ -117,6 +119,7 @@ fn handle(tcp: TcpStream, setup: &Setup, failures: &AtomicU32, stop: &AtomicBool
             } else {
                 // Slow guessing down: longer with each miss in a row.
                 let n = failures.fetch_add(1, Ordering::Relaxed) + 1;
+                tracing::warn!(?from, misses = n, "remote sign-in: wrong password");
                 std::thread::sleep(Duration::from_millis(500 * u64::from(n.min(10))));
                 respond(&mut tls, "303 See Other", &[("Location", "/?wrong")], b"")
             }

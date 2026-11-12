@@ -456,7 +456,11 @@ pub fn os_open(args: &[&std::ffi::OsStr]) -> bool {
     // xdg-open), for the one thing asked.
     #[cfg(all(not(test), not(target_os = "macos")))]
     {
-        args.first().is_some_and(|a| opener::open(a).is_ok())
+        let opened = args.first().map(opener::open);
+        if let Some(Err(e)) = &opened {
+            tracing::warn!(?args, error = %e, "couldn't open");
+        }
+        opened.is_some_and(|r| r.is_ok())
     }
 }
 
@@ -469,7 +473,7 @@ pub fn os_reveal(path: &Path) -> bool {
     }
     #[cfg(all(not(test), not(target_os = "macos")))]
     {
-        opener::reveal(path).is_ok()
+        opener::reveal(path).inspect_err(|e| tracing::warn!(path = %path.display(), error = %e, "couldn't reveal")).is_ok()
     }
 }
 
@@ -487,6 +491,7 @@ pub fn spawn_window(dir: &Path) -> std::io::Result<()> {
     }
     #[cfg(not(test))]
     {
+        tracing::info!(dir = %dir.display(), "new window");
         std::process::Command::new(std::env::current_exe()?)
             .arg(dir)
             .spawn()

@@ -289,7 +289,7 @@ impl Remote {
                 self.endpoint = Some(ep);
                 self.clock = Some(clock);
             }
-            Err(e) => self.problem = Some(format!("Couldn't start remote access: {e}")),
+            Err(e) => self.trouble(format!("Couldn't start remote access: {e}")),
         }
     }
 
@@ -301,7 +301,7 @@ impl Remote {
             return;
         }
         let Some(secrets) = auth::Secrets::new(password) else {
-            self.problem = Some("Couldn't start remote access: no random numbers".into());
+            self.trouble("Couldn't start remote access: no random numbers");
             return;
         };
         let names: Vec<String> = lan_ip()
@@ -312,7 +312,7 @@ impl Remote {
         let tls = match tls::server_config(&crate::config::dir().join("remote"), &names) {
             Ok(tls) => tls,
             Err(e) => {
-                self.problem = Some(format!("Couldn't set up HTTPS: {e}"));
+                self.trouble(format!("Couldn't set up HTTPS: {e}"));
                 return;
             }
         };
@@ -320,19 +320,30 @@ impl Remote {
         match hub::Hub::start(setup) {
             Ok(hub) => self.hub = Some(hub),
             Err(e) => {
-                self.problem = Some(format!("Couldn't use port {}: {e}", self.port));
+                self.trouble(format!("Couldn't use port {}: {e}", self.port));
                 return;
             }
         }
+        tracing::info!(port = self.port, "remote access on");
         instances::register_remote_server(self.port);
         // A sleeping computer drops off the Wi-Fi: stay awake while serving
         // (the display may still sleep). Ends with this window.
         self.awake = Some(crate::sys::stay_awake());
     }
 
+    /// Something went wrong: shown with the address, and logged once.
+    fn trouble(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        if self.problem.as_ref() != Some(&msg) {
+            tracing::warn!(msg, "remote access");
+        }
+        self.problem = Some(msg);
+    }
+
     /// Stop the server wherever it runs: here directly, elsewhere by
     /// removing its marker (that window notices within a second and stops).
     fn turn_off(&mut self) {
+        tracing::info!(here = self.serving(), "remote access off");
         self.problem = None;
         if self.serving() {
             self.stop_serving();
@@ -597,7 +608,7 @@ impl Remote {
         }
         self.held.store(false, Ordering::SeqCst);
         let Some(state) = frame.wgpu_render_state() else {
-            self.problem = Some("Remote access needs the GPU renderer".into());
+            self.trouble("Remote access needs the GPU renderer");
             return;
         };
         let Some(output) = self.unrendered.take() else { return };
