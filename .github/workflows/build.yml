@@ -141,7 +141,7 @@ jobs:
           # A GPU driver that kills the app (no error to catch): the next start
           # must see the try that never drew and open with OpenGL instead.
           $state = "$env:LOCALAPPDATA\Roxaruu\renderer"
-          Set-Content -NoNewline $state "wgpu:999999"
+          [IO.File]::WriteAllText($state, "wgpu:999999")
           Start-Process $exe -ArgumentList "`"$PWD`""
           Start-Sleep 20
           $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
