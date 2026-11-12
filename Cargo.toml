@@ -4,7 +4,9 @@ version = "0.2.27"
 edition = "2024"
 
 [dependencies]
-eframe = "0.37"
+# wgpu first (eframe's default); OpenGL (glow) when a machine's GPU driver
+# can't give wgpu a window (a VM, Remote Desktop, an old driver).
+eframe = { version = "0.37", features = ["glow"] }
 json5 = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
@@ -57,6 +59,7 @@ qrcode = { version = "0.14.1", default-features = false }
 # granted by user intent, which sidesteps the Documents/Desktop prompt; on
 # Linux it's the desktop's own, through its portal).
 rfd = "0.15"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Where the pointer is when Finder drops a file (winit doesn't say), and

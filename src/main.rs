@@ -50,8 +50,19 @@ pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// the mark on the welcome screen.
 pub(crate) const ICON: &[u8] = include_bytes!("../assets/icon.png");
 
+/// The window has drawn: a crash from here on isn't a renderer that can't
+/// start (see `main`).
+static DRAWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set on the copy started with OpenGL after wgpu couldn't make a window.
+const RENDERER_ENV: &str = "ROXARUU_RENDERER";
+
 fn main() -> eframe::Result {
     use std::io::IsTerminal;
+    init_log();
+    tracing::info!(version = VERSION, os = std::env::consts::OS, pid = std::process::id(), "starting");
+    let glow = std::env::var(RENDERER_ENV).is_ok_and(|r| r == "glow");
+    on_crash(glow);
     let from_shell = std::io::stdin().is_terminal();
     let launch = Launch::parse(std::env::args_os().skip(1), from_shell);
     match &launch.info {
@@ -96,10 +107,13 @@ fn main() -> eframe::Result {
     }
     // Terminals keep streaming while the window is in the background.
     sys::prevent_app_nap();
+    let renderer = if glow { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
+    tracing::info!(?renderer, "opening the window");
     let result = eframe::run_native(
         "Roxaruu",
         eframe::NativeOptions {
             viewport,
+            renderer,
             ..Default::default()
         },
         Box::new(move |cc| {
@@ -120,7 +134,84 @@ fn main() -> eframe::Result {
     instances::unregister();
     instances::unregister_remote();
     instances::clear_remote_server(true);
+    if let Err(e) = &result {
+        tracing::error!(error = %e, "the window couldn't open");
+        if !DRAWN.load(std::sync::atomic::Ordering::Relaxed) {
+            couldnt_start(glow, &e.to_string());
+        }
+    }
     result
+}
+
+/// Where this run logs: `<local data>/Roxaruu/roxaruu.log` (Windows:
+/// %LOCALAPPDATA%\Roxaruu; macOS: ~/Library/Application Support/Roxaruu;
+/// Linux: ~/.local/share/Roxaruu). Every window adds to it; it starts over
+/// once it passes 2 MB.
+pub(crate) fn log_path() -> Option<std::path::PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("Roxaruu").join("roxaruu.log"))
+}
+
+fn init_log() {
+    let Some(path) = log_path() else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 2 << 20) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::sync::Mutex::new(file))
+        .with_ansi(false)
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+}
+
+/// A crash is logged; one on the main thread before the window has drawn is
+/// a window that can't start (see `couldnt_start`).
+fn on_crash(glow: bool) {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(%info, thread = std::thread::current().name().unwrap_or("?"), "crashed");
+        default(info);
+        if std::thread::current().name() == Some("main") && !DRAWN.load(std::sync::atomic::Ordering::Relaxed) {
+            couldnt_start(glow, &info.to_string());
+        }
+    }));
+}
+
+/// The window couldn't open. With wgpu (the GPU through Vulkan, Metal or
+/// Direct3D), try once more with OpenGL in a fresh copy (a process can open
+/// only one event loop); with OpenGL too, say so in a dialog, with the log,
+/// rather than vanish.
+fn couldnt_start(glow: bool, why: &str) {
+    if !glow {
+        let relaunched = std::env::current_exe().and_then(|exe| {
+            std::process::Command::new(exe)
+                .arg("--foreground")
+                .args(std::env::args_os().skip(1).filter(|a| a != "--foreground"))
+                .env(RENDERER_ENV, "glow")
+                .spawn()
+        });
+        match relaunched {
+            Ok(_) => {
+                tracing::warn!("trying again with OpenGL");
+                std::process::exit(0);
+            }
+            Err(e) => tracing::error!(error = %e, "couldn't start a copy with OpenGL"),
+        }
+    }
+    let log = log_path().map(|p| p.display().to_string()).unwrap_or_default();
+    let _ = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("Roxaruu couldn't start")
+        .set_description(format!(
+            "Roxaruu couldn't open its window on this computer's graphics (tried the GPU, then OpenGL).\n\n{why}\n\nDetails are in {log}"
+        ))
+        .show();
+    std::process::exit(1);
 }
 
 /// `roxaruu --help`.
@@ -237,6 +328,9 @@ impl eframe::App for Root {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.frame(ui);
+        if !DRAWN.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!("the window is up");
+        }
     }
 }
 

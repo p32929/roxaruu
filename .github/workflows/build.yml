@@ -111,6 +111,70 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+      # ---- the real app, as people get it: installed, opened on a folder,
+      # still running 20s later with its window drawn (its log says so), and
+      # a screenshot to look at. ---------------------------------------------
+      - name: Open it (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          $setup = (Get-ChildItem dist\*-setup.exe | Select-Object -First 1).FullName
+          Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER' -Wait
+          $exe = "$env:LOCALAPPDATA\Programs\Roxaruu\roxaruu.exe"
+          if (!(Test-Path $exe)) { throw "the installer didn't put it at $exe" }
+          Start-Process $exe -ArgumentList "`"$PWD`""
+          Start-Sleep 20
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("smoke\windows.png")
+          $log = "$env:LOCALAPPDATA\Roxaruu\roxaruu.log"
+          if (Test-Path $log) { Copy-Item $log smoke\windows.log; Get-Content $log }
+          if (-not (Get-Process roxaruu -ErrorAction SilentlyContinue)) { throw "Roxaruu isn't running" }
+          if (-not (Select-String -Path $log -Pattern "the window is up" -Quiet)) { throw "its window never drew" }
+          Stop-Process -Name roxaruu -Force
+
+      - name: Open it (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb imagemagick mesa-vulkan-drivers libgl1-mesa-dri
+          sudo apt-get install -y "./dist/roxaruu_${VERSION}_amd64.deb"
+          mkdir -p smoke
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          xvfb-run -a -s "-screen 0 1600x1000x24" bash -c '
+            roxaruu --foreground "$PWD" & pid=$!
+            sleep 20
+            import -window root smoke/linux.png
+            kill -0 $pid || { echo "Roxaruu exited"; exit 1; }
+            kill $pid'
+          log="$HOME/.local/share/Roxaruu/roxaruu.log"
+          cp "$log" smoke/linux.log; cat "$log"
+          grep -q "the window is up" "$log"
+
+      - name: Open it (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p smoke
+          hdiutil attach -nobrowse -mountpoint /tmp/roxaruu "dist/Roxaruu-$VERSION-macos.dmg"
+          cp -R /tmp/roxaruu/Roxaruu.app "$HOME/Applications/" 2>/dev/null || { mkdir -p "$HOME/Applications"; cp -R /tmp/roxaruu/Roxaruu.app "$HOME/Applications/"; }
+          "$HOME/Applications/Roxaruu.app/Contents/MacOS/roxaruu" --foreground "$PWD" & pid=$!
+          sleep 20
+          screencapture -x smoke/macos.png || true
+          log="$HOME/Library/Application Support/Roxaruu/roxaruu.log"
+          cp "$log" smoke/macos.log; cat "$log"
+          kill -0 $pid || { echo "Roxaruu exited"; exit 1; }
+          kill $pid
+          grep -q "the window is up" "$log"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Screenshot-${{ matrix.name }}
+          path: smoke/*
+          if-no-files-found: ignore
+
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
