@@ -79,7 +79,10 @@ jobs:
       - name: Tests
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
-            cargo test --release
+            # One at a time, each test's line as it finishes (passed /
+            # FAILED, how long); the full output follows for any failure.
+            cargo test --release -- --test-threads=1 2>&1 | tee test.log | .githooks/format-tests ||
+              { sed -n '/^failures:/,/^test result/p' test.log; exit 1; }
           else
             # Every test, in a few processes, each with a scratch home (as
             # the pre-push hook runs them).

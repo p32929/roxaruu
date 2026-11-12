@@ -12,10 +12,11 @@ export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOM
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
+here=$(cd "$(dirname "$0")" && pwd)
 cargo build --release # the tests use roxaruu-hook beside them
 bin=$(cargo test --release --bin roxaruu --no-run --message-format=json 2>/dev/null |
   jq -r 'select(.profile.test == true and .target.name == "roxaruu") | .executable' | tail -1)
-cargo test --release --bin roxaruu-hook -q
+cargo test --release --bin roxaruu-hook -- --test-threads=1 2>&1 | "$here/format-tests" hook
 
 # The slowest first, so they land in different shards; then the rest in turn.
 slow=(remote_input_in_chrome remote_frames_in_chrome agent_alerts remote_in_chrome
@@ -36,20 +37,34 @@ for n in $(seq 0 $(( shards - 1 ))); do
   mkdir -p "$home"
   # Ubuntu's global zshrc runs compinit, which stops to ask about folders.
   echo 'skip_global_compinit=1' > "$home/.zshenv"
+  # Each test's line as it finishes (format-tests), the whole output kept.
   HOME="$home" SHOTS="${SHOTS:-$root/target/shots}" PROJECT="$root/src/main.rs" BIG="$root/src/ui.rs" \
-    "$bin" --include-ignored --test-threads=1 --exact $(cat "$scratch/list$n") > "$scratch/log$n" 2>&1 &
+    "$bin" --include-ignored --test-threads=1 --exact $(cat "$scratch/list$n") 2>&1 |
+    tee "$scratch/log$n" | "$here/format-tests" "$n" &
   pids+=("$!:$n")
 done
-failed=0
+start=$SECONDS
 for p in "${pids[@]}"; do
-  pid=${p%%:*} n=${p##*:}
-  if wait "$pid"; then
-    grep -E "^test result" "$scratch/log$n" | sed "s/^/  shard $n: /"
-  else
-    failed=1
-    echo "---- shard $n failed:"
-    sed -n '/^failures:/,$p' "$scratch/log$n"
-    grep -E "^test .* FAILED" "$scratch/log$n" || tail -40 "$scratch/log$n"
+  wait "${p%%:*}" || true
+done
+# Passed only if every process ran to its "test result: ok" (a crash or a
+# failure says otherwise; the formatter's own exit code doesn't know).
+failed=0
+for n in $(seq 0 $(( shards - 1 ))); do
+  [ -s "$scratch/list$n" ] || continue
+  grep -q "^test result: ok" "$scratch/log$n" || failed=1
+done
+# Why each failure failed, after the live list.
+for n in $(seq 0 $(( shards - 1 ))); do
+  [ -f "$scratch/log$n" ] || continue
+  if grep -q "^failures:" "$scratch/log$n"; then
+    echo
+    echo "---- [$n] failures:"
+    sed -n '/^failures:/,/^test result/p' "$scratch/log$n"
   fi
 done
+passed=$(cat "$scratch"/log* | grep -c " \.\.\. ok$" || true)
+fails=$(cat "$scratch"/log* | grep -c " \.\.\. FAILED$" || true)
+echo
+echo "test-all: $passed passed, $fails failed, in $(( SECONDS - start ))s"
 exit $failed

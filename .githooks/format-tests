@@ -1,0 +1,21 @@
+#!/usr/bin/env perl
+# Test output, one line per test as each finishes: passed / FAILED / skipped,
+# and how long it took (the time since the line before: tests run one at a
+# time per process). Everything else is dropped; the caller keeps the full log.
+# `format-tests [label]` puts the label (a process's number) in front.
+use strict;
+use warnings;
+use Time::HiRes qw(time);
+$| = 1;
+my $label = @ARGV ? "[$ARGV[0]] " : "";
+my $last = time;
+while (my $line = <STDIN>) {
+    next unless $line =~ /^test (\S+) \.\.\. (ok|FAILED|ignored)/;
+    my ($name, $result) = ($1, $2);
+    my $now = time;
+    my $secs = $now - $last;
+    $last = $now;
+    my $what = $result eq 'ok' ? "\x{2713} passed " : $result eq 'FAILED' ? "\x{2717} FAILED " : "- skipped";
+    binmode STDOUT, ':utf8';
+    printf "%s%s %6.1fs  %s\n", $label, $what, $secs, $name;
+}

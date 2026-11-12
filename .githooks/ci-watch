@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Follow CI for the commit you're on (or `ci-watch <run id>`), here in the
+# terminal: each job's steps as they start and finish, and as soon as a job
+# is done, its tests — passed / FAILED, how long each took — and why any
+# failed. GitHub hands over a job's log only once the job has finished, so
+# tests show job by job. Exits 0 if every job passed.
+set -uo pipefail
+run=${1:-}
+sha=$(git rev-parse HEAD)
+if [ -z "$run" ]; then
+  echo "ci-watch: waiting for the run of ${sha:0:7}…"
+  until run=$(gh run list --commit "$sha" -L1 --json databaseId -q '.[0].databaseId' 2>/dev/null) && [ -n "$run" ]; do
+    sleep 5
+  done
+fi
+repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+echo "ci-watch: run $run — https://github.com/$repo/actions/runs/$run"
+
+seen_steps=""
+done_jobs=""
+while :; do
+  state=$(gh run view "$run" --json status,conclusion,jobs 2>/dev/null) || { sleep 5; continue; }
+  # Each step once when it starts and once when it ends.
+  while IFS=$'\t' read -r job step status conclusion; do
+    key="$job/$step/$status"
+    case "$seen_steps" in *"|$key|"*) continue ;; esac
+    seen_steps="$seen_steps|$key|"
+    if [ "$status" = completed ]; then
+      case "$conclusion" in
+        success) mark="✓" ;; skipped) continue ;; *) mark="✗ $conclusion" ;;
+      esac
+      printf '  %-8s %s %s\n' "$job" "$mark" "$step"
+    elif [ "$status" = in_progress ]; then
+      printf '  %-8s … %s\n' "$job" "$step"
+    fi
+  done < <(jq -r '.jobs[] | .name as $j | .steps[]? | [$j, .name, .status, (.conclusion // "")] | @tsv' <<<"$state")
+  # A job that's finished: its tests, from its log.
+  while IFS=$'\t' read -r id job conclusion; do
+    case "$done_jobs" in *"|$id|"*) continue ;; esac
+    done_jobs="$done_jobs|$id|"
+    echo
+    echo "== $job: $conclusion"
+    gh api --allow-escape-sequences "repos/$repo/actions/jobs/$id/logs" 2>/dev/null |
+      sed $'s/\x1b\\[[0-9;]*m//g; s/^[^ ]*Z //' |
+      awk '/(✓ passed|✗ FAILED|- skipped)/ { print "  " $0; next }
+           /^---- .*failures:|^failures:/ { show = 1 }
+           show { print "  " $0 }
+           /^test result/ { show = 0 }'
+    echo
+  done < <(jq -r '.jobs[] | select(.status == "completed") | [.databaseId, .name, .conclusion] | @tsv' <<<"$state")
+  if [ "$(jq -r .status <<<"$state")" = completed ]; then
+    conclusion=$(jq -r .conclusion <<<"$state")
+    echo "ci-watch: $conclusion"
+    [ "$conclusion" = success ]
+    exit
+  fi
+  sleep 10
+done

@@ -59,7 +59,9 @@ libgtk-3-dev libdbus-1-dev`.
 Working on it: run `git config core.hooksPath .githooks` once. Then every
 `git push` first runs your system's whole test suite on your machine (and
 stops if it fails), and CI tests the other two systems
-([.githooks](.githooks), `.github/workflows/build.yml`).
+([.githooks](.githooks), `.github/workflows/build.yml`). Each test shows as
+it finishes: `✓ passed  1.2s  name` or `✗ FAILED`. `.githooks/test-all` runs
+them by hand; `.githooks/ci-watch` follows the push's CI run in the terminal.
 
 ## Releases
 

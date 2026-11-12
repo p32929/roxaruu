@@ -166,7 +166,9 @@ same list twice, make one table and read it from both places.
 - Guard tests protect the connections above; extend them, don't delete them.
 - Before calling anything done, run all of it — `.githooks/test-all` runs
   the tests fast (every test, in a few processes side by side,
-  each with its own scratch HOME; pre-push and CI use it). By hand:
+  each with its own scratch HOME; pre-push and CI use it; each test's
+  line as it finishes, `✓ passed 1.2s name` / `✗ FAILED`, via
+  `format-tests`). `.githooks/ci-watch` follows a push's CI run here. By hand:
 
 ```sh
 cargo clippy --release --all-targets          # must be clean

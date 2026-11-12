@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Before anything leaves this machine: this system's whole test suite, here
 # (CI runs the other systems; see prepare-commit-msg). A failure stops the
 # push. Pushing only tags, or deleting a branch, tests nothing.
-set -e
+set -eo pipefail
 z=0000000000000000000000000000000000000000
 branches=0
 while read -r _ local_sha remote_ref _; do
@@ -19,7 +19,10 @@ echo "pre-push: $platform tests, here (CI tests the other systems)"
 cargo clippy --release --all-targets -- -D warnings
 if [ "$platform" = Windows ]; then
   cargo build --release # the tests use roxaruu-hook beside them
-  cargo test --release
+  log=$(mktemp)
+  # Each test's line as it finishes; why any failed, after.
+  cargo test --release -- --test-threads=1 2>&1 | tee "$log" | "$(dirname "$0")/format-tests" ||
+    { sed -n '/^failures:/,/^test result/p' "$log"; exit 1; }
 else
   "$(dirname "$0")/test-all" # every test, in a few processes, scratch homes
 fi
