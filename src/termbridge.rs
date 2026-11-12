@@ -245,11 +245,11 @@ fn write_bridge_files(dir: &Path) -> Option<(Option<PathBuf>, Option<PathBuf>)> 
 fn helper_program() -> Option<PathBuf> {
     let name = format!("roxaruu-hook{}", std::env::consts::EXE_SUFFIX);
     let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    [Some(dir.join(&name)), dir.parent().map(|d| d.join(&name))]
-        .into_iter()
-        .flatten()
-        .find(|p| p.is_file())
+    // Installed: beside the app. A test binary sits deeper under target/
+    // (deps/, or build/<pkg>/<hash>/out/ since Cargo 1.100) than the
+    // helper `cargo build` made.
+    let up = if cfg!(test) { 6 } else { 1 };
+    exe.ancestors().skip(1).take(up).map(|d| d.join(&name)).find(|p| p.is_file())
 }
 
 /// `claude` (and `roxaruu-hook`, which its hooks run) in the bridge
