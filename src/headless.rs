@@ -70,8 +70,10 @@ fn type_text(h: &mut Harness<'static, Root>, text: &str) {
 /// tab strip (36) and its row of tab keys (26).
 const EDITOR_TOP: f32 = 32.0 + 36.0 + 26.0;
 
+/// The command key: ⌘ on macOS, Ctrl elsewhere (as the app's keys are).
 const CMD: Modifiers = Modifiers {
-    mac_cmd: true,
+    mac_cmd: cfg!(target_os = "macos"),
+    ctrl: !cfg!(target_os = "macos"),
     command: true,
     ..Modifiers::NONE
 };
@@ -84,11 +86,14 @@ const ALT: Modifiers = Modifiers {
     ..Modifiers::NONE
 };
 const CMD_SHIFT: Modifiers = Modifiers {
-    mac_cmd: true,
-    command: true,
     shift: true,
-    ..Modifiers::NONE
+    ..CMD
 };
+
+/// A key as this system shows it (`"ctrl+o"`: ⌘O on macOS, Ctrl+O elsewhere).
+fn label(spec: &str) -> String {
+    crate::keymap::Combo::parse(spec).unwrap().label()
+}
 
 #[test]
 #[ignore]
@@ -1606,8 +1611,9 @@ fn headless_status_hint_click_opens_palette() {
     let mut h = harness(None);
     h.run();
     assert!(app(&h).palette.is_none());
-    let hint = egui::pos2(155.0, 807.0); // "⌥O recent"
-    click_at(&mut h, hint, egui::PointerButton::Primary);
+    // The status bar's "all commands", wherever this system's labels put it.
+    let hint = crate::ui::drawn_hint(crate::keymap::Command::Palette).expect("the status bar shows all commands");
+    click_at(&mut h, hint.center(), egui::PointerButton::Primary);
     assert!(
         app(&h).palette.is_some(),
         "clicking a status-bar hint opens it"
@@ -2064,12 +2070,14 @@ fn headless_agent_alerts() {
     std::fs::create_dir(root.join(".git")).unwrap();
     // An "agent": bash, under the name claude (re-signed, or macOS kills the copy).
     std::fs::copy("/bin/bash", root.join("claude")).unwrap();
-    let signed = std::process::Command::new("codesign")
-        .args(["-s", "-", "-f"])
-        .arg(root.join("claude"))
-        .output()
-        .unwrap();
-    assert!(signed.status.success());
+    if cfg!(target_os = "macos") {
+        let signed = std::process::Command::new("codesign")
+            .args(["-s", "-", "-f"])
+            .arg(root.join("claude"))
+            .output()
+            .unwrap();
+        assert!(signed.status.success());
+    }
     let toast =
         |needle: &'static str| move |app: &App| app.toasts.iter().any(|t| t.msg.contains(needle));
     let notified = |needle: &str| {
@@ -2236,7 +2244,7 @@ fn headless_focus_keys() {
     assert_eq!(p.mode, Mode::Recent);
     let last = p.items.last().unwrap();
     assert_eq!(last.pick, Pick::Command(crate::keymap::Command::OpenFolder));
-    assert_eq!(last.caps.concat(), "⌘O");
+    assert_eq!(crate::keymap::joined(&last.caps), label("ctrl+o"));
     shot(&mut h, "f0-recent");
     press(&mut h, ALT, Key::O);
     assert!(app(&h).palette.is_none(), "⌥O again closes it");
@@ -3428,7 +3436,7 @@ fn headless_close_keys() {
     h.step();
     // The tab keys are on show where the tabs are.
     let hints = app(&h).tab_hints(false);
-    assert!(hints.contains(&(vec!["⌥⌘[".into(), "⌥⌘]".into()], "close left / right")), "{hints:?}");
+    assert!(hints.contains(&(vec![label("ctrl+alt+["), label("ctrl+alt+]")], "close left / right")), "{hints:?}");
     assert!(hints.iter().any(|(_, w)| *w == "close others"));
     shot(&mut h, "z0-tab-hints");
     h.set_size(egui::vec2(900.0, 600.0));
@@ -3479,7 +3487,7 @@ fn headless_terminal_tab_hints() {
     press(&mut h, ALT, Key::N);
     wait_for(&mut h, "a prompt", screen_has("$ "));
     let hints = app(&h).tab_hints(true);
-    assert!(hints.iter().any(|(c, w)| *w == "close" && c == &vec!["⌥W".to_string()]), "{hints:?}");
+    assert!(hints.iter().any(|(c, w)| *w == "close" && c == &vec![label("alt+w")]), "{hints:?}");
     assert!(hints.iter().any(|(_, w)| *w == "close left / right"));
     shot(&mut h, "z2-terminal-tab-hints");
 }
@@ -4635,6 +4643,7 @@ fn headless_every_key_that_applies_shows() {
         std::fs::write(root.join(f), "fn x() {}\n").unwrap();
     }
     let check = |h: &mut Harness<'static, Root>, place: &str| {
+        h.step(); // settled: a new window's first frame is still laying out
         crate::keymap::record_shown(true);
         h.step();
         let shown = crate::keymap::record_shown(false);
@@ -4643,7 +4652,7 @@ fn headless_every_key_that_applies_shows() {
             .map(|c| c.command)
             .filter(|c| app(h).available(*c) && !shown.contains(c) && !elsewhere.contains(c))
             .collect();
-        assert!(missing.is_empty(), "in {place}, these run but show their key nowhere: {missing:?}");
+        assert!(missing.is_empty(), "in {place}, these run but show their key nowhere: {missing:?} (status: {:?})", app(h).status_line());
     };
     let mut h = harness(None);
     check(&mut h, "the welcome page");
@@ -4669,7 +4678,7 @@ fn headless_every_key_that_applies_shows() {
     let editor = egui::pos2(700.0, 300.0);
     click_at(&mut h, editor, egui::PointerButton::Secondary);
     shot(&mut h, "keys-editor-menu");
-    assert!(h.query_all_by_label_contains("⌘Z").count() >= 2, "Undo and Redo show their keys");
+    assert!(h.query_all_by_label_contains(&label("ctrl+z")).count() >= 2, "Undo and Redo show their keys");
     h.get_by_label_contains("Select All").click();
     h.step();
     h.step();

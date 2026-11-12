@@ -63,6 +63,9 @@ jobs:
             # Tests write settings and shell files: a scratch home, never the runner's.
             export HOME="$RUNNER_TEMP/home"
             mkdir -p "$HOME"
+            # Ubuntu's global zshrc runs compinit, which stops to ask about
+            # the runner's folders: skip it (the tests write their own .zshrc).
+            echo 'skip_global_compinit=1' > "$HOME/.zshenv"
             cargo test --release -- --include-ignored --test-threads=1
           fi
       - name: Keep the tests' screenshots

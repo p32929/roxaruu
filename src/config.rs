@@ -144,9 +144,9 @@ fn load_in(base: &Path, prev: Option<&Config>, project: Option<&Path>) -> Config
     // Each file is checked on its own (so errors name the right one), then
     // the project's keys are laid over the global ones.
     let mut checked = |path: &Path, label: String| -> Option<Value> {
-        let v: Value = match std::fs::read_to_string(path) {
-            Err(_) => return Some(Value::Object(Default::default())),
-            Ok(src) => json5::from_str(&src)
+        let v: Value = match read_config(path) {
+            None => return Some(Value::Object(Default::default())),
+            Some(src) => json5::from_str(&src)
                 .map_err(|e| errors.push(format!("{label}: {e}")))
                 .ok()?,
         };
@@ -250,7 +250,7 @@ pub fn save_setting(
         json5::from_str::<serde_json::Value>(&src).is_ok_and(|v| v.get(key).is_some())
     });
     let path = local.unwrap_or_else(settings_path);
-    let src = std::fs::read_to_string(&path).unwrap_or_else(|_| "{\n}\n".into());
+    let src = read_config(&path).unwrap_or_else(|| "{\n}\n".into());
     let out = set_key(&src, key, &value.into())?;
     std::fs::write(&path, out).map_err(|e| format!("can't write {}: {e}", file_name(&path)))
 }
@@ -261,7 +261,7 @@ pub fn save_setting(
 /// wouldn't give exactly the intended list.
 pub fn save_binding(command: &str, key: Option<&str>) -> Result<(), String> {
     let path = keybindings_path();
-    let src = std::fs::read_to_string(&path).unwrap_or_else(|_| "[\n]\n".into());
+    let src = read_config(&path).unwrap_or_else(|| "[\n]\n".into());
     let out = set_binding(&src, command, key)?;
     std::fs::write(&path, out).map_err(|e| format!("can't write keybindings.json: {e}"))
 }
@@ -349,13 +349,19 @@ fn fallback_theme() -> Theme {
     }
 }
 
+/// A config file's text: `None` when it's missing or empty (nothing in it
+/// yet, as a file emptied by hand or by a full disk is: the defaults).
+fn read_config(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path).ok().filter(|s| !s.trim().is_empty())
+}
+
 /// Read and parse a JSON5 file. A missing file means defaults; a broken one
 /// is reported and gives `None`.
 fn read_json<T: serde::de::DeserializeOwned + Default>(
     path: &Path,
     errors: &mut Vec<String>,
 ) -> Option<T> {
-    let Ok(src) = std::fs::read_to_string(path) else {
+    let Some(src) = read_config(path) else {
         return Some(T::default());
     };
     json5::from_str(&src)
@@ -585,6 +591,11 @@ mod tests {
     #[test]
     fn settings_reject_typos_and_keep_partial_values() {
         assert!(json5::from_str::<Settings>(r#"{ "thme": "Moss" }"#).is_err());
+        // An empty file is no settings yet, not a broken one.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("settings.json"), "  \n").unwrap();
+        std::fs::write(dir.path().join("keybindings.json"), "").unwrap();
+        assert!(load_in(dir.path(), None, None).errors.is_empty());
         let s: Settings = json5::from_str(r#"{ theme: "Moss", }"#).unwrap();
         assert_eq!(s.theme, "Moss");
         assert_eq!(s.ui_font, fonts::DEFAULT_UI);

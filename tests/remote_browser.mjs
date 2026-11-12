@@ -474,8 +474,11 @@ const lostShown = `!document.getElementById('lost').hidden`;
 if (await evaluate(lostShown)) fail("the disconnected dialog showed while connected");
 console.log("STEP turn-off");
 await waitFor(lostShown, "the disconnected dialog", 20000);
-const lost = await evaluate(`document.getElementById('lostTitle').textContent + " | " + document.getElementById('lostText').textContent`);
-if (!lost.includes("Disconnected") || !lost.includes("turned off")) fail("it should say why: " + lost);
+// It first says the link dropped; once the server is found gone, why.
+const lostWhy = `document.getElementById('lostTitle').textContent + " | " + document.getElementById('lostText').textContent`;
+await waitFor(`(${lostWhy}).includes("turned off")`, "the dialog saying why", 10000);
+const lost = await evaluate(lostWhy);
+if (!lost.includes("Disconnected") || /\bMac\b/.test(lost)) fail("it should say why, for any computer: " + lost);
 await press("Enter", "Enter");                     // ↵: try now (still gone)
 await sleep(1200);
 if (!(await evaluate(lostShown))) fail("still disconnected: the dialog stays");

@@ -125,7 +125,7 @@ async function loadWindows() {
   windows = await r.json();
   const list = $("list");
   list.replaceChildren();
-  if (!windows.length) list.innerHTML = '<div class="empty">No windows open. Open Roxaruu on the Mac.</div>';
+  if (!windows.length) list.innerHTML = '<div class="empty">No windows open. Open Roxaruu on the computer.</div>';
   windows.forEach((w, i) => {
     const b = document.createElement("button");
     b.className = "win" + (w.id === win ? " on" : "") + (i === winSel ? " sel" : "");
@@ -141,7 +141,7 @@ async function loadWindows() {
     const was = win != null && $("name").textContent;
     if (windows.length) {
       pick(windows[0].id);
-      if (was) notice(`“${was}” was closed on the Mac. Now showing “${windows[0].name}”.`);
+      if (was) notice(`“${was}” was closed on the computer. Now showing “${windows[0].name}”.`);
     } else {
       win = null; show("No windows open"); linkUp(false);
       if (ws) { ws.onclose = null; ws.close(); ws = null; }
@@ -211,10 +211,10 @@ const LOST_AFTER = 1500;
 function lostCheck() {
   if (!lostAt || Date.now() - lostAt < LOST_AFTER) return;
   const [title, text] = unreachable
-    ? ["Disconnected from your Mac", "Roxaruu stopped sharing: remote access was turned off, Roxaruu was closed, " +
-       "or the Mac is asleep or off this network. This page reconnects by itself when it's back."]
+    ? ["Disconnected", "Roxaruu stopped sharing: remote access was turned off, Roxaruu was closed, " +
+       "or the computer is asleep or off this network. This page reconnects by itself when it's back."]
     : !windows.length
-    ? ["No windows to show", "Every Roxaruu window open to remote access was closed. Open one on the Mac and it shows up here."]
+    ? ["No windows to show", "Every Roxaruu window open to remote access was closed. Open one on the computer and it shows up here."]
     : ["Connection lost", `The link to “${$("name").textContent}” dropped. Trying to get it back…`];
   $("lostTitle").textContent = title;
   $("lostText").textContent = text;

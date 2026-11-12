@@ -430,16 +430,45 @@ const COMPACT_WIDTH: f32 = 900.0;
 /// phone on its side); the status bar still shows the keys.
 const SHORT_HEIGHT: f32 = 520.0;
 
+/// What the rows of keys drew in the last pass, for tests: each keycap, and
+/// where each clickable one is.
+#[cfg(test)]
+#[derive(Default)]
+struct Drawn {
+    pass: u64,
+    keys: Vec<String>,
+    clickable: Vec<(Rect, Command)>,
+}
+
 #[cfg(test)]
 thread_local! {
-    /// The keycaps the rows of keys drew in the last pass: (pass, caps).
-    static DRAWN_KEYS: std::cell::RefCell<(u64, Vec<String>)> = const { std::cell::RefCell::new((0, Vec::new())) };
+    static DRAWN: std::cell::RefCell<Drawn> = std::cell::RefCell::new(Drawn::default());
+}
+
+/// Note keycaps drawn now (and, if it's clickable, where and for what).
+#[cfg(test)]
+fn drawn(ui: &egui::Ui, keys: impl IntoIterator<Item = String>, click: Option<(Rect, Command)>) {
+    let pass = ui.ctx().cumulative_pass_nr();
+    DRAWN.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.pass != pass {
+            *d = Drawn { pass, ..Drawn::default() };
+        }
+        d.keys.extend(keys);
+        d.clickable.extend(click);
+    });
 }
 
 /// The keycaps drawn in rows of keys in the last pass, for tests.
 #[cfg(test)]
 pub(crate) fn drawn_keys() -> Vec<String> {
-    DRAWN_KEYS.with(|d| d.borrow().1.clone())
+    DRAWN.with(|d| d.borrow().keys.clone())
+}
+
+/// Where the last pass drew the clickable key for `c`, for tests.
+#[cfg(test)]
+pub(crate) fn drawn_hint(c: Command) -> Option<Rect> {
+    DRAWN.with(|d| d.borrow().clickable.iter().find(|(_, k)| *k == c).map(|(r, _)| *r))
 }
 
 /// Rows shown at once in a compact palette (pickers, Go to Line).
@@ -695,14 +724,7 @@ impl Paint {
         let mut x = left_center.x;
         #[cfg(test)]
         if p.is_some() {
-            let pass = ui.ctx().cumulative_pass_nr();
-            DRAWN_KEYS.with(|d| {
-                let mut d = d.borrow_mut();
-                if d.0 != pass {
-                    *d = (pass, Vec::new());
-                }
-                d.1.extend(hints.iter().flat_map(|(caps, _)| caps.iter().cloned()));
-            });
+            drawn(ui, hints.iter().flat_map(|(caps, _)| caps.iter().cloned()), None);
         }
         for (n, (caps, what)) in hints.iter().enumerate() {
             if n > 0 {
@@ -2339,6 +2361,8 @@ impl App {
                 break;
             }
             let item = Rect::from_min_size(pos2(x - 4.0 * s, rect.top() + 3.0 * s), vec2(w + 8.0 * s, rect.height() - 6.0 * s));
+            #[cfg(test)]
+            drawn(ui, [kg.text().to_string()], command.map(|c| (item, c)));
             let sense = if command.is_some() { Sense::click() } else { Sense::hover() };
             let r = ui.interact(item, egui::Id::unique(("status-hint", salt, i)), sense);
             let p = ui.painter();
