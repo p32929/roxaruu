@@ -533,10 +533,21 @@ mod tests {
             Duration::from_millis(200),
             "the prompt arrived unattended"
         );
-        t.input(&[Event::Text("echo typed".into())]);
-        // Its own wait: the echo comes once the shell reads input, and
-        // PowerShell on a busy machine takes a while to get there.
+        // Type at the prompt, as a person would: PowerShell prints well before
+        // it reads input, and an echo that late isn't typing's any more.
+        let mut shown = String::new();
+        let mut since = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(30);
+        while shown.trim().is_empty() || since.elapsed() < Duration::from_secs(1) {
+            assert!(Instant::now() < deadline, "the shell never settled: {shown:?}");
+            std::thread::sleep(Duration::from_millis(50));
+            let now = t.pane.screen().contents();
+            if now != shown {
+                (shown, since) = (now, Instant::now());
+            }
+        }
+        t.input(&[Event::Text("echo typed".into())]);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !requests.lock().unwrap().contains(&Duration::ZERO) {
             assert!(
                 Instant::now() < deadline,
