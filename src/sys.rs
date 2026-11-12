@@ -536,8 +536,8 @@ fn wsl() -> Option<std::path::PathBuf> {
         if RegOpenKeyExW(HKEY_CURRENT_USER, key.as_ptr(), 0, KEY_READ, &mut h) != 0 {
             return None;
         }
-        let null = std::ptr::null_mut();
-        RegQueryInfoKeyW(h, null.cast(), null.cast(), std::ptr::null(), &mut linuxes, null.cast(), null.cast(), null.cast(), null.cast(), null.cast(), null.cast(), null.cast());
+        use std::ptr::{null, null_mut};
+        RegQueryInfoKeyW(h, null_mut(), null_mut(), null(), &mut linuxes, null_mut(), null_mut(), null_mut(), null_mut(), null_mut(), null_mut(), null_mut());
         RegCloseKey(h);
     }
     (linuxes > 0 && p.is_file()).then_some(p)

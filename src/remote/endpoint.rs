@@ -247,7 +247,14 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, stop: &AtomicBool, wak
     while !stop.load(Ordering::Relaxed) && !gone.load(Ordering::Acquire) {
         match reader.read() {
             Ok(Message::Text(t)) if t.as_str() == ACK => {
-                let _ = unacked.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| Some(n.saturating_sub(1)));
+                // One fewer, never below zero (`fetch_update`, deprecated on newer Rust).
+                let mut n = unacked.load(Ordering::Acquire);
+                while n > 0 {
+                    match unacked.compare_exchange_weak(n, n - 1, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(_) => break,
+                        Err(now) => n = now,
+                    }
+                }
                 *heard.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
                 if shared.waiting.swap(false, Ordering::AcqRel) {
                     wake();

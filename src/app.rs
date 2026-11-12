@@ -100,6 +100,8 @@ pub enum Focus {
 pub struct View {
     /// Too narrow for the tree beside the editor: it becomes a drawer.
     pub compact: bool,
+    /// Too short for the key rows under the tab strips (`tab_hint_row`).
+    pub short: bool,
     /// The tree's drawer is out (compact views only).
     pub drawer: bool,
     /// The editor's and the terminals' tab strips: scroll, drag.

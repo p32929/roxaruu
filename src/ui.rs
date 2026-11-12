@@ -243,6 +243,17 @@ pub mod icon {
 
     /// A path too long for the room keeps its end.
     #[test]
+    fn long_tab_names_keep_their_extension() {
+        let short = |n| crate::ui::short_name(n, 20);
+        assert_eq!(short("main.rs"), "main.rs");
+        assert_eq!(short("search--three-js-examples-car-racing.md"), "search--three-js….md");
+        assert_eq!(short("search--three-js-examples-car-racing.md").chars().count(), 20);
+        assert_eq!(short("a-very-long-makefile-without-dots"), "a-very-long-makefil…");
+        assert_eq!(short(".a-very-long-hidden-config-file"), ".a-very-long-hidden…");
+        assert_eq!(short("notes.a-very-long-extension-indeed"), "notes.a-very-long-e…");
+    }
+
+    #[test]
     fn elide_start_keeps_the_end() {
         let fits = |t: &str| t.chars().count() <= 8;
         assert_eq!(crate::ui::elide_start("~/a/b", fits), "~/a/b");
@@ -419,6 +430,18 @@ const COMPACT_WIDTH: f32 = 900.0;
 /// phone on its side); the status bar still shows the keys.
 const SHORT_HEIGHT: f32 = 520.0;
 
+#[cfg(test)]
+thread_local! {
+    /// The keycaps the rows of keys drew in the last pass: (pass, caps).
+    static DRAWN_KEYS: std::cell::RefCell<(u64, Vec<String>)> = const { std::cell::RefCell::new((0, Vec::new())) };
+}
+
+/// The keycaps drawn in rows of keys in the last pass, for tests.
+#[cfg(test)]
+pub(crate) fn drawn_keys() -> Vec<String> {
+    DRAWN_KEYS.with(|d| d.borrow().1.clone())
+}
+
 /// Rows shown at once in a compact palette (pickers, Go to Line).
 const PALETTE_ROWS: usize = 10;
 
@@ -541,23 +564,6 @@ impl Paint {
 
     /// A small square icon button with a hover tint and tooltip.
     /// An icon button with its key in small type under the icon.
-    fn icon_button_key(&self, ui: &mut egui::Ui, glyph: &str, tip: &str, key: Option<&str>) -> bool {
-        let Some(key) = key else {
-            return self.icon_button(ui, glyph, tip, false);
-        };
-        let s = self.s;
-        let g = ui.fonts_mut(|f| f.layout_no_wrap(key.to_string(), fonts::keycap(8.5 * s), self.c.text_subtle));
-        let (r, resp) = ui.allocate_exact_size(vec2((g.size().x + 8.0 * s).max(24.0 * s), 32.0 * s), Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(r, 5.0 * s, self.c.hover);
-        }
-        let color = if resp.hovered() { self.c.text } else { self.c.text_muted };
-        let p = ui.painter();
-        p.text(r.center() - vec2(0.0, 6.0 * s), Align2::CENTER_CENTER, glyph, self.font(14.0, Weight::Regular), color);
-        p.galley(pos2(r.center().x - g.size().x / 2.0, r.center().y + 4.0 * s), g, self.c.text_subtle);
-        resp.on_hover_text(tip).clicked()
-    }
-
     fn icon_button(&self, ui: &mut egui::Ui, glyph: &str, tip: &str, on: bool) -> bool {
         let size = 24.0 * self.s;
         let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
@@ -687,6 +693,17 @@ impl Paint {
         let (c, s) = (&self.c, self.s);
         let h = (size + 9.0) * s;
         let mut x = left_center.x;
+        #[cfg(test)]
+        if p.is_some() {
+            let pass = ui.ctx().cumulative_pass_nr();
+            DRAWN_KEYS.with(|d| {
+                let mut d = d.borrow_mut();
+                if d.0 != pass {
+                    *d = (pass, Vec::new());
+                }
+                d.1.extend(hints.iter().flat_map(|(caps, _)| caps.iter().cloned()));
+            });
+        }
         for (n, (caps, what)) in hints.iter().enumerate() {
             if n > 0 {
                 x += 14.0 * s;
@@ -754,6 +771,7 @@ impl App {
         let screen = ctx.content_rect();
         let s = self.paint().s;
         self.view_mut().compact = screen.width() < COMPACT_WIDTH * s;
+        self.view_mut().short = screen.height() < SHORT_HEIGHT * s;
         self.tick(&ctx);
         self.handle_keys(&ctx);
         self.end_peek();
@@ -1008,7 +1026,7 @@ impl App {
                     fmt.color = c.error.gamma_multiply(0.85);
                     fmt.strikethrough = Stroke::new(1.5 * s, c.error.gamma_multiply(0.85));
                 }
-                job.append(&names[i], 0.0, fmt);
+                job.append(&short_name(&names[i], TAB_NAME_MAX), 0.0, fmt);
                 if !detail.is_empty() {
                     job.append(
                         &format!("  {detail}"),
@@ -2026,11 +2044,13 @@ impl App {
             vec![
                 raw("↵", "open"),
                 cmd(Command::NewFile, "new file"),
+                cmd(Command::NewFolder, "new folder"),
                 cmd(Command::RenameFile, "rename"),
                 cmd(Command::OpenInTerminal, "open in terminal"),
                 cmd(Command::DeleteFile, "move to trash"),
                 raw("space", "preview"),
                 cmd(Command::CollapseFolders, "collapse all"),
+                cmd(Command::ToggleSidebar, "hide"),
                 cmd(Command::GoToFile, "search"),
                 raw("↑↓←→", "browse"),
             ]
@@ -2046,14 +2066,17 @@ impl App {
             return Vec::new();
         }
         let shown = self.terminal_open && !self.terminals.is_empty();
+        // A key shows once: the way back to the editor is on the editor's
+        // own row when that's drawn, the terminal's tab keys on its row.
+        let editor_row = !self.tabs.is_empty() && !self.terminal_max && !self.view().short;
         let mut list = if self.terminal_focused() {
             vec![
-                cmd(Command::SwitchFocus, "back to editor"),
+                cmd(Command::SwitchFocus, "back to editor").filter(|_| !editor_row),
+                cmd(Command::ToggleTerminal, "hide terminal"),
+                cmd(Command::MaximizeTerminal, if self.terminal_max { "restore" } else { "maximize" }),
                 cmd(Command::SwitchTerminal, "switch terminal"),
                 cmd(Command::ClearTerminal, "clear"),
-                cmd(Command::MaximizeTerminal, if self.terminal_max { "restore" } else { "maximize" }),
                 cmd(Command::OpenTerminalLink, "open a link"),
-                cmd(Command::ToggleTerminal, "hide terminal"),
             ]
         } else if self.terminals.is_empty() {
             vec![
@@ -2065,7 +2088,7 @@ impl App {
             vec![
                 self.focus_hint(Focus::Terminal).and_then(|(c, what)| cmd(c, what)),
                 cmd(Command::ToggleTerminal, if shown { "hide terminal" } else { "show terminal" }),
-                cmd(Command::NewTerminal, "new terminal"),
+                cmd(Command::NewTerminal, "new terminal").filter(|_| !shown || self.view().short),
             ]
         };
         // The tree hidden: the bar starts with the way back to it.
@@ -2367,24 +2390,18 @@ impl App {
         let project = self.project.as_ref()?;
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
+        // One row, like every other row of keys, with only what no other
+        // row shows (the status bar has the tree, the terminal, every
+        // command and every shortcut; the tree's search box, Go to File).
         let actions = [
-            (Command::GoToFile, "go to file"),
-            (Command::SearchInFiles, "search in files"),
-            (Command::FocusSidebar, "focus file tree"),
-            (Command::SwitchFocus, self.terminal_verb()),
-            (Command::Palette, "all commands"),
-            (Command::CloseFolder, "close folder"),
-            (Command::Help, "all shortcuts"),
+            (Command::GoToFile, "go to file", !self.sidebar_shown()),
+            (Command::SearchInFiles, "search in files", true),
+            (Command::CloseFolder, "close folder", true),
         ];
-        let rows: Vec<(Command, Vec<String>, &str)> = actions
+        let row: Vec<(Command, Hint)> = actions
             .into_iter()
-            .filter_map(|(c, what)| {
-                Some((
-                    c,
-                    vec![self.config.keymap.combo_for(c)?.label()],
-                    what,
-                ))
-            })
+            .filter(|(_, _, shown)| *shown)
+            .filter_map(|(c, what, _)| Some((c, (vec![self.shortcut(c)?], what))))
             .collect();
         let area = ui.max_rect();
         let p = ui.painter().clone();
@@ -2402,8 +2419,8 @@ impl App {
             layout(t.to_string(), path_font.clone(), c.text_subtle).size().x <= room
         });
         let path = layout(path, path_font.clone(), c.text_subtle);
-        let row_h = 30.0 * s;
-        let total = name.size().y + 6.0 * s + path.size().y + 28.0 * s + row_h * rows.len() as f32;
+        let row_h = 26.0 * s;
+        let total = name.size().y + 6.0 * s + path.size().y + 24.0 * s + row_h;
         let cx = area.center().x;
         let mut y = (area.center().y - total / 2.0).max(area.top() + 16.0);
         p.galley(
@@ -2417,45 +2434,23 @@ impl App {
             path.clone(),
             c.text_subtle,
         );
-        y += path.size().y + 28.0 * s;
-        // Two columns meeting in the middle: what it does | its keys.
+        y += path.size().y + 24.0 * s;
+        // Each hint is clickable, like the status bar's.
+        let gap = 14.0 * s;
+        let widths: Vec<f32> = row.iter().map(|(_, h)| pt.key_hints(ui, None, std::slice::from_ref(h), 12.0, Pos2::ZERO)).collect();
+        let mut x = cx - (widths.iter().sum::<f32>() + gap * row.len().saturating_sub(1) as f32) / 2.0;
         let mut chosen = None;
-        for (command, caps, what) in rows {
-            let mid = pos2(cx, y + row_h / 2.0);
-            let label = layout(
-                what.to_string(),
-                pt.font(13.5, Weight::Regular),
-                c.text_muted,
-            );
-            let caps_w = pt.key_hints(ui, None, &[(caps.clone(), "")], 12.5, Pos2::ZERO);
-            let hit = Rect::from_min_max(
-                pos2(cx - 12.0 * s - label.size().x, y),
-                pos2(cx + 12.0 * s + caps_w, y + row_h),
-            );
-            let resp = ui.interact(hit, ui.scope_id().with(("home", what)), Sense::click());
+        for ((command, hint), w) in row.into_iter().zip(widths) {
+            let hit = Rect::from_min_size(pos2(x, y), vec2(w, row_h));
+            let resp = ui.interact(hit, ui.scope_id().with(("home", hint.1)), Sense::click());
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
             if resp.clicked() {
                 chosen = Some(command);
             }
-            let color = if resp.hovered() { c.text } else { c.text_muted };
-            p.galley(
-                pos2(
-                    mid.x - 12.0 * s - label.size().x,
-                    mid.y - label.size().y / 2.0,
-                ),
-                label,
-                color,
-            );
-            pt.key_hints(
-                ui,
-                Some(&p),
-                &[(caps, "")],
-                12.5,
-                pos2(mid.x + 12.0 * s, mid.y),
-            );
-            y += row_h;
+            pt.key_hints(ui, Some(&p), &[hint], 12.0, pos2(x, y + row_h / 2.0));
+            x += w + gap;
         }
         chosen
     }
@@ -2464,10 +2459,10 @@ impl App {
         if self.project.is_some() {
             return self.project_home(ui);
         }
+        // (Every command and every shortcut are in the status bar.)
         let actions: &[Command] = &[
             Command::OpenFolder,
             Command::RecentFolders,
-            Command::Palette,
             Command::Settings,
             Command::Quit,
         ];
@@ -2513,14 +2508,8 @@ impl App {
         };
         let wordmark = layout(title, pt.font(30.0, Weight::SemiBold), c.text);
         let tagline = layout(subtitle, pt.font(14.0, Weight::Regular), c.text_muted);
-        let help = self
-            .config
-            .keymap
-            .combo_for(Command::Help)
-            .map(|k| k.label())
-            .unwrap_or_else(|| "F1".into());
         let footer_text = format!(
-            "{help} shows every shortcut   ·   {}  themes, fonts and keys live in ~/.config/oxru   ·   v{}",
+            "{}  themes, fonts and keys live in ~/.config/oxru   ·   v{}",
             icon::GEAR,
             crate::VERSION
         );
@@ -5500,6 +5489,27 @@ impl App {
 /// `/Users/me/x` → `~/x`.
 /// `text`, or as much of its end as `fits`, after a "…": a long path keeps
 /// the folders nearest the file.
+/// The most characters a tab's name shows (the title bar has it whole).
+const TAB_NAME_MAX: usize = 20;
+
+/// `name` in at most `max` characters: cut in the middle with "…", keeping
+/// the extension, so `search--three-js-examples.md` reads `search--three-js….md`.
+fn short_name(name: &str, max: usize) -> String {
+    let n = name.chars().count();
+    if n <= max {
+        return name.to_string();
+    }
+    // An extension worth keeping: after the last dot, not the whole name.
+    let ext = name
+        .rfind('.')
+        .filter(|&i| i > 0)
+        .map(|i| &name[i..])
+        .filter(|e| e.chars().count() + 2 <= max)
+        .unwrap_or("");
+    let keep = max - 1 - ext.chars().count();
+    format!("{}…{ext}", name.chars().take(keep).collect::<String>())
+}
+
 fn elide_start(text: &str, fits: impl Fn(&str) -> bool) -> String {
     if fits(text) {
         return text.to_string();

@@ -1808,6 +1808,7 @@ mod tests {
     /// (Needs the helper built: `cargo build` builds it beside Roxaruu.)
     #[test]
     fn a_claude_hook_reaches_its_terminal() {
+        let _turn = crate::termbridge::TEST_FILES.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir();
         let mut t = TerminalPane::new("t", 24, 100, &dir, None).expect("a shell starts");
         assert!(t.watch.inbox.lock().unwrap().is_some(), "the terminal has an inbox");

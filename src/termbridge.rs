@@ -642,6 +642,11 @@ pub fn cleanup() {
     }
 }
 
+/// Tests that take the bridge's files away, or need them there, take turns:
+/// a rewrite under a running shell briefly has no `roxaruu-hook`.
+#[cfg(test)]
+pub(crate) static TEST_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // The Terminal.app catching is for Unix shells.
 #[cfg(all(test, unix))]
 mod tests {
@@ -1175,6 +1180,7 @@ mod tests {
     /// from failing silently and permanently.
     #[test]
     fn vanished_shims_are_rewritten() {
+        let _turn = TEST_FILES.lock().unwrap_or_else(|e| e.into_inner());
         let Some(req) = request_file() else {
             return;
         };

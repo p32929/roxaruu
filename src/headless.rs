@@ -3224,7 +3224,8 @@ fn keep_settings() -> impl Drop + 'static {
 /// The keys for what used to need the mouse: collapse the tree, text size,
 /// links in the terminal, and "Change shortcuts…" on the F1 sheet.
 /// From the editor, the tree or the terminal, the keys to the other two
-/// show in the status bar and on the area they go to, and take you there.
+/// show (the tree's and the terminal's in the status bar, the editor's on
+/// its own row), once each, and take you there.
 #[test]
 #[ignore]
 fn headless_focus_keys_everywhere() {
@@ -3268,12 +3269,13 @@ fn headless_focus_keys_everywhere() {
                     || app(&h).status_hints().iter().any(|(_, w, c)| *c == Some(command) && *w == what),
                 "the status bar in {from:?} shows {what}"
             );
-            assert!(app(&h).go_hint(to).is_some(), "drawn on {to:?} from {from:?}");
+            assert!(to != Focus::Editor || app(&h).go_hint(to).is_some(), "drawn on {to:?} from {from:?}");
             let (key, mods) = app(&h).config.keymap.combo_for(command).unwrap().press();
             press(&mut h, mods, key);
             assert_eq!(place(app(&h)), to, "{what} from {from:?}");
         }
         set(&mut h, from);
+        each_key_once(&format!("{from:?}"));
         visible_keys_work(&mut h, &format!("{from:?}"));
     }
     set(&mut h, Focus::Sidebar);
@@ -3282,6 +3284,17 @@ fn headless_focus_keys_everywhere() {
     shot(&mut h, "f2-focus-keys-from-terminal");
     set(&mut h, Focus::Editor);
     shot(&mut h, "f0-focus-keys-from-editor");
+}
+
+/// No shortcut is drawn twice on the screen: each shows in the one row it
+/// belongs to (the keys every row has, like ↵ and esc, aside).
+fn each_key_once(when: &str) {
+    const ANY_ROW: &[&str] = &["↵", "esc", "space", "↑↓", "↓", "↑↓←→", "⇥", "⇧↵", "type", "right-click"];
+    let keys = crate::ui::drawn_keys();
+    let mut seen = std::collections::HashSet::new();
+    for k in keys.iter().filter(|k| !ANY_ROW.contains(&k.as_str())) {
+        assert!(seen.insert(k), "{k} is shown twice ({when}): {keys:?}");
+    }
 }
 
 #[test]

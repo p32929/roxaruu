@@ -12,8 +12,14 @@ clashes with nothing (`every_command_has_a_default_key`,
 screen works from wherever the keyboard is (`visible_keys_work`): never
 gate a command on focus while its key is drawn elsewhere, and never show
 one that can't run now. The keys between the editor, the tree and the
-terminal come from `focus_hint`, shown in the status bar and on the area
-they go to (`headless_focus_keys_everywhere`).
+terminal come from `focus_hint`: the tree's and the terminal's in the
+status bar, the editor's on its own row (`headless_focus_keys_everywhere`).
+Every key shows **once** on screen, in the one row it belongs to — never
+again in a header, a page or a second row (`each_key_once`). Keys are
+always shown the same way: one row of keycap + what it does
+(`Paint::key_hints`), never a column, never wrapped onto a second row,
+never drawn inside a button (buttons carry theirs in the tooltip); when a
+row is short of room it keeps the most useful first.
 
 These rules apply to every change, however small.
 
@@ -43,7 +49,7 @@ of "forgot to update X"):
   row keeps the most useful first when room is short. Palette footers (`palette_footer`),
   right-click menus (`tab_menu`, `terminal_menu`, `sidebar_menu`,
   `editor_menu`), dialog buttons, and the empty-folder page
-  (`project_home`). A command that can run where the keyboard is must show
+  (`project_home`: one row, only keys no other row shows). A command that can run where the keyboard is must show
   its key there, or be listed as app-wide / menu-only in
   `headless_every_key_that_applies_shows`.
 - If it's tab-like, make it work for both editor tabs and terminals (see

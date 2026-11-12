@@ -341,38 +341,31 @@ impl App {
                         icon::SIDEBAR,
                         format!("Hide File Tree{}", caps(Command::ToggleSidebar)),
                         Act::Hide,
-                        Command::ToggleSidebar,
                     ),
                     (
                         icon::COLLAPSE_ALL,
                         format!("Collapse Folders{}", caps(Command::CollapseFolders)),
                         Act::Run(Command::CollapseFolders),
-                        Command::CollapseFolders,
                     ),
                     (
                         icon::NEW_FOLDER,
                         format!("New Folder…{}", caps(Command::NewFolder)),
                         Act::Run(Command::NewFolder),
-                        Command::NewFolder,
                     ),
                     (
                         icon::NEW_FILE,
                         format!("New File…{}", caps(Command::NewFile)),
                         Act::Run(Command::NewFile),
-                        Command::NewFile,
                     ),
                 ];
-                // With the keyboard here, each button wears its key.
-                for (glyph, tip, a, cmd) in buttons {
-                    let key = focused.then(|| self.shortcut(cmd)).flatten();
-                    if pt.icon_button_key(ui, glyph, &tip, key.as_deref()) {
+                // Their keys are in the tree's row of the status bar, and
+                // in their tips.
+                for (glyph, tip, a) in buttons {
+                    if pt.icon_button(ui, glyph, &tip, false) {
                         act = Some(a);
                     }
                 }
-                // The key that brings the keyboard here, after the name.
-                let go: Vec<Hint> = self.go_hint(Focus::Sidebar).map(|(caps, _)| (caps, "")).into_iter().collect();
-                let go_w = pt.key_hints(ui, None, &go, 10.5, Pos2::ZERO);
-                let room = (ui.available_width() - 6.0 * s - go_w - 8.0 * s).max(0.0);
+                let room = (ui.available_width() - 6.0 * s).max(0.0);
                 let mut job = LayoutJob::simple_singleline(
                     project.name.to_uppercase(),
                     pt.font(11.5, Weight::SemiBold),
@@ -388,8 +381,6 @@ impl App {
                 let at = pos2(head.left() + 16.0 * s, head.center().y - g.size().y / 2.0);
                 let name = Rect::from_min_size(at, g.size());
                 ui.painter().galley(at, g, c.text_muted);
-                let p = ui.painter().clone();
-                pt.key_hints(ui, Some(&p), &go, 10.5, pos2(name.right() + 8.0 * s, head.center().y));
                 if let Some(tip) = tip {
                     ui.interact(name, egui::Id::unique("sidebar-folder"), Sense::hover())
                         .on_hover_text(tip);

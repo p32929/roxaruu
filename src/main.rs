@@ -10,6 +10,8 @@
     not(test),
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
+// Helpers for the UI walkthroughs, which need Unix shells (`headless`).
+#![cfg_attr(all(test, not(unix)), allow(dead_code, unused_imports))]
 
 mod app;
 mod buffer;
