@@ -76,7 +76,7 @@ fn main() -> eframe::Result {
     init_log();
     tracing::info!(version = VERSION, os = std::env::consts::OS, pid = std::process::id(), "starting");
     tracing::info!(
-        args = ?std::env::args_os().skip(1).collect::<Vec<_>>(),
+        args = ?redacted(std::env::args_os().skip(1)),
         exe = ?std::env::current_exe().ok(),
         cwd = ?std::env::current_dir().ok(),
         config = %config::dir().display(),
@@ -101,10 +101,49 @@ fn main() -> eframe::Result {
         }
         None => {}
     }
+    // `--remote off`, or `on` while it's already on: nothing to open.
+    match &launch.remote {
+        Some(RemoteArg::Off) => {
+            let was = instances::remote_server().is_some();
+            instances::clear_remote_server(false);
+            println!("{}", if was { "Remote access is off." } else { "Remote access was already off." });
+            return Ok(());
+        }
+        Some(RemoteArg::On(_)) if let Some(s) = instances::remote_server() => {
+            println!("Remote access is already on: {}", remote::address(s.port));
+            return Ok(());
+        }
+        _ => {}
+    }
+    // `--remote on`: the password from `--password`, or (the detached copy)
+    // from its stdin, so it's never on disk, in an environment or in a
+    // command line of ours.
+    let password = match &launch.remote {
+        Some(RemoteArg::On(Some(p))) => Some(p.clone()),
+        Some(RemoteArg::On(None)) if !from_shell => {
+            let mut line = String::new();
+            let _ = std::io::stdin().read_line(&mut line);
+            Some(line.trim_end_matches(['\r', '\n']).to_string())
+        }
+        _ => None,
+    };
+    if launch.remote.is_some() && password.as_deref().is_none_or(str::is_empty) {
+        eprintln!("roxaruu: --remote on needs --password <password>");
+        std::process::exit(2);
+    }
     // Started from a shell: hand the window to a copy that isn't tied to it
     // and give the prompt back, so closing that terminal leaves the window.
-    if from_shell && !launch.foreground && detach(&launch.target) {
-        return Ok(());
+    if from_shell && !launch.foreground {
+        if no_screen() && which::which("xvfb-run").is_err() {
+            eprintln!("roxaruu: there's no screen here to open a window on; on a server, install Xvfb (sudo apt install xvfb)");
+            std::process::exit(1);
+        }
+        if detach(&launch.target, password.as_deref()) {
+            if password.is_some() {
+                say_where_remote_is();
+            }
+            return Ok(());
+        }
     }
     let target = launch.target.clone();
 
@@ -184,7 +223,11 @@ fn main() -> eframe::Result {
             if launch.foreground {
                 cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-            Ok(Box::new(Root::new(app::App::new(&cc.egui_ctx, target))))
+            let mut root = Root::new(app::App::new(&cc.egui_ctx, target));
+            if let Some(password) = password {
+                root.0.remote_want = Some(remote::Want::On(password));
+            }
+            Ok(Box::new(root))
         }),
     );
     // Remove this window's terminal-bridge shims and its open-folder marker.
@@ -346,6 +389,12 @@ Usage:
   rox --foreground ... Stay attached to this terminal (logs show here).
                        Otherwise the window detaches: you get the prompt
                        back, and closing the terminal leaves it open.
+  rox --remote on --password <password> [folder]
+                       Turn remote access on: a window serves it (on a
+                       server with no screen, on a virtual one, via Xvfb)
+                       and this prints the address to open in a browser.
+                       The password is kept in memory only.
+  rox --remote off     Turn remote access off, wherever it runs.
   rox -h | --help      Show this help.
   rox -V | --version   Show the version.
 
@@ -365,6 +414,14 @@ enum Info {
     Unknown(String),
 }
 
+/// `--remote on|off`. `On(None)`: the password comes on stdin (the
+/// detached copy).
+#[derive(Debug, PartialEq)]
+enum RemoteArg {
+    On(Option<String>),
+    Off,
+}
+
 /// What the command line asked for.
 #[derive(Debug, PartialEq)]
 struct Launch {
@@ -373,6 +430,8 @@ struct Launch {
     /// `--foreground`: stay attached to the terminal (the detached copy is
     /// started with it; handy for seeing logs too).
     foreground: bool,
+    /// `--remote on|off` (with `--password`).
+    remote: Option<RemoteArg>,
     /// `roxaruu [folder | file]`. Bare `roxaruu` (or `rox`) in a terminal
     /// opens the folder you're in, same as `roxaruu .`; from the Dock or
     /// Finder there's no terminal, and it opens empty.
@@ -381,49 +440,107 @@ struct Launch {
 
 impl Launch {
     fn parse(args: impl Iterator<Item = std::ffi::OsString>, from_shell: bool) -> Launch {
+        let (mut info, mut foreground, mut remote, mut password, mut target) = (None, false, None, None, None);
         let mut args = args.peekable();
-        let info = args.peek().and_then(|a| match a.to_str() {
-            Some("-h" | "--help") => Some(Info::Help),
-            Some("-V" | "--version") => Some(Info::Version),
-            Some(f) if f.starts_with('-') && f != "-" && f != "--foreground" => {
-                Some(Info::Unknown(f.to_string()))
+        while let Some(a) = args.next() {
+            match a.to_str() {
+                Some("-h" | "--help") => info = info.or(Some(Info::Help)),
+                Some("-V" | "--version") => info = info.or(Some(Info::Version)),
+                Some("--foreground") => foreground = true,
+                Some("--remote") => match args.next().as_ref().and_then(|v| v.to_str()) {
+                    Some("on") => remote = Some(true),
+                    Some("off") => remote = Some(false),
+                    _ => info = info.or(Some(Info::Unknown("--remote (say on or off)".into()))),
+                },
+                Some("--password") => password = args.next().and_then(|v| v.into_string().ok()),
+                Some(f) if f.starts_with('-') && f != "-" => info = info.or(Some(Info::Unknown(f.to_string()))),
+                _ if target.is_none() => target = Some(std::path::PathBuf::from(a)),
+                _ => {}
             }
-            _ => None,
-        });
-        let foreground = args.next_if(|a| a == "--foreground").is_some();
-        let target = args
-            .next()
-            .map(std::path::PathBuf::from)
+        }
+        let target = target
             .or_else(|| from_shell.then(std::env::current_dir).and_then(Result::ok))
             // Absolute, so the copy opens the same thing wherever it starts.
             .map(|t| std::path::absolute(&t).unwrap_or(t));
-        Launch { info, foreground, target }
+        let remote = remote.map(|on| if on { RemoteArg::On(password) } else { RemoteArg::Off });
+        Launch { info, foreground, remote, target }
     }
+}
+
+/// The arguments, for the log: never a password.
+fn redacted(args: impl Iterator<Item = std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let mut hide = false;
+    args.map(|a| {
+        let out = if hide { "***".into() } else { a.clone() };
+        hide = a == "--password";
+        out
+    })
+    .collect()
+}
+
+/// Linux with no screen to draw on (a server): the window goes on a
+/// virtual one, through `xvfb-run`.
+fn no_screen() -> bool {
+    cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none()
 }
 
 /// Start this program again, detached: its own process group, no terminal
-/// for input or output. Returns whether it started.
-fn detach(target: &Option<std::path::PathBuf>) -> bool {
-    match std::env::current_exe() {
-        Ok(exe) => spawn_detached(&exe, target.iter().map(|t| t.as_os_str())).is_ok(),
-        Err(_) => false,
+/// for input or output (on a virtual screen if there's no real one), the
+/// password for remote access, if any, on its stdin. Returns whether it
+/// started.
+fn detach(target: &Option<std::path::PathBuf>, password: Option<&str>) -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    if password.is_some() {
+        args.extend(["--remote".into(), "on".into()]);
     }
+    args.extend(target.iter().map(|t| t.clone().into_os_string()));
+    let xvfb = no_screen().then(|| which::which("xvfb-run").ok()).flatten();
+    let cmd = match xvfb {
+        Some(xvfb) => {
+            let mut c = std::process::Command::new(xvfb);
+            c.args(["-a", "-s", "-screen 0 1920x1080x24"]).arg(&exe);
+            c
+        }
+        None => std::process::Command::new(&exe),
+    };
+    spawn_detached(cmd, args.iter().map(|a| a.as_os_str()), password).is_ok()
 }
 
 fn spawn_detached<'a>(
-    exe: &std::path::Path,
+    mut cmd: std::process::Command,
     args: impl Iterator<Item = &'a std::ffi::OsStr>,
+    stdin: Option<&str>,
 ) -> std::io::Result<std::process::Child> {
-    use std::process::{Command, Stdio};
-    let mut cmd = Command::new(exe);
+    use std::io::Write;
+    use std::process::Stdio;
     cmd.arg("--foreground")
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    cmd.spawn()
+    let mut child = cmd.spawn()?;
+    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        let _ = writeln!(pipe, "{text}"); // closed when dropped
+    }
+    Ok(child)
+}
+
+/// After `--remote on`: wait for the new window to serve, then say where.
+fn say_where_remote_is() {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < until {
+        if let Some(s) = instances::remote_server() {
+            println!("Remote access is on: {}", remote::address(s.port));
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let log = log_path().map(|p| p.display().to_string()).unwrap_or_default();
+    eprintln!("roxaruu: the window didn't start serving within 30s; see {log}");
+    std::process::exit(1);
 }
 
 /// The window: the app, and its side of remote access (which stops when
@@ -547,6 +664,30 @@ mod tests {
     }
 
     #[test]
+    fn remote_on_and_off_from_the_command_line() {
+        let l = parse(&["--remote", "on", "--password", "0000"], true);
+        assert_eq!((l.info, l.remote), (None, Some(RemoteArg::On(Some("0000".into())))));
+        // Any order, with a folder.
+        let dir = std::env::temp_dir().join("x");
+        let d = dir.to_string_lossy().into_owned();
+        let l = parse(&["--password", "pw", &d, "--remote", "on"], false);
+        assert_eq!((l.remote, l.target), (Some(RemoteArg::On(Some("pw".into()))), Some(dir)));
+        // The detached copy: the password comes on stdin.
+        assert_eq!(parse(&["--foreground", "--remote", "on"], false).remote, Some(RemoteArg::On(None)));
+        assert_eq!(parse(&["--remote", "off"], true).remote, Some(RemoteArg::Off));
+        assert!(matches!(parse(&["--remote", "maybe"], true).info, Some(Info::Unknown(_))));
+        assert!(matches!(parse(&["--remote"], true).info, Some(Info::Unknown(_))));
+        assert!(help().contains("--remote on --password"));
+    }
+
+    #[test]
+    fn the_log_never_gets_the_password() {
+        let args = ["--remote", "on", "--password", "secret", "src"].map(OsString::from);
+        let logged = redacted(args.into_iter());
+        assert_eq!(logged, ["--remote", "on", "--password", "***", "src"].map(OsString::from));
+    }
+
+    #[test]
     fn foreground_flag_comes_first_and_keeps_the_target() {
         let dir = std::env::temp_dir().join("x");
         let d = dir.to_string_lossy().into_owned();
@@ -564,7 +705,7 @@ mod tests {
         let script = std::env::temp_dir().join(format!("detach-probe-{}", std::process::id()));
         std::fs::write(&script, "#!/bin/sh\n[ \"$1\" = --foreground ] && [ ! -t 0 ] && sleep 5\n").unwrap();
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        let mut child = spawn_detached(&script, std::iter::empty()).unwrap();
+        let mut child = spawn_detached(std::process::Command::new(&script), std::iter::empty(), None).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert!(child.try_wait().unwrap().is_none(), "got --foreground and no terminal");
         let pgid = std::process::Command::new("ps")

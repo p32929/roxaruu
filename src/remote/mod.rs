@@ -100,6 +100,12 @@ pub(crate) fn old_secrets_path() -> PathBuf {
 
 /// This Mac's address on the local network (the route the OS would use to
 /// reach the internet; nothing is sent).
+/// Where a browser opens remote access on `port`: this computer's address
+/// on the network (else this computer only).
+pub fn address(port: u16) -> String {
+    format!("https://{}:{port}", lan_ip().map_or_else(|| "localhost".to_string(), |ip| ip.to_string()))
+}
+
 pub fn lan_ip() -> Option<IpAddr> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("192.0.2.1:9").ok()?;

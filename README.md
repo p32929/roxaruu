@@ -44,6 +44,11 @@ Open a folder from the app, or from a terminal: `rox` (the folder you're in)
 or `rox <path>`. Press **F1** for every shortcut, **⇧⌘P** / **Ctrl+Shift+P**
 for every command.
 
+Use it from a browser (another computer, a phone):
+`rox --remote on --password <password> [folder]` prints the address to open;
+`rox --remote off` stops it. On a server with no screen it runs on a virtual
+one (needs Xvfb: `sudo apt install xvfb`). The password is kept in memory only.
+
 ## Build from source
 
 Needs [Rust](https://rustup.rs). `./install-local.sh` builds and installs it

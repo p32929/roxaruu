@@ -95,8 +95,11 @@ of "forgot to update X"):
   window (whether it's focused, what you're looking at): a browser's copy
   always counts itself focused (`poll_attention`, `headless_agent_alerts`).
 - Lifecycle (see `remote/mod.rs`): off at every launch, never a setting.
-  Turning it on (`ToggleRemoteAccess`) always asks for a password, held
-  only in memory by the window that turned it on, which runs the server
+  Turning it on (`ToggleRemoteAccess`, or `rox --remote on --password …`,
+  which starts a window — on a virtual screen via `xvfb-run` where there's
+  none — and hands it the password on its stdin; `rox --remote off` just
+  removes the marker; the log redacts the password) always asks for a
+  password, held only in memory by the window that turned it on, which runs the server
   (`hub`) and writes `remote-server.json` (pid + port, no secrets) in the
   running dir. Other windows follow that marker: live → open their private
   link; gone or its pid dead → close it. Turning off anywhere removes the
