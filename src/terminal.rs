@@ -534,6 +534,9 @@ mod tests {
             "the prompt arrived unattended"
         );
         t.input(&[Event::Text("echo typed".into())]);
+        // Its own wait: the echo comes once the shell reads input, and
+        // PowerShell on a busy machine takes a while to get there.
+        let deadline = Instant::now() + Duration::from_secs(30);
         while !requests.lock().unwrap().contains(&Duration::ZERO) {
             assert!(
                 Instant::now() < deadline,
