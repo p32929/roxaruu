@@ -437,6 +437,23 @@ impl TerminalPane {
         self.master.process_group_leader()
     }
 
+    /// What the system says about the process in front, for a test's
+    /// failure message: pid, short name, program, command line.
+    #[cfg(test)]
+    pub(crate) fn foreground_report(&self) -> String {
+        let Some(pid) = self.foreground_pid() else { return "no foreground pid".into() };
+        let read = |f: &str| std::fs::read_to_string(format!("/proc/{pid}/{f}")).unwrap_or_default().replace('\0', " ");
+        let exe = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
+        format!(
+            "pid {pid} (shell {:?}, me {}): name {:?}, comm {:?}, exe {exe:?}, cmdline {:?}",
+            self.child.process_id(),
+            std::process::id(),
+            process_name(pid),
+            read("comm").trim(),
+            read("cmdline").trim()
+        )
+    }
+
     #[cfg(not(unix))]
     fn foreground_pid(&self) -> Option<i32> {
         let shell = self.child.process_id()?;

@@ -546,6 +546,12 @@ fn headless_terminals_walkthrough() {
         .iter()
         .map(|t| t.pane.display_name())
         .collect();
+    let reports: Vec<String> = app(&h).terminals.iter().map(|t| t.pane.foreground_report()).collect();
+    assert_eq!(
+        crate::terminal::labels(&names).iter().filter(|n| n.contains(" · ")).count(),
+        0,
+        "{reports:#?}"
+    );
     assert_eq!(
         crate::terminal::labels(&names),
         ["api", "api 2", "api 3", "api 4", "api 5"]
