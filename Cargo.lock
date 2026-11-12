@@ -3696,7 +3696,7 @@ dependencies = [
 
 [[package]]
 name = "roxaruu"
-version = "0.2.37"
+version = "0.2.38"
 dependencies = [
  "anyhow",
  "arboard",

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Note in each commit which system it was made on ("Tested-on: macOS"):
+# pre-push runs that system's tests here before it leaves, and CI tests the
+# others (.github/workflows/build.yml reads this line).
+platform=$("$(dirname "$0")/platform")
+[ "$platform" = unknown ] && exit 0
+git interpret-trailers --in-place --if-exists replace --trailer "Tested-on: $platform" "$1"

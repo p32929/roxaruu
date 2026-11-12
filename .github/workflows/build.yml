@@ -1,8 +1,9 @@
-# Builds, tests and packages Roxaruu for Windows and Linux on every push
-# (kept as this run's artifacts). macOS is tested on the Mac it's developed
-# on (AGENTS.md: each platform's tests run where you work, CI does the rest),
-# so it joins only for a release tag `v*` (e.g. v0.3.0), which also publishes
-# everything as a GitHub release, or a manual run.
+# Builds, tests and packages Roxaruu (kept as this run's artifacts) for the
+# systems a push wasn't already tested on: a commit made with this repo's
+# hooks (.githooks) says "Tested-on: macOS" (or Windows, Linux), and its
+# pre-push ran that system's whole suite there, so CI runs the other two.
+# A commit without that line, a release tag `v*` (which also publishes the
+# downloads as a GitHub release) or a manual run gets all three.
 name: build
 
 on:
@@ -17,13 +18,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Which systems to build here: all but the one the push was tested on.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      systems: ${{ steps.pick.outputs.systems }}
+    steps:
+      - id: pick
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          all='[{"name":"macOS","os":"macos-latest"},{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]'
+          tested=$(printf '%s\n' "$MESSAGE" | sed -n 's/^Tested-on: *//p' | tail -1)
+          if [[ "$REF" == refs/tags/v* || "$EVENT" != push || -z "$tested" ]]; then
+            echo "systems=$all" >> "$GITHUB_OUTPUT"
+            echo "building every system"
+          else
+            echo "systems=$(jq -c --arg t "$tested" 'map(select(.name != $t))' <<<"$all")" >> "$GITHUB_OUTPUT"
+            echo "tested on $tested before the push: building the others"
+          fi
+
   build:
     name: ${{ matrix.name }}
+    needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON((startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && '[{"name":"macOS","os":"macos-latest"},{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]' || '[{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]') }}
+        include: ${{ fromJSON(needs.plan.outputs.systems) }}
     defaults:
       run:
         shell: bash

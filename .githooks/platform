@@ -1,0 +1,8 @@
+#!/bin/sh
+# Which system this is, as CI's job names it: macOS, Windows or Linux.
+case "$(uname -s)" in
+  Darwin) echo macOS ;;
+  Linux) echo Linux ;;
+  MINGW* | MSYS* | CYGWIN*) echo Windows ;;
+  *) echo unknown ;;
+esac

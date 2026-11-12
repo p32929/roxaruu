@@ -56,6 +56,11 @@ on macOS and Linux (and on Windows from Git Bash); `cargo run --release` runs
 it from the checkout. Linux also needs: `libxkbcommon-dev libwayland-dev
 libgtk-3-dev libdbus-1-dev`.
 
+Working on it: run `git config core.hooksPath .githooks` once. Then every
+`git push` first runs your system's whole test suite on your machine (and
+stops if it fails), and CI tests the other two systems
+([.githooks](.githooks), `.github/workflows/build.yml`).
+
 ## Releases
 
 Pushing a tag like `v0.3.0` builds and publishes the downloads above

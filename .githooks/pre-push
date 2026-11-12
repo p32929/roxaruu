@@ -1,0 +1,32 @@
+#!/bin/sh
+# Before anything leaves this machine: this system's whole test suite, here
+# (CI runs the other systems; see prepare-commit-msg). A failure stops the
+# push. Pushing only tags, or deleting a branch, tests nothing.
+set -e
+z=0000000000000000000000000000000000000000
+branches=0
+while read -r _ local_sha remote_ref _; do
+  case "$remote_ref" in refs/tags/*) continue ;; esac
+  [ "$local_sha" = "$z" ] && continue
+  branches=1
+done
+[ "$branches" = 0 ] && exit 0
+
+platform=$("$(dirname "$0")/platform")
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+echo "pre-push: $platform tests, here (CI tests the other systems)"
+cargo clippy --release --all-targets -- -D warnings
+cargo build --release # the tests use roxaruu-hook beside them
+if [ "$platform" = Windows ]; then
+  cargo test --release
+else
+  # Tests write settings and shell files: a scratch home, never yours.
+  scratch=$(mktemp -d)
+  trap 'rm -rf "$scratch"' EXIT
+  mkdir -p "$scratch/home"
+  CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" \
+    HOME="$scratch/home" SHOTS="$scratch/shots" PROJECT="$root/src/main.rs" BIG="$root/src/ui.rs" \
+    cargo test --release -- --include-ignored --test-threads=1
+fi
+echo "pre-push: $platform tests passed"

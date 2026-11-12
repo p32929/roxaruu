@@ -213,12 +213,15 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 - Off macOS, Roxaruu's keys are Ctrl chords, which a terminal's shell wants
   too: only `terminal::passes_the_shell` get past it, and hints in a
   terminal never show one that doesn't (`key_reaches`).
-- Tests run where you work, CI runs the rest: the full suite (above) on
-  your own machine before pushing (on the Mac: macOS), and
-  `.github/workflows/build.yml` builds, tests and packages Windows and
-  Linux on every push — every test: on Linux with `--include-ignored` (the
-  UI walkthroughs, screenshots kept with the run), on Windows all that
-  builds there. macOS joins CI only for a release tag or a manual run — then installs each package and opens the app (it must still
+- Tests run where you work, CI runs the rest, by itself: with
+  `git config core.hooksPath .githooks` (once per clone), each commit says
+  which system it was made on (`Tested-on: macOS`, `prepare-commit-msg`),
+  `pre-push` runs that system's whole suite (above) there and stops the
+  push on a failure, and `.github/workflows/build.yml` (its `plan` job)
+  builds, tests and packages only the other systems — every test: on
+  macOS and Linux with `--include-ignored` (the UI walkthroughs,
+  screenshots kept with the run), on Windows all that builds there. No
+  `Tested-on:` line, a release tag or a manual run: all three — then installs each package and opens the app (it must still
   run with its window drawn; screenshots kept with the run) (`packaging/`: the macOS Info.plist and Linux menu entry
   `install-local.sh` uses too, the Windows installer). It must stay green
   on all three; a test that needs a Unix shell is marked
