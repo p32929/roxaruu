@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 /// `<config dir>/oxru/sessions/<root-hash>`: Oxru's own session store, same
 /// format, so both apps restore the same tabs.
 fn session_path(root: &Path) -> Option<PathBuf> {
-    let canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canon = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     dirs::config_dir().map(|d| {
         d.join("oxru")
             .join("sessions")

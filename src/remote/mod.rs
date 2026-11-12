@@ -461,7 +461,7 @@ impl Remote {
         if joined {
             self.key = true; // the whole frame, even if unchanged
             // The page shows the keys for its full-screen button and window list.
-            let caps = |c| app.config.keymap.combo_for(c).map(|k| k.caps().concat()).unwrap_or_default();
+            let caps = |c| app.config.keymap.combo_for(c).map(|k| k.label()).unwrap_or_default();
             let (full, windows) = (caps(Command::FullScreen), caps(Command::SwitchWindow));
             ep.broadcast(Out::Text(
                 serde_json::json!({ "t": "keys", "full": full, "windows": windows }).to_string(),

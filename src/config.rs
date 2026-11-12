@@ -99,9 +99,15 @@ fn themes_dir() -> PathBuf {
     dir().join("themes")
 }
 
+/// The user's home folder: `$HOME` where it's set (tests point it at a
+/// scratch folder), else the system's own (Windows has no `$HOME`).
+pub fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from).or_else(dirs::home_dir)
+}
+
 pub fn expand_home(p: &str) -> PathBuf {
-    match (p.strip_prefix("~/"), std::env::var_os("HOME")) {
-        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+    match (p.strip_prefix("~/"), home()) {
+        (Some(rest), Some(home)) => home.join(rest),
         _ => PathBuf::from(p),
     }
 }
@@ -470,6 +476,16 @@ fn themes_readme() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The config folder is always under the home folder, never a relative
+    /// `~` (Windows has no `$HOME`).
+    #[test]
+    fn home_paths_are_absolute() {
+        let home = home().unwrap();
+        assert!(home.is_absolute());
+        assert_eq!(expand_home("~/.config/oxru"), home.join(".config/oxru"));
+        assert!(dir().is_absolute());
+    }
 
     #[test]
     fn settings_template_parses_to_defaults() {

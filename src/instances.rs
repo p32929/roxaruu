@@ -66,9 +66,7 @@ fn process_command(pid: i32) -> Option<String> {
 /// Mark this process as having `folder` open.
 pub fn register(folder: &Path) {
     if let Some(dir) = running_dir() {
-        let canon = folder
-            .canonicalize()
-            .unwrap_or_else(|_| folder.to_path_buf());
+        let canon = dunce::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
         register_in(&dir, std::process::id(), &canon);
     }
 }

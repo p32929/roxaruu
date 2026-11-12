@@ -97,7 +97,7 @@ jobs:
           Version: $VERSION
           Architecture: amd64
           Maintainer: p32929 <https://github.com/p32929/roxaruu>
-          Depends: libxkbcommon0, libgl1, libdbus-1-3
+          Depends: libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6, libwayland-client0, libwayland-egl1, libgl1, libegl1, libvulkan1, libgtk-3-0, libdbus-1-3
           Recommends: xdg-desktop-portal
           Section: editors
           Priority: optional
@@ -160,7 +160,8 @@ jobs:
         run: |
           mkdir -p smoke
           hdiutil attach -nobrowse -mountpoint /tmp/roxaruu "dist/Roxaruu-$VERSION-macos.dmg"
-          cp -R /tmp/roxaruu/Roxaruu.app "$HOME/Applications/" 2>/dev/null || { mkdir -p "$HOME/Applications"; cp -R /tmp/roxaruu/Roxaruu.app "$HOME/Applications/"; }
+          mkdir -p "$HOME/Applications"
+          cp -R /tmp/roxaruu/Roxaruu.app "$HOME/Applications/"
           "$HOME/Applications/Roxaruu.app/Contents/MacOS/roxaruu" --foreground "$PWD" & pid=$!
           sleep 20
           screencapture -x smoke/macos.png || true

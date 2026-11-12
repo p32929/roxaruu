@@ -118,6 +118,7 @@ fn main() -> eframe::Result {
         eframe::NativeOptions {
             viewport,
             renderer,
+            centered: true,
             ..Default::default()
         },
         Box::new(move |cc| {
@@ -323,6 +324,22 @@ impl Root {
     }
 }
 
+/// Off macOS the screen's size is known only once the window is on it:
+/// 80% of it, around where the window was centred (`centered`).
+fn fit_to_screen(ctx: &egui::Context) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let (monitor, outer) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().outer_rect));
+    let (Some(monitor), Some(outer)) = (monitor, outer) else {
+        return;
+    };
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, monitor);
+    let size = sys::window_rect(screen, screen).size();
+    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(outer.center() - size / 2.0));
+}
+
 impl eframe::App for Root {
     /// Runs even while the window is hidden, covered or minimized: remote
     /// access draws the browser's copy of the window from here.
@@ -334,6 +351,7 @@ impl eframe::App for Root {
         self.0.frame(ui);
         if !DRAWN.swap(true, std::sync::atomic::Ordering::Relaxed) {
             tracing::info!("the window is up");
+            fit_to_screen(ui.ctx());
         }
     }
 }

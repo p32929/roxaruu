@@ -141,7 +141,7 @@ impl App {
                     .config
                     .keymap
                     .combo_for(Command::SwitchTerminal)
-                    .map(|k| format!(" — {} to switch", k.caps().concat()))
+                    .map(|k| format!(" — {} to switch", k.label()))
                     .unwrap_or_default();
                 self.missed.push(format!("{name}: {message}{key}"));
             }
@@ -394,7 +394,7 @@ impl App {
                 };
                 let key = key
                     .and_then(|c| self.config.keymap.combo_for(c))
-                    .map(|k| format!("also {}", k.caps().concat()));
+                    .map(|k| format!("also {}", k.label()));
                 let project = self
                     .config
                     .project_keys
@@ -554,7 +554,7 @@ impl App {
             .iter()
             .filter_map(|info| {
                 let combos = km.combos_for(info.command);
-                let keys: Vec<String> = combos.iter().map(|k| k.caps().concat()).collect();
+                let keys: Vec<String> = combos.iter().map(|k| k.label()).collect();
                 let by_key =
                     !query.is_empty() && keys.iter().any(|k| k.eq_ignore_ascii_case(query));
                 if !by_key && fuzzy::score(query, info.title).is_none() {
@@ -621,7 +621,7 @@ impl App {
             .config
             .keymap
             .combo_for(command)
-            .map(|k| k.caps().concat())
+            .map(|k| k.label())
             .unwrap_or_else(|| "no key".into());
         let clash: Vec<&str> = self
             .config
@@ -644,7 +644,7 @@ impl App {
 
     /// Whether another Oxru window has `dir` open.
     pub fn open_elsewhere(&self, dir: &Path) -> Option<i32> {
-        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let canon = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         let dir = canon(dir);
         crate::instances::open_folders()
             .into_iter()

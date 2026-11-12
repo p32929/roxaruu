@@ -171,8 +171,8 @@ impl App {
         // The same file by another name (through a symlink, /var and
         // /private/var) is still the one in the tree.
         let found = p.tree.reveal(&path).map(|_| path.clone()).or_else(|| {
-            let real = path.canonicalize().ok()?;
-            let there = p.root.join(real.strip_prefix(p.root.canonicalize().ok()?).ok()?);
+            let real = dunce::canonicalize(path).ok()?;
+            let there = p.root.join(real.strip_prefix(dunce::canonicalize(&p.root).ok()?).ok()?);
             p.tree.reveal(&there).map(|_| there)
         });
         if let Some(path) = found {
@@ -327,7 +327,7 @@ impl App {
             self.config
                 .keymap
                 .combo_for(cmd)
-                .map(|k| format!("  {}", k.caps().concat()))
+                .map(|k| format!("  {}", k.label()))
                 .unwrap_or_default()
         };
         ui.scope_builder(
@@ -760,7 +760,7 @@ impl App {
                 .keymap
                 .combo_for(Command::ToggleBuildFolders)
                 .filter(|_| !p.build)
-                .map(|k| format!("{} to include build folders", k.caps().concat()));
+                .map(|k| format!("{} to include build folders", k.label()));
             let msg = if indexing { "Indexing files…".to_string() } else { "No matches".to_string() };
             let at = out.inner_rect.center_top() + vec2(0.0, 24.0 * s);
             ui.painter().text(at, Align2::CENTER_CENTER, msg, pt.font(12.5, Weight::Regular), c.text_subtle);
@@ -792,7 +792,7 @@ impl App {
                 .config
                 .keymap
                 .combo_for(cmd)
-                .map(|k| k.caps().concat())
+                .map(|k| k.label())
                 .unwrap_or_default();
             if ui
                 .add(egui::Button::new(title).shortcut_text(keys))

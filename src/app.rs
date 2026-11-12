@@ -311,7 +311,7 @@ impl App {
             mem_last_check: None,
         };
         app.apply(ctx);
-        if let Some(path) = target.and_then(|p| p.canonicalize().ok()) {
+        if let Some(path) = target.and_then(|p| dunce::canonicalize(p).ok()) {
             if path.is_dir() {
                 app.open_folder(path, ctx);
             } else if let Some(dir) = path.parent() {
@@ -2185,17 +2185,12 @@ impl App {
     }
 
     fn recent_items(&self, query: &str) -> Vec<Item> {
-        let home = std::env::var("HOME").unwrap_or_default();
         crate::recent::list()
             .into_iter()
             .filter_map(|dir| {
                 let name = display_name(&dir);
                 fuzzy::score(query, &name)?;
-                let full = dir.to_string_lossy();
-                let detail = match full.strip_prefix(&home) {
-                    Some(rest) if !home.is_empty() => format!("~{rest}"),
-                    _ => full.into_owned(),
-                };
+                let detail = crate::ui::tilde(&dir.to_string_lossy());
                 let here = self.project.as_ref().is_some_and(|p| p.root == dir);
                 let elsewhere = self.open_elsewhere(&dir).is_some();
                 let detail = if here {

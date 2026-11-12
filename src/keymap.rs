@@ -402,6 +402,17 @@ impl Combo {
         });
         caps
     }
+
+    /// The combo as one piece of text: `⇧⌘P` on macOS, `Ctrl+Shift+P`
+    /// elsewhere.
+    pub fn label(&self) -> String {
+        joined(&self.caps())
+    }
+}
+
+/// Keycaps run into one: macOS's glyphs read on their own, words need a `+`.
+pub fn joined(caps: &[String]) -> String {
+    caps.join(if cfg!(target_os = "macos") { "" } else { "+" })
 }
 
 /// One entry of `keybindings.json`.
@@ -607,13 +618,19 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn keycaps_in_apple_order() {
         assert_eq!(
-            Combo::parse("ctrl+alt+shift+c").unwrap().caps().concat(),
+            Combo::parse("ctrl+alt+shift+c").unwrap().label(),
             "⌥⇧⌘C"
         );
         assert_eq!(
-            Combo::parse("ctrl+backspace").unwrap().caps().concat(),
+            Combo::parse("ctrl+backspace").unwrap().label(),
             "⌘⌫"
         );
+    }
+
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn keycaps_read_as_words_elsewhere() {
+        assert_eq!(Combo::parse("ctrl+shift+e").unwrap().label(), "Ctrl+Shift+E");
     }
 
     #[test]

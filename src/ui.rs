@@ -487,7 +487,7 @@ impl Paint {
         );
         // A narrow list (a phone) runs a combo's caps into one, giving the
         // label room.
-        let joined = [caps.concat()];
+        let joined = [crate::keymap::joined(caps)];
         let caps = if row.width() < 360.0 * s && caps.len() > 1 {
             &joined[..]
         } else {
@@ -1302,7 +1302,7 @@ impl App {
             .config
             .keymap
             .combo_for(Command::Save)
-            .map(|k| k.caps().concat())
+            .map(|k| k.label())
             .unwrap_or_default();
         let picked = if deleted {
             self.modal(
@@ -1868,7 +1868,7 @@ impl App {
             .config
             .keymap
             .combo_for(Command::ToggleSidebar)
-            .map(|k| format!("  {}", k.caps().concat()))
+            .map(|k| format!("  {}", k.label()))
             .unwrap_or_default();
         b.on_hover_text(format!(
             "{} File Tree{keys}",
@@ -1966,7 +1966,7 @@ impl App {
             .then(|| self.config.keymap.combo_for(c))
             .flatten()
             .filter(|k| self.key_reaches(c, k))
-            .map(|k| (k.caps().concat(), what, Some(c)))
+            .map(|k| (k.label(), what, Some(c)))
     }
 
     /// Whether `c`'s key gets to the app from where the keyboard is: off
@@ -2370,7 +2370,7 @@ impl App {
             .filter_map(|(c, what)| {
                 Some((
                     c,
-                    vec![self.config.keymap.combo_for(c)?.caps().concat()],
+                    vec![self.config.keymap.combo_for(c)?.label()],
                     what,
                 ))
             })
@@ -2506,7 +2506,7 @@ impl App {
             .config
             .keymap
             .combo_for(Command::Help)
-            .map(|k| k.caps().concat())
+            .map(|k| k.label())
             .unwrap_or_else(|| "F1".into());
         let footer_text = format!(
             "{help} shows every shortcut   ·   {}  themes, fonts and keys live in ~/.config/oxru   ·   v{}",
@@ -3360,7 +3360,7 @@ impl App {
 
     /// The key that runs `c`, as keycaps ("⇧⌘W").
     fn shortcut(&self, c: Command) -> Option<String> {
-        self.config.keymap.combo_for(c).map(|k| k.caps().concat())
+        self.config.keymap.combo_for(c).map(|k| k.label())
     }
 
     /// The editor area: the active tab, or — in split view — every open tab
@@ -3471,7 +3471,7 @@ impl App {
             self.config
                 .keymap
                 .combo_for(cmd)
-                .map(|k| format!("  ({})", k.caps().join("")))
+                .map(|k| format!("  ({})", k.label()))
                 .unwrap_or_default()
         };
         let tip_replace = format!("Toggle replace{}", caps(Command::Replace));
@@ -3761,7 +3761,7 @@ impl App {
                 .config
                 .keymap
                 .combo_for(*command)
-                .map(|k| format!("  ({})", k.caps().join("")))
+                .map(|k| format!("  ({})", k.label()))
                 .unwrap_or_default();
             if resp.on_hover_text(format!("{tip}{keys}")).clicked() {
                 run = Some(*command);
@@ -4923,7 +4923,7 @@ impl App {
         let no_match_hint = match self.config.keymap.combo_for(Command::ToggleBuildFolders) {
             Some(k) => format!(
                 "No matches — {} to include node_modules, target…",
-                k.caps().concat()
+                k.label()
             ),
             None => "No matches".to_string(),
         };
@@ -5367,7 +5367,7 @@ impl App {
                     (k("⇧↑ ⇧↓"), "tick a run"),
                 ];
                 if let Some(key) = self.config.keymap.combo_for(Command::OpenFolder) {
-                    v.push((vec![key.caps().concat()], "open another folder…"));
+                    v.push((vec![key.label()], "open another folder…"));
                 }
                 v.push(esc);
                 v
@@ -5444,7 +5444,7 @@ fn help_rows(ui: &mut egui::Ui, pt: &Paint, rows: &[(String, Vec<String>)]) {
             .width()
         } else if rect.width() < 300.0 * s {
             // Narrow (a phone): a combo's caps run into one.
-            pt.keycaps(ui, p, &[caps.concat()], rect.right_center())
+            pt.keycaps(ui, p, &[crate::keymap::joined(caps)], rect.right_center())
         } else {
             pt.keycaps(ui, p, caps, rect.right_center())
         };
@@ -5474,7 +5474,7 @@ impl App {
             self.config
                 .keymap
                 .combo_for(c)
-                .map(|k| k.caps().concat())
+                .map(|k| k.label())
                 .unwrap_or_default()
         };
         Some(format!(
@@ -5501,10 +5501,9 @@ fn elide_start(text: &str, fits: impl Fn(&str) -> bool) -> String {
 }
 
 pub(crate) fn tilde(path: &str) -> String {
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && path.starts_with(&home) => {
-            format!("~{}", &path[home.len()..])
-        }
+    let home = crate::config::home().map(|h| h.to_string_lossy().into_owned());
+    match home {
+        Some(home) if path.starts_with(&home) => format!("~{}", &path[home.len()..]),
         _ => path.to_string(),
     }
 }
