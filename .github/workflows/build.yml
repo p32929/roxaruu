@@ -56,8 +56,10 @@ jobs:
           cargo build --release --target aarch64-apple-darwin
           cargo build --release --target x86_64-apple-darwin
           mkdir -p dist dmg/Roxaruu.app/Contents/MacOS dmg/Roxaruu.app/Contents/Resources
-          lipo -create -output dmg/Roxaruu.app/Contents/MacOS/roxaruu \
-            target/aarch64-apple-darwin/release/roxaruu target/x86_64-apple-darwin/release/roxaruu
+          for exe in roxaruu roxaruu-hook; do
+            lipo -create -output "dmg/Roxaruu.app/Contents/MacOS/$exe" \
+              "target/aarch64-apple-darwin/release/$exe" "target/x86_64-apple-darwin/release/$exe"
+          done
           cp assets/AppIcon.icns dmg/Roxaruu.app/Contents/Resources/AppIcon.icns
           sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > dmg/Roxaruu.app/Contents/Info.plist
           codesign --force --deep -s - dmg/Roxaruu.app
@@ -77,16 +79,16 @@ jobs:
           [ -f "$ISCC" ] || choco install innosetup -y --no-progress
           # (Git Bash would take "/DVersion" for a path and rewrite it.)
           MSYS_NO_PATHCONV=1 "$ISCC" "/DVersion=$VERSION" packaging/roxaruu.iss
-          7z a "dist/Roxaruu-$VERSION-windows-x64.zip" ./target/release/roxaruu.exe ./dist/rox.cmd
+          7z a "dist/Roxaruu-$VERSION-windows-x64.zip" ./target/release/roxaruu.exe ./target/release/roxaruu-hook.exe ./dist/rox.cmd
           rm dist/roxaruu.ico dist/rox.cmd
 
       - name: Package (Linux .deb and .tar.gz)
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist pkg/DEBIAN pkg/usr/bin pkg/usr/share/applications pkg/usr/share/icons/hicolor/512x512/apps
-          cp target/release/roxaruu pkg/usr/bin/roxaruu
+          cp target/release/roxaruu target/release/roxaruu-hook pkg/usr/bin/
           printf '#!/bin/sh\nexec /usr/bin/roxaruu "$@"\n' > pkg/usr/bin/rox
-          chmod 755 pkg/usr/bin/roxaruu pkg/usr/bin/rox
+          chmod 755 pkg/usr/bin/roxaruu pkg/usr/bin/roxaruu-hook pkg/usr/bin/rox
           sed -e "s|@EXEC@|/usr/bin/roxaruu|" -e "s/@VERSION@/$VERSION/" packaging/roxaruu.desktop \
             > pkg/usr/share/applications/roxaruu.desktop
           cp assets/icon.png pkg/usr/share/icons/hicolor/512x512/apps/roxaruu.png

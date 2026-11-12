@@ -95,12 +95,16 @@ fn main() -> eframe::Result {
         Some(r) => viewport.with_inner_size(r.size()).with_position(r.min),
         None => viewport.with_inner_size([1280.0, 820.0]),
     };
-    // macOS: our own bar replaces the title bar; the traffic lights float over it.
+    // One title bar, ours. macOS: the traffic lights float over it.
+    // Elsewhere: no system frame at all; ours has the window's buttons and
+    // its edges resize it (`ui::window_buttons`, `window_edges`).
     if cfg!(target_os = "macos") {
         viewport = viewport
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false);
+    } else {
+        viewport = viewport.with_decorations(false);
     }
     if let Ok(icon) = eframe::icon_data::from_png_bytes(ICON) {
         viewport = viewport.with_icon(icon);

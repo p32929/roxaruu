@@ -36,6 +36,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]
 Source: "..\target\release\roxaruu.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Claude Code's helper (see src/bin/roxaruu-hook.rs), beside the app.
+Source: "..\target\release\roxaruu-hook.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\rox.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\roxaruu.ico"; DestDir: "{app}"; Flags: ignoreversion
 

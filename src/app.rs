@@ -458,6 +458,7 @@ impl App {
             self.config.settings.terminal_fps,
             std::sync::atomic::Ordering::Relaxed,
         );
+        crate::terminalpane::set_shell(&self.config.settings.terminal_shell);
         // Only terminals on screen wake the UI for their output.
         let shown = self.terminal_open;
         for (i, t) in self.terminals.iter().enumerate() {
@@ -718,6 +719,7 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
             }
             Command::MaximizeWindow => toggle_maximized(ctx),
+            Command::MinimizeWindow => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
             Command::ToggleWordWrap => {
                 let wrap = !self.config.settings.word_wrap;
                 self.config.settings.word_wrap = wrap;
@@ -864,6 +866,8 @@ impl App {
             Command::ReopenTab => !self.closed.is_empty(),
             // The page's window list: nothing to switch to on the Mac.
             Command::SwitchWindow => self.remote_pass,
+            // The window's own: a browser's copy has none to move.
+            Command::MinimizeWindow | Command::MaximizeWindow => !self.remote_pass,
             _ => true,
         }
     }

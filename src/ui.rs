@@ -66,6 +66,11 @@ pub mod icon {
     pub const GRID: &str = "\u{ebeb}";
     pub const MAXIMIZE: &str = "\u{eb4c}";
     pub const RESTORE: &str = "\u{eb4d}";
+    // The window's own buttons (off macOS, where they're ours to draw).
+    pub const WINDOW_CLOSE: &str = "\u{eab8}";
+    pub const WINDOW_MAXIMIZE: &str = "\u{eab9}";
+    pub const WINDOW_MINIMIZE: &str = "\u{eaba}";
+    pub const WINDOW_RESTORE: &str = "\u{eabb}";
     pub const PASS: &str = "\u{eba4}";
     pub const REPLACE: &str = "\u{eb3d}";
     pub const REPLACE_ALL: &str = "\u{eb3c}";
@@ -319,6 +324,7 @@ pub mod icon {
             Command::ToggleRemoteAccess | Command::ShowRemoteAddress | Command::SwitchWindow => EYE,
             Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => FONT,
             Command::FullScreen | Command::MaximizeWindow => MAXIMIZE,
+            Command::MinimizeWindow => WINDOW_MINIMIZE,
             Command::MoveLineUp
             | Command::MoveLineDown
             | Command::DuplicateLineUp
@@ -856,6 +862,8 @@ impl App {
         self.toasts_ui(&ctx);
         self.drop_overlay(&ctx);
         self.handle_drops(&ctx);
+        // Last, so the edges win over whatever is under them.
+        self.window_edges(ui);
 
         // Idle costs next to nothing: egui repaints on input, plus one wake-up
         // a second for config reloads and the RAM/FPS readout.
@@ -1770,7 +1778,10 @@ impl App {
         // "project  ›  path/to/file": the project bright, the path quieter.
         // Too wide (a phone), the path loses its folders, then the project.
         // Centred, it keeps clear of the buttons on the left either side.
-        let room = rect.width() - 2.0 * (if self.remote_pass { 8.0 } else { 78.0 } + 32.0 * pt.s);
+        // Window buttons: macOS's on the left; elsewhere ours, on the right.
+        let own_buttons = !cfg!(target_os = "macos") && !self.remote_pass;
+        let side = if self.remote_pass { 8.0 } else if own_buttons { 3.0 * 46.0 * pt.s } else { 78.0 };
+        let room = rect.width() - 2.0 * (side + 32.0 * pt.s);
         let line = |path: Option<String>, project: bool| {
             let mut job = LayoutJob::default();
             let mut push = |s: &str, color: Color32, w: Weight| {
@@ -1821,6 +1832,9 @@ impl App {
         if resp.double_clicked() {
             crate::app::toggle_maximized(ui.ctx());
         }
+        if own_buttons {
+            self.window_buttons(ui, rect);
+        }
 
         // The sidebar button, just right of the traffic lights.
         if self.project.is_none() {
@@ -1861,6 +1875,87 @@ impl App {
             if on { "Hide" } else { "Show" }
         ))
         .clicked()
+    }
+
+    /// Off macOS the window has no system frame (one title bar, ours): its
+    /// minimize, maximize / restore and close, at the bar's right as on
+    /// Windows, each with its key in the tooltip.
+    fn window_buttons(&self, ui: &egui::Ui, bar: Rect) {
+        let pt = self.paint();
+        let (c, s) = (&pt.c, pt.s);
+        let ctx = ui.ctx();
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        let key = |cmd: Command| self.shortcut(cmd).map(|k| format!("  {k}")).unwrap_or_default();
+        let buttons = [
+            (icon::WINDOW_MINIMIZE, format!("Minimize{}", key(Command::MinimizeWindow)), false),
+            (
+                if maximized { icon::WINDOW_RESTORE } else { icon::WINDOW_MAXIMIZE },
+                format!("{}{}", if maximized { "Restore" } else { "Maximize" }, key(Command::MaximizeWindow)),
+                false,
+            ),
+            (icon::WINDOW_CLOSE, format!("Close{}", key(Command::Quit)), true),
+        ];
+        let w = 46.0 * s;
+        for (n, (glyph, tip, close)) in buttons.into_iter().enumerate() {
+            let r = Rect::from_min_size(pos2(bar.right() - w * (3 - n) as f32, bar.top()), vec2(w, bar.height() - 1.0));
+            let resp = ui.interact(r, egui::Id::unique(("window-button", n)), Sense::click());
+            if resp.hovered() {
+                // Close turns red, as everywhere.
+                let bg = if close { Color32::from_rgb(196, 43, 28) } else { c.hover };
+                ui.painter().rect_filled(r, 0.0, bg);
+            }
+            let color = if resp.hovered() && close { Color32::WHITE } else { c.text_muted };
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, glyph, pt.font(13.0, Weight::Regular), color);
+            if resp.on_hover_text(tip).clicked() {
+                match n {
+                    0 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                    1 => crate::app::toggle_maximized(ctx),
+                    // Through the close request: "Close this window?" asks first.
+                    _ => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                }
+            }
+        }
+    }
+
+    /// Off macOS, with no system frame: the window's edges and corners
+    /// resize it (the cursor says so), and a hairline marks its edge.
+    fn window_edges(&self, ui: &egui::Ui) {
+        if cfg!(target_os = "macos") || self.remote_pass {
+            return;
+        }
+        let ctx = ui.ctx();
+        let (maximized, fullscreen) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.maximized.unwrap_or(false), v.fullscreen.unwrap_or(false))
+        });
+        if maximized || fullscreen {
+            return;
+        }
+        let r = ctx.content_rect();
+        let c = &self.config.theme.colors;
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("window-edge")))
+            .rect_stroke(r, 0.0, Stroke::new(1.0, c.border), StrokeKind::Inside);
+        use egui::ResizeDirection as D;
+        let (e, k) = (5.0, 12.0); // an edge's grip, a corner's
+        let edges = [
+            (Rect::from_min_max(r.min, pos2(r.min.x + k, r.min.y + k)), D::NorthWest, CursorIcon::ResizeNorthWest),
+            (Rect::from_min_max(pos2(r.max.x - k, r.min.y), pos2(r.max.x, r.min.y + k)), D::NorthEast, CursorIcon::ResizeNorthEast),
+            (Rect::from_min_max(pos2(r.min.x, r.max.y - k), pos2(r.min.x + k, r.max.y)), D::SouthWest, CursorIcon::ResizeSouthWest),
+            (Rect::from_min_max(pos2(r.max.x - k, r.max.y - k), r.max), D::SouthEast, CursorIcon::ResizeSouthEast),
+            (Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + e)), D::North, CursorIcon::ResizeNorth),
+            (Rect::from_min_max(pos2(r.min.x, r.max.y - e), r.max), D::South, CursorIcon::ResizeSouth),
+            (Rect::from_min_max(r.min, pos2(r.min.x + e, r.max.y)), D::West, CursorIcon::ResizeWest),
+            (Rect::from_min_max(pos2(r.max.x - e, r.min.y), r.max), D::East, CursorIcon::ResizeEast),
+        ];
+        for (n, (rect, dir, cursor)) in edges.into_iter().enumerate() {
+            let resp = ui.interact(rect, egui::Id::unique(("window-edge", n)), Sense::drag());
+            if resp.hovered() || resp.dragged() {
+                ctx.set_cursor_icon(cursor);
+            }
+            if resp.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            }
+        }
     }
 
     /// The keys that matter where the keyboard is now: `(keys, what, command)`.

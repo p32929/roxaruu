@@ -2747,8 +2747,9 @@ fn headless_folder_from_a_window_with_terminals() {
 }
 
 /// Claude Code in a Roxaruu terminal says when it's done through its own
-/// hooks (added by the `claude` shim): a stand-in `claude` that runs the
-/// `Stop` hook it was given, as Claude Code does, raises "finished" here.
+/// hooks (added by `roxaruu-hook`, which `claude` is in Roxaruu's
+/// terminals): a stand-in `claude` that runs the `Stop` hook it was given,
+/// as Claude Code does, raises "finished" here.
 #[test]
 #[ignore]
 fn headless_claude_hooks_say_when_it_is_done() {
@@ -2758,14 +2759,13 @@ fn headless_claude_hooks_say_when_it_is_done() {
     let bin = dir.path().canonicalize().unwrap().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     // The stand-in: shows what it was given, then runs the Stop hook's
-    // command from the settings file the way Claude Code does — in a session
-    // of its own, with no terminal (so it can't just write to /dev/tty).
+    // command from the settings it was handed the way Claude Code does — in
+    // a session of its own, with no terminal.
     std::fs::write(
         bin.join("claude"),
-        "#!/bin/bash\necho \"args: $*\"\n[ \"$1\" = --settings ] || exit 0\n\
-         cmd=$(sed -n 's/.*\"Stop\":\\[{\"hooks\":\\[{\"command\":\"\\([^\"]*\\)\".*/\\1/p' \"$2\")\n\
-         [ -n \"$cmd\" ] || cmd=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[\"hooks\"][\"Stop\"][0][\"hooks\"][0][\"command\"])' \"$2\")\n\
-         echo \"tty: $ROXARUU_CLAUDE_TTY\"\n\
+        "#!/bin/bash\n[ \"$1\" = --settings ] || { echo \"args: $*\"; exit 0; }\n\
+         echo \"args: --settings … ${*:3}\"\n\
+         cmd=$(printf '%s' \"$2\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"hooks\"][\"Stop\"][0][\"hooks\"][0][\"command\"])')\n\
          echo '{}' | perl -MPOSIX -e 'POSIX::setsid(); exec \"/bin/bash\", \"-c\", $ARGV[0]' \"$cmd\"\n\
          echo stand-in done\n",
     )
@@ -2783,8 +2783,7 @@ fn headless_claude_hooks_say_when_it_is_done() {
     h.state_mut().0.terminals[0].pane.send_input(line.as_bytes());
     wait_for(&mut h, "the stand-in ran", screen_has("stand-in done"));
     let screen = app(&h).terminals[0].pane.screen().contents();
-    assert!(screen.contains("args: --settings ") && screen.contains("claude-hooks.json --resume abc"), "{screen}");
-    assert!(screen.contains("tty: /dev/tty"), "the shim names the terminal for the hooks: {screen}");
+    assert!(screen.contains("args: --settings … --resume abc"), "the hooks added, the rest passed on: {screen}");
     wait_for(&mut h, "the toast", |a| a.toasts.iter().any(|t| t.msg.contains("Claude Code: finished")));
     assert!(app(&h).terminals[0].pane.attention, "a bell on its tab");
 }
@@ -4578,7 +4577,7 @@ fn headless_every_key_that_applies_shows() {
         // App-wide: the palette and F1.
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
         OpenProjectSettings, OpenConfigFolder, Todos, ClipboardHistory, ZoomIn, ZoomOut, ResetZoom, FullScreen,
-        MaximizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
+        MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
         ToggleTerminal, Palette, SearchInFiles, SwitchFocus,
         // A tab's or the tree's right-click menu.
         RenameFile, RevealInFinder, OpenInTerminal, CopyPath, CopyRelativePath,

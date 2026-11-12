@@ -22,7 +22,7 @@ struct Bridge {
     /// The POSIX snippet that does that re-prepending — sourced by the zsh
     /// startup files above and handed to bash as `BASH_ENV`, so one copy of
     /// the logic covers every shell kind. See [`write_path_guard`].
-    path_guard: PathBuf,
+    path_guard: Option<PathBuf>,
 }
 
 static BRIDGE: OnceLock<Option<Bridge>> = OnceLock::new();
@@ -40,57 +40,6 @@ fn bridge_root() -> Option<PathBuf> {
         );
     }
     dirs::config_dir().map(|d| d.join("oxru").join("bridge"))
-}
-
-/// The `claude` in Roxaruu's terminals: the real Claude Code (the next one on
-/// `PATH`), with hooks that say here when it has finished or needs you, so
-/// Roxaruu tells you (a toast, a bell on the tab, a macOS notification if
-/// you're away) exactly then, not by guessing from its silence. Added for
-/// the run (`--settings`, merged with the user's own); their settings files
-/// are never touched.
-const CLAUDE_SHIM: &str = r##"#!/bin/bash
-# Roxaruu claude shim — see src/termbridge.rs.
-here="$(cd "$(dirname "$0")" && pwd)"
-REAL=""
-IFS=:
-for d in $PATH; do
-  [ "$d" = "$here" ] && continue
-  if [ -x "$d/claude" ] && [ ! -d "$d/claude" ]; then REAL="$d/claude"; break; fi
-done
-unset IFS
-[ -n "$REAL" ] || { echo "claude: command not found" >&2; exit 127; }
-[ -n "$OXRU_TERMINAL" ] && [ -f "$here/claude-hooks.json" ] || exec "$REAL" "$@"
-# Claude Code runs its hooks cut off from the terminal (no /dev/tty): tell
-# them which one is this.
-ROXARUU_CLAUDE_TTY="$(tty 2>/dev/null)"
-export ROXARUU_CLAUDE_TTY
-exec "$REAL" --settings "$here/claude-hooks.json" "$@"
-"##;
-
-/// What Claude Code's hooks run: says `$1` (`stop`, or the hook's own
-/// message for `notification`) to the terminal Claude Code runs in (named
-/// by the shim: hooks have no terminal of their own), as a notification
-/// escape (OSC 9), which [`crate::terminalpane`] raises.
-const CLAUDE_NOTIFY: &str = r##"#!/bin/bash
-# Roxaruu: Claude Code's hooks say it here — see src/termbridge.rs.
-input="$(cat)"
-msg="$(printf '%s' "$input" | sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-case "$1" in
-  stop) msg="finished" ;;
-  *) [ -n "$msg" ] || msg="needs your attention" ;;
-esac
-tty="${ROXARUU_CLAUDE_TTY:-/dev/tty}"
-case "$tty" in /dev/*) ;; *) exit 0 ;; esac
-printf '\033]9;Claude Code: %s\007' "$msg" > "$tty" 2>/dev/null || true
-"##;
-
-/// The hooks the `claude` shim adds: on finishing (`Stop`) and on wanting
-/// you (`Notification`: a permission, a question, idle), run `notify`.
-fn claude_hooks(notify: &Path) -> String {
-    let run = |what: &str| {
-        serde_json::json!([{ "hooks": [{ "type": "command", "command": format!("'{}' {what}", notify.display()) }] }])
-    };
-    serde_json::json!({ "hooks": { "Stop": run("stop"), "Notification": run("notification") } }).to_string()
 }
 
 /// The fake `osascript`. Routes terminal-opening AppleScript to Oxru, runs the
@@ -243,10 +192,6 @@ fn make_executable(_path: &Path) -> std::io::Result<()> {
 }
 
 fn init() -> Option<Bridge> {
-    // The shim is a shell script; only meaningful on unix-likes.
-    if !cfg!(unix) {
-        return None;
-    }
     let root = bridge_root()?;
     // Clear out the directories of instances that died without `cleanup()`
     // before claiming our own, so they don't accumulate orphaned shims.
@@ -275,7 +220,13 @@ fn init() -> Option<Bridge> {
 /// Write (or rewrite) every file the bridge needs into `dir`, returning the
 /// path guard and the zsh wrapper. Split out of [`init`] so [`ensure_intact`]
 /// can restore them without rebuilding the whole [`Bridge`].
-fn write_bridge_files(dir: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+fn write_bridge_files(dir: &Path) -> Option<(Option<PathBuf>, Option<PathBuf>)> {
+    // Every system: `claude` is Roxaruu's helper, which adds the hooks.
+    link_claude_helper(dir);
+    // The rest catch scripts opening Terminal.app, through Unix shells.
+    if !cfg!(unix) {
+        return Some((None, None));
+    }
     let path_guard = write_path_guard(dir)?;
 
     let shim = dir.join("osascript");
@@ -286,16 +237,47 @@ fn write_bridge_files(dir: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
     std::fs::write(&open_shim, shim_source(OPEN_SHIM)).ok()?;
     make_executable(&open_shim).ok()?;
 
-    // Claude Code with its finished / needs-you hooks.
-    let notify = dir.join("claude-notify");
-    std::fs::write(&notify, CLAUDE_NOTIFY).ok()?;
-    make_executable(&notify).ok()?;
-    std::fs::write(dir.join("claude-hooks.json"), claude_hooks(&notify)).ok()?;
-    let claude = dir.join("claude");
-    std::fs::write(&claude, CLAUDE_SHIM).ok()?;
-    make_executable(&claude).ok()?;
+    Some((Some(path_guard), write_zdotdir(dir)))
+}
 
-    Some((path_guard, write_zdotdir(dir)))
+/// The helper program (`roxaruu-hook`, src/bin) beside Roxaruu's own — and,
+/// for tests, in the build folder above theirs.
+fn helper_program() -> Option<PathBuf> {
+    let name = format!("roxaruu-hook{}", std::env::consts::EXE_SUFFIX);
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    [Some(dir.join(&name)), dir.parent().map(|d| d.join(&name))]
+        .into_iter()
+        .flatten()
+        .find(|p| p.is_file())
+}
+
+/// `claude` (and `roxaruu-hook`, which its hooks run) in the bridge
+/// directory, first on every terminal's `PATH`: the helper, which starts the
+/// real Claude Code with hooks that say when it's done or needs you. A link
+/// (Unix) or a hard link, else a copy (Windows: a shell runs `claude.exe`).
+fn link_claude_helper(dir: &Path) {
+    let Some(helper) = helper_program() else {
+        tracing::warn!("roxaruu-hook isn't beside Roxaruu: Claude Code's hooks are off");
+        return;
+    };
+    for name in ["claude", "roxaruu-hook"] {
+        let to = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        let _ = std::fs::remove_file(&to);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&helper, &to);
+        #[cfg(not(unix))]
+        let made = std::fs::hard_link(&helper, &to).or_else(|_| std::fs::copy(&helper, &to).map(|_| ()));
+        if let Err(e) = made {
+            tracing::warn!(error = %e, to = %to.display(), "couldn't put the Claude Code helper in place");
+        }
+    }
+}
+
+/// Where Claude Code's hooks leave messages for a terminal: one file per
+/// terminal, named by its `ROXARUU_TERM` (see `terminalpane`).
+pub fn alerts_dir() -> Option<PathBuf> {
+    bridge().map(|b| b.dir.join("alerts"))
 }
 
 /// A shim script with its placeholders filled in, so the sentinel the shims
@@ -321,7 +303,8 @@ pub fn ensure_intact() {
     // One `exists()` per tick, next to the `metadata()` the request poll
     // already does. The shim is the file that matters; if it went, assume the
     // rest did too and rewrite the lot.
-    if b.dir.join("osascript").exists() {
+    let kept = if cfg!(unix) { "osascript" } else { "roxaruu-hook.exe" };
+    if b.dir.join(kept).exists() || helper_program().is_none() {
         return;
     }
     tracing::warn!(
@@ -571,10 +554,12 @@ pub fn child_env() -> Vec<(String, String)> {
     let Some(b) = bridge() else {
         return Vec::new();
     };
-    let path = match std::env::var("PATH") {
-        Ok(p) => format!("{}:{}", b.dir.display(), p),
-        Err(_) => b.dir.display().to_string(),
-    };
+    // First on PATH, joined the system's way (`;` on Windows).
+    let path = std::env::join_paths(
+        std::iter::once(b.dir.clone()).chain(std::env::var_os("PATH").iter().flat_map(std::env::split_paths)),
+    )
+    .map(|p| p.to_string_lossy().into_owned())
+    .unwrap_or_else(|_| b.dir.display().to_string());
     let mut env = vec![
         ("PATH".to_string(), path),
         (
@@ -582,6 +567,7 @@ pub fn child_env() -> Vec<(String, String)> {
             b.request_file.display().to_string(),
         ),
         ("OXRU_TERMINAL".to_string(), "1".to_string()),
+        ("ROXARUU_ALERTS".to_string(), b.dir.join("alerts").display().to_string()),
         // Read by `path.sh` — the guard is written once and needs to be told
         // which directory to re-prepend rather than having it baked in.
         ("OXRU_BRIDGE_DIR".to_string(), b.dir.display().to_string()),
@@ -595,15 +581,17 @@ pub fn child_env() -> Vec<(String, String)> {
         // PATH its parent already fixed, which covers it; `sh -lc` re-runs
         // path_helper with no per-user hook to undo it and stays a known gap,
         // alongside a script calling `/usr/bin/osascript` by absolute path.
-        ("BASH_ENV".to_string(), b.path_guard.display().to_string()),
+    ];
+    if let Some(guard) = &b.path_guard {
+        env.push(("BASH_ENV".to_string(), guard.display().to_string()));
         // Taking over BASH_ENV must not cost the user theirs; the guard
         // sources this first. Always exported, even empty, so a value
         // inherited from an outer Oxru can't leak into the child.
-        (
+        env.push((
             "OXRU_REAL_BASH_ENV".to_string(),
             resolve_real_bash_env(std::env::var("BASH_ENV").ok(), is_oxru_path_guard),
-        ),
-    ];
+        ));
+    }
 
     // For zsh, point it at our ZDOTDIR so the shim stays first on PATH even
     // after the login shell's path_helper runs (see write_zdotdir). Preserve a
@@ -654,42 +642,10 @@ pub fn cleanup() {
     }
 }
 
-// The bridge is for Unix shells (it isn't set up elsewhere: `init`).
+// The Terminal.app catching is for Unix shells.
 #[cfg(all(test, unix))]
 mod tests {
 
-    /// `claude` in a Roxaruu terminal is the real one (the next on `PATH`,
-    /// never the shim again) with the hooks added; anywhere else, untouched.
-    #[test]
-    fn the_claude_shim_adds_the_hooks_only_here() {
-        use std::process::Command;
-        let dir = tempfile::tempdir().unwrap();
-        let (shims, real) = (dir.path().join("shims"), dir.path().join("real"));
-        std::fs::create_dir_all(&shims).unwrap();
-        std::fs::create_dir_all(&real).unwrap();
-        std::fs::write(shims.join("claude"), CLAUDE_SHIM).unwrap();
-        std::fs::write(shims.join("claude-hooks.json"), claude_hooks(&shims.join("claude-notify"))).unwrap();
-        std::fs::write(real.join("claude"), "#!/bin/sh\necho \"$@\"\n").unwrap();
-        make_executable(&shims.join("claude")).unwrap();
-        make_executable(&real.join("claude")).unwrap();
-        let run = |here: bool| {
-            let mut c = Command::new(shims.join("claude"));
-            c.args(["--resume", "x"]).env("PATH", format!("{}:{}:/usr/bin:/bin", shims.display(), real.display()));
-            if here {
-                c.env("OXRU_TERMINAL", "1");
-            } else {
-                c.env_remove("OXRU_TERMINAL");
-            }
-            String::from_utf8(c.output().unwrap().stdout).unwrap()
-        };
-        let hooks = shims.join("claude-hooks.json");
-        assert_eq!(run(true).trim(), format!("--settings {} --resume x", hooks.display()));
-        assert_eq!(run(false).trim(), "--resume x");
-        let json: serde_json::Value =
-            serde_json::from_str(&claude_hooks(Path::new("/a b/claude-notify"))).unwrap();
-        assert_eq!(json["hooks"]["Stop"][0]["hooks"][0]["command"], "'/a b/claude-notify' stop");
-        assert_eq!(json["hooks"]["Notification"][0]["hooks"][0]["command"], "'/a b/claude-notify' notification");
-    }
     use super::*;
     use std::process::Command;
 

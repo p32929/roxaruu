@@ -1,6 +1,7 @@
 # Roxaruu
 
-A keyboard-first code editor with built-in terminals. Every action has a key,
+A keyboard-first code editor with built-in terminals. Nothing else to
+install: it works out of the box on each system. Every action has a key,
 and the keys that work where you are are always on screen. Runs on macOS,
 Windows and Linux; open its windows from a phone's browser with remote access.
 
@@ -26,8 +27,9 @@ Get the file for your system from the
 
 Or unzip `Roxaruu-<version>-windows-x64.zip` anywhere and run `roxaruu.exe`.
 
-Terminals use **Git Bash** if it's installed ([Git for Windows](https://git-scm.com/download/win)),
-otherwise PowerShell.
+Terminals run Windows PowerShell, which every Windows has. If you use Git
+Bash, WSL, PowerShell 7 or Command Prompt, pick it in **Settings → Terminal
+shell**.
 
 ### Linux (64-bit)
 

@@ -174,14 +174,28 @@ HOME=$SP/home SHOTS=$SP/shots PROJECT=<a file inside a git repo> BIG=<a big sour
 ## 4. Every desktop: macOS, Windows, Linux
 
 Roxaruu runs everywhere VS Code does, every feature on every system.
+- Works out of the box: nothing for the user to install. Use what each
+  system has (PowerShell, its notifications, its file dialogs), and for
+  anything cross-platform prefer an existing crate (`sysinfo`, `opener`,
+  `notify-rust`, `rfd`, `which`, `keepawake`) to hand-written OS code.
 - Anything that asks the OS lives in `sys.rs`, with a version for each of
-  macOS, Windows and Linux (not an empty stand-in). Windows terminals run
-  Git Bash when it's installed, else PowerShell, else cmd (`windows_shell`).
+  macOS, Windows and Linux (not an empty stand-in). Terminals run the
+  `terminalShell` setting (`sys::shell_for`): by default Windows PowerShell
+  on Windows, the login shell elsewhere; Git Bash, WSL, PowerShell 7, cmd
+  when chosen.
+- No shell scripts in what ships for every system: Claude Code's hooks go
+  through `roxaruu-hook` (src/bin), a console program installed beside the
+  app, which `claude` is in Roxaruu's terminals (`termbridge`).
+- One title bar, ours: off macOS the window has no system frame; its
+  buttons and resizing edges are `ui::window_buttons` / `window_edges`.
+- The window must open: wgpu, else OpenGL, else a dialog saying why
+  (`main::couldnt_start`); every run logs to `<local data>/Roxaruu`.
 - Off macOS, Roxaruu's keys are Ctrl chords, which a terminal's shell wants
   too: only `terminal::passes_the_shell` get past it, and hints in a
   terminal never show one that doesn't (`key_reaches`).
 - `.github/workflows/build.yml` builds, tests and packages all three on
-  every push (`packaging/`: the macOS Info.plist and Linux menu entry
+  every push, then installs each package and opens the app (it must still
+  run with its window drawn; screenshots kept with the run) (`packaging/`: the macOS Info.plist and Linux menu entry
   `install-local.sh` uses too, the Windows installer). It must stay green
   on all three; a test that needs a Unix shell is marked
   `#[cfg_attr(not(unix), ignore = "needs a Unix shell")]` and gets a Windows

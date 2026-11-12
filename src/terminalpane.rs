@@ -99,6 +99,17 @@ pub enum Pulse {
     Quiet(Duration),
 }
 
+/// The `terminalShell` setting, as the app last read it (`set_shell`).
+static SHELL: Mutex<String> = Mutex::new(String::new());
+
+/// What new terminals run (the `terminalShell` setting; the app keeps it current).
+pub fn set_shell(choice: &str) {
+    let mut s = SHELL.lock().unwrap_or_else(|e| e.into_inner());
+    if *s != choice {
+        *s = choice.to_string();
+    }
+}
+
 /// How long a Windows console may take to ask its first question before
 /// what's typed stops waiting for it.
 const CONSOLE_START: Duration = Duration::from_secs(2);
@@ -196,6 +207,9 @@ pub struct Watch {
     name: Mutex<String>,
     /// Alerts the UI hasn't shown yet.
     fired: Mutex<Vec<String>>,
+    /// This terminal's inbox for what Claude Code's hooks say
+    /// (`roxaruu-hook`, through `ROXARUU_TERM`).
+    inbox: Mutex<Option<PathBuf>>,
 }
 
 /// Twice a second: anything asked for the user here? An agent gone quiet
@@ -228,6 +242,17 @@ fn watch(
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .went_quiet();
+        // What Claude Code's hooks left in this terminal's inbox: exactly
+        // when it finished or wants you (taken whole: renamed, then read).
+        let inbox = w.inbox.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(path) = inbox {
+            let taken = path.with_extension("taken");
+            if std::fs::rename(&path, &taken).is_ok() {
+                let text = std::fs::read_to_string(&taken).unwrap_or_default();
+                let _ = std::fs::remove_file(&taken);
+                said.extend(text.lines().filter(|l| !l.trim().is_empty()).map(str::to_string));
+            }
+        }
         if said.iter().any(|m| !m.is_empty()) {
             spoke = Some(Instant::now());
         }
@@ -368,27 +393,35 @@ impl TerminalPane {
         cwd: &Path,
         waker: Option<Waker>,
     ) -> Result<Self> {
-        #[cfg(not(windows))]
-        let (mut cmd, shell): (_, Option<&str>) = (CommandBuilder::new_default_prog(), None);
-        // Windows: Git Bash when it's there, else PowerShell, else cmd.
-        #[cfg(windows)]
-        let (mut cmd, shell) = {
-            let (program, args, name) = crate::sys::windows_shell();
-            let mut cmd = CommandBuilder::new(program);
-            cmd.args(args);
-            // Git Bash's login profile otherwise starts in your home folder.
-            cmd.env("CHERE_INVOKING", "1");
-            (cmd, Some(name))
+        // The `terminalShell` setting; by default the system's own (Windows
+        // PowerShell; elsewhere your login shell).
+        let choice = SHELL.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let (mut cmd, shell) = match crate::sys::shell_for(&choice) {
+            Some((program, args, name)) => {
+                let mut cmd = CommandBuilder::new(program);
+                cmd.args(args);
+                (cmd, Some(name))
+            }
+            None => (CommandBuilder::new_default_prog(), None),
         };
+        // Git Bash's login profile otherwise starts in your home folder.
+        cmd.env("CHERE_INVOKING", "1");
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
         // Route scripts that try to open new OS Terminal windows back into the app.
         for (k, v) in crate::termbridge::child_env() {
             cmd.env(k, v);
         }
+        // Which terminal this is, for Claude Code's hooks (`roxaruu-hook`).
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let id = format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
+        cmd.env("ROXARUU_TERM", &id);
         let mut pane = Self::spawn(folder, rows, cols, cmd, waker)?;
+        if let Some(dir) = crate::termbridge::alerts_dir() {
+            *pane.watch.inbox.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir.join(id));
+        }
         if let Some(name) = shell {
-            pane.shell_name = name.to_string(); // what "nothing running" looks like
+            pane.shell_name = name; // what "nothing running" looks like
         }
         Ok(pane)
     }
@@ -1763,6 +1796,27 @@ mod tests {
             assert!(Instant::now() < deadline, "no answer: {:?}", t.screen().contents());
             t.pump();
             std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Claude Code's hooks reach the terminal they ran in, on every system:
+    /// what they run (`roxaruu-hook`, first on the terminal's PATH) leaves its
+    /// message in the terminal's inbox, and the terminal raises it.
+    /// (Needs the helper built: `cargo build` builds it beside Roxaruu.)
+    #[test]
+    fn a_claude_hook_reaches_its_terminal() {
+        let dir = std::env::temp_dir();
+        let mut t = TerminalPane::new("t", 24, 100, &dir, None).expect("a shell starts");
+        assert!(t.watch.inbox.lock().unwrap().is_some(), "the terminal has an inbox");
+        t.send_input(b"echo x | roxaruu-hook stop\r");
+        let deadline = Instant::now() + SHELL_WAIT;
+        loop {
+            t.pump();
+            if t.take_fired().iter().any(|m| m == "Claude Code: finished") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the hook never arrived: {:?}", t.screen().contents());
+            std::thread::sleep(Duration::from_millis(100));
         }
     }
 

@@ -74,6 +74,7 @@ pub enum Command {
     ResetZoom,
     FullScreen,
     MaximizeWindow,
+    MinimizeWindow,
     FocusSidebar,
     GoToLine,
     ToggleComment,
@@ -217,6 +218,7 @@ commands! {
     ResetZoom, "view.resetZoom", "Reset Text Size", ["ctrl+0"];
     FullScreen, "view.fullScreen", "Full Screen On / Off", ["f11"];
     MaximizeWindow, "view.maximize", "Maximize / Restore Window", ["ctrl+alt+enter"];
+    MinimizeWindow, "view.minimize", "Minimize Window", ["ctrl+m"];
     SwitchFocus, "view.switchFocus", "Switch Between Editor and Terminal", ["ctrl+j"];
     ToggleTerminal, "terminal.toggle", "Show / Hide Terminal", ["alt+t"];
     NewTerminal, "terminal.new", "New Terminal", ["alt+n"];

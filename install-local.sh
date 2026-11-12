@@ -139,6 +139,9 @@ fi
 mkdir -p "$BIN_DIR"
 # Copy beside, then rename: replacing a running binary in place can crash it.
 cp "$BIN" "$BIN_DIR/.$EXE.new" && mv -f "$BIN_DIR/.$EXE.new" "$BIN_DIR/$EXE"
+# Claude Code's helper (src/bin/roxaruu-hook.rs), beside the app.
+HOOK="roxaruu-hook${EXE#roxaruu}"
+cp "target/release/$HOOK" "$BIN_DIR/.$HOOK.new" && mv -f "$BIN_DIR/.$HOOK.new" "$BIN_DIR/$HOOK"
 green "Installed $BIN_DIR/$EXE"
 # `rox`, the short name: a wrapper, not a link, so the process is still
 # called roxaruu (which is how windows find each other).
@@ -197,6 +200,7 @@ mac)
     rm -rf "$DEST.new"
     mkdir -p "$DEST.new/Contents/MacOS" "$DEST.new/Contents/Resources"
     cp "$BIN" "$DEST.new/Contents/MacOS/roxaruu"
+    cp "target/release/roxaruu-hook" "$DEST.new/Contents/MacOS/roxaruu-hook"
     cp assets/AppIcon.icns "$DEST.new/Contents/Resources/AppIcon.icns"
     # What macOS knows of the app: one file, shared with the release builds
     # (.github/workflows/build.yml).
@@ -262,7 +266,7 @@ CNF
             security add-trusted-cert -r trustRoot -p codeSign -k "$SIGN_KC" "$SIGN_DIR/cert.pem" || true
         fi
         if signing_ready &&
-            codesign --force --keychain "$SIGN_KC" -s "$SIGN_NAME" "$DEST.new" >/dev/null 2>&1 &&
+            codesign --force --deep --keychain "$SIGN_KC" -s "$SIGN_NAME" "$DEST.new" >/dev/null 2>&1 &&
             codesign --verify "$DEST.new" >/dev/null 2>&1; then
             signed=1
             green "Signed with this Mac's own key: permissions you allow stay allowed across updates"

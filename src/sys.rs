@@ -427,97 +427,141 @@ pub fn app_active() -> Option<bool> {
 
 /// Keeps the computer from sleeping while it's held (remote access: a
 /// sleeping computer drops off the network). The display may still sleep.
-pub struct Awake {
-    #[allow(dead_code)] // held for its Drop
-    child: Option<std::process::Child>,
-}
+/// `None` when the system wouldn't say yes (nothing else breaks).
+pub type Awake = Option<keepawake::KeepAwake>;
 
-impl Drop for Awake {
-    fn drop(&mut self) {
-        if let Some(c) = &mut self.child {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-        #[cfg(windows)]
-        set_awake(false);
-    }
-}
-
-/// Stay awake, until the returned value is dropped: macOS `caffeinate`,
-/// Linux `systemd-inhibit`, Windows' own setting for this thread (the UI's,
-/// which lives as long as the window).
+/// Stay awake until the returned value is dropped, on every system
+/// (`keepawake`: IOKit, systemd-logind, `SetThreadExecutionState`).
 pub fn stay_awake() -> Awake {
-    let quiet = |c: &mut std::process::Command| {
-        c.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    };
-    let pid = std::process::id().to_string();
-    let child = if cfg!(target_os = "macos") {
-        let mut c = std::process::Command::new("/usr/bin/caffeinate");
-        c.args(["-i", "-w", &pid]);
-        quiet(&mut c);
-        c.spawn().ok()
-    } else if cfg!(windows) {
-        #[cfg(windows)]
-        set_awake(true);
-        None
-    } else {
-        let mut c = std::process::Command::new("systemd-inhibit");
-        c.args(["--what=idle:sleep", "--who=Roxaruu", "--why=Remote access is on", "--mode=block", "sleep", "infinity"]);
-        quiet(&mut c);
-        c.spawn().ok()
-    };
-    Awake { child }
+    keepawake::Builder::default()
+        .idle(true)
+        .reason("Remote access is on")
+        .app_name("Roxaruu")
+        .app_reverse_domain("io.github.p32929.roxaruu")
+        .create()
+        .ok()
 }
 
-/// Safety: `SetThreadExecutionState` only sets flags for the calling thread.
-#[cfg(windows)]
-fn set_awake(on: bool) {
-    use windows_sys::Win32::System::Power::{ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState};
-    #[allow(unsafe_code)]
-    unsafe {
-        SetThreadExecutionState(if on { ES_CONTINUOUS | ES_SYSTEM_REQUIRED } else { ES_CONTINUOUS });
+/// What a new terminal runs for the `terminalShell` setting `choice`:
+/// `(program, arguments, name)`, or `None` for the user's own login shell
+/// (`$SHELL`, the default off Windows). On Windows the default is Windows
+/// PowerShell, which every Windows has; Git Bash, WSL, PowerShell 7 and cmd
+/// are there to choose. A choice that isn't on this computer falls back to
+/// the default.
+pub fn shell_for(choice: &str) -> Option<(std::path::PathBuf, Vec<String>, String)> {
+    let named = |p: std::path::PathBuf, args: &[&str], name: &str| {
+        Some((p, args.iter().map(|a| a.to_string()).collect::<Vec<String>>(), name.to_string()))
+    };
+    let choice = choice.trim();
+    #[cfg(windows)]
+    {
+        let default = || named(windows_powershell(), &["-NoLogo"], "powershell");
+        match choice.to_ascii_lowercase().as_str() {
+            "" | "powershell" => default(),
+            "pwsh" => which::which("pwsh").ok().map_or_else(default, |p| named(p, &["-NoLogo"], "pwsh")),
+            "cmd" => named(
+                std::env::var_os("ComSpec").map(Into::into).unwrap_or_else(|| "cmd.exe".into()),
+                &[],
+                "cmd",
+            ),
+            "gitbash" => git_bash().map_or_else(default, |p| named(p, &["--login", "-i"], "bash")),
+            "wsl" => wsl().map_or_else(default, |p| named(p, &[], "wsl")),
+            _ => any_shell(choice).or_else(default),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = named;
+        if choice.is_empty() {
+            return None;
+        }
+        any_shell(choice)
     }
 }
 
-/// The shell for a new terminal on Windows: Git Bash if it's installed (a
-/// real Unix shell, the one Git for Windows and Claude Code use), else
-/// PowerShell 7, else Windows PowerShell, else cmd. Elsewhere `None`: the
-/// user's own login shell (`$SHELL`).
+/// A shell by name (on `PATH`) or path; a login shell where that's a flag
+/// it knows.
+fn any_shell(choice: &str) -> Option<(std::path::PathBuf, Vec<String>, String)> {
+    let path = which::which(choice).ok().or_else(|| {
+        let p = std::path::PathBuf::from(choice);
+        p.is_file().then_some(p)
+    })?;
+    let name = path.file_stem()?.to_string_lossy().to_lowercase();
+    let login = ["bash", "zsh", "fish", "sh", "ksh", "dash"].contains(&name.as_str());
+    let args = if login && !cfg!(windows) { vec!["-l".to_string()] } else { Vec::new() };
+    Some((path, args, name))
+}
+
+/// The choices for the Settings screen: the system's own ("") first, then
+/// what this computer has.
+pub fn shell_choices() -> Vec<&'static str> {
+    let mut v = vec![""];
+    #[cfg(windows)]
+    {
+        v.push("cmd");
+        if which::which("pwsh").is_ok() {
+            v.push("pwsh");
+        }
+        if git_bash().is_some() {
+            v.push("gitbash");
+        }
+        if wsl().is_some() {
+            v.push("wsl");
+        }
+    }
+    #[cfg(not(windows))]
+    v.extend(["zsh", "bash", "fish"].into_iter().filter(|s| which::which(s).is_ok()));
+    v
+}
+
+/// How Settings shows a choice.
+pub fn shell_title(choice: &str) -> String {
+    match choice.trim().to_ascii_lowercase().as_str() {
+        "" if cfg!(windows) => "Windows PowerShell (the system's)".into(),
+        "" => "Your login shell".into(),
+        "powershell" => "Windows PowerShell".into(),
+        "pwsh" => "PowerShell 7".into(),
+        "cmd" => "Command Prompt (cmd)".into(),
+        "gitbash" => "Git Bash".into(),
+        "wsl" => "WSL (Linux)".into(),
+        _ => choice.to_string(),
+    }
+}
+
+/// Windows PowerShell, part of every Windows.
 #[cfg(windows)]
-pub fn windows_shell() -> (std::path::PathBuf, Vec<&'static str>, &'static str) {
+fn windows_powershell() -> std::path::PathBuf {
+    let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+    let p = root.join("System32").join("WindowsPowerShell").join("v1.0").join("powershell.exe");
+    if p.is_file() { p } else { "powershell.exe".into() }
+}
+
+/// WSL, when it's set up.
+#[cfg(windows)]
+fn wsl() -> Option<std::path::PathBuf> {
+    let root = std::env::var_os("SystemRoot").map(std::path::PathBuf::from)?;
+    let p = root.join("System32").join("wsl.exe");
+    p.is_file().then_some(p)
+}
+
+/// Git for Windows' bash, when it's installed: its usual homes, then
+/// wherever `git` is on PATH (…\\Git\\cmd\\git.exe → …\\Git\\bin\\bash.exe).
+#[cfg(windows)]
+fn git_bash() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
     let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
-    // Git for Windows' bash: its usual homes, then wherever `git` is on PATH
-    // (…\Git\cmd\git.exe → …\Git\bin\bash.exe).
     let mut bash: Vec<PathBuf> = [env("ProgramFiles"), env("ProgramW6432"), env("ProgramFiles(x86)")]
         .into_iter()
         .flatten()
         .map(|p| p.join("Git").join("bin").join("bash.exe"))
         .chain(env("LOCALAPPDATA").map(|p| p.join("Programs").join("Git").join("bin").join("bash.exe")))
         .collect();
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            if dir.join("git.exe").is_file()
-                && let Some(git) = dir.parent()
-            {
-                bash.push(git.join("bin").join("bash.exe"));
-            }
-        }
+    if let Ok(git) = which::which("git")
+        && let Some(home) = git.parent().and_then(|d| d.parent())
+    {
+        bash.push(home.join("bin").join("bash.exe"));
     }
-    if let Some(b) = bash.into_iter().find(|b| b.is_file()) {
-        return (b, vec!["--login", "-i"], "bash");
-    }
-    let on_path = |exe: &str| {
-        std::env::var_os("PATH")
-            .and_then(|p| std::env::split_paths(&p).map(|d| d.join(exe)).find(|f| f.is_file()))
-    };
-    if let Some(p) = on_path("pwsh.exe") {
-        return (p, vec!["-NoLogo"], "pwsh");
-    }
-    if let Some(p) = on_path("powershell.exe") {
-        return (p, vec!["-NoLogo"], "powershell");
-    }
-    (env("ComSpec").unwrap_or_else(|| PathBuf::from("cmd.exe")), vec![], "cmd")
+    bash.into_iter().find(|b| b.is_file())
 }
 
 /// Bring the windows of process `pid` to the front.

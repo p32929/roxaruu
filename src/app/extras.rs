@@ -44,6 +44,7 @@ pub enum Setting {
     UiFontSize,
     CodeFontSize,
     TerminalFps,
+    TerminalShell,
     WordWrap,
     CurrentLine,
     IndentGuides,
@@ -51,13 +52,14 @@ pub enum Setting {
 }
 
 impl Setting {
-    pub const ALL: [Setting; 10] = [
+    pub const ALL: [Setting; 11] = [
         Setting::Theme,
         Setting::UiFont,
         Setting::CodeFont,
         Setting::UiFontSize,
         Setting::CodeFontSize,
         Setting::TerminalFps,
+        Setting::TerminalShell,
         Setting::WordWrap,
         Setting::CurrentLine,
         Setting::IndentGuides,
@@ -73,6 +75,7 @@ impl Setting {
             Setting::UiFontSize => "uiFontSize",
             Setting::CodeFontSize => "codeFontSize",
             Setting::TerminalFps => "terminalFps",
+            Setting::TerminalShell => "terminalShell",
             Setting::WordWrap => "wordWrap",
             Setting::CurrentLine => "currentLine",
             Setting::IndentGuides => "indentGuides",
@@ -88,6 +91,7 @@ impl Setting {
             Setting::UiFontSize => "UI font size",
             Setting::CodeFontSize => "Code font size",
             Setting::TerminalFps => "Terminal frame rate (when you aren't typing)",
+            Setting::TerminalShell => "Terminal shell (for new terminals)",
             Setting::WordWrap => "Word wrap",
             Setting::CurrentLine => "Highlight the current line",
             Setting::IndentGuides => "Indent guides",
@@ -102,6 +106,7 @@ impl Setting {
                 icon::FONT
             }
             Setting::TerminalFps => icon::PULSE,
+            Setting::TerminalShell => icon::TERMINAL,
             Setting::WordWrap => icon::WRAP,
             Setting::CurrentLine | Setting::IndentGuides => icon::EDIT,
             Setting::Sidebar => icon::SIDEBAR,
@@ -443,6 +448,7 @@ impl App {
             Setting::UiFontSize => format!("{}", st.ui_font_size),
             Setting::CodeFontSize => format!("{}", st.code_font_size),
             Setting::TerminalFps => format!("{} fps", st.terminal_fps),
+            Setting::TerminalShell => crate::sys::shell_title(&st.terminal_shell),
             Setting::WordWrap => on(st.word_wrap),
             Setting::CurrentLine => on(st.current_line),
             Setting::IndentGuides => on(st.indent_guides),
@@ -485,6 +491,12 @@ impl App {
                     .unwrap_or(0) as i32;
                 TERMINAL_FPS[(at + delta).clamp(0, TERMINAL_FPS.len() as i32 - 1) as usize].into()
             }
+            // The shells this computer has, the system's own first.
+            Setting::TerminalShell => cycle(
+                crate::sys::shell_choices().into_iter().map(String::from).collect(),
+                &st.terminal_shell,
+            )
+            .into(),
             Setting::WordWrap => (!st.word_wrap).into(),
             Setting::CurrentLine => (!st.current_line).into(),
             Setting::IndentGuides => (!st.indent_guides).into(),
