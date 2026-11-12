@@ -595,7 +595,7 @@ impl App {
                 }
             }
             Command::OpenFolder => {
-                // The Finder panel takes over: nothing should be left open behind it.
+                // The system's folder picker takes over: nothing should be left open behind it.
                 self.close_palette(false, ctx);
                 self.open_folders(pick_folders(), ctx);
             }
@@ -2439,8 +2439,9 @@ fn recall_place(tab: &mut Tab) {
     }
 }
 
-/// Finder's panel: one folder, or several (⌘- or ⇧-click).
-#[cfg(all(target_os = "macos", not(test)))]
+/// The system's folder picker (Finder, Explorer, the desktop's portal): one
+/// folder, or several (Ctrl/⌘- or ⇧-click).
+#[cfg(not(test))]
 fn pick_folders() -> Vec<PathBuf> {
     rfd::FileDialog::new()
         .set_title("Open Folders")
@@ -2448,9 +2449,8 @@ fn pick_folders() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// No native picker wired up off macOS yet; Recent Folders and the CLI path
-/// work. Tests never open the real panel.
-#[cfg(any(not(target_os = "macos"), test))]
+/// Tests never open the real picker.
+#[cfg(test)]
 fn pick_folders() -> Vec<PathBuf> {
     Vec::new()
 }
