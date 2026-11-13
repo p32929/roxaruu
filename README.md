@@ -7,8 +7,15 @@ Windows and Linux; open its windows from a phone's browser with remote access.
 
 ## Download
 
-Get the file for your system from the
-[latest release](https://github.com/p32929/roxaruu/releases/latest).
+One line, on macOS, Linux, or Windows in Git Bash (it picks the right file
+for your system from the latest release and installs it):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/p32929/roxaruu/master/install.sh | sh
+```
+
+Or get the file for your system from the
+[latest release](https://github.com/p32929/roxaruu/releases/latest):
 
 ### macOS (Apple Silicon and Intel)
 
