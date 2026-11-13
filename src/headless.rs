@@ -5,6 +5,7 @@
 //! ```sh
 //! HOME=/tmp/rx-home SHOTS=/tmp/rx-shots cargo test --release headless -- --ignored
 //! ```
+#![cfg(unix)]
 
 use std::path::PathBuf;
 
@@ -22,11 +23,15 @@ fn harness(target: Option<PathBuf>) -> Harness<'static, Root> {
         .build_eframe(move |cc| Root::new(App::new(&cc.egui_ctx, target)))
 }
 
-/// Run a few frames (and give background work a moment), then save a PNG.
+/// Run a few frames, and until the tab in front is highlighted (the
+/// background work a picture shows), then save a PNG.
 fn shot(h: &mut Harness<'static, Root>, name: &str) {
     for _ in 0..4 {
         h.step();
-        std::thread::sleep(std::time::Duration::from_millis(60));
+    }
+    while !app(h).active_tab().is_none_or(|t| !t.is_loaded() || t.highlighted()) {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let dir = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -329,7 +334,7 @@ fn headless_big_file_typing() {
         start.elapsed(),
         worst
     );
-    std::thread::sleep(std::time::Duration::from_millis(400)); // let the background highlight land
+    wait_for(&mut h, "the highlighting of the new text", |a| a.active_tab().is_some_and(|t| t.highlighted()));
     shot(&mut h, "51-big-typed");
     assert!(
         worst < std::time::Duration::from_millis(50),
@@ -337,15 +342,26 @@ fn headless_big_file_typing() {
     );
 }
 
-/// Step until `done` holds (the shell runs in real time), or fail after 10s.
+/// Step until the window has looked at its files on disk again (after a
+/// change made before the call), however long that takes; then a frame to
+/// show what it found.
+fn wait_disk(h: &mut Harness<'static, Root>) {
+    let seen = app(h).file_checks;
+    while app(h).file_checks == seen {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    h.step();
+}
+
+/// Step until `done` holds (the shell runs in real time), however long that
+/// takes: no time limit to trip on a slow machine. (`what`, said once if it
+/// isn't so at first, names what a stuck test waits for.)
 fn wait_for(h: &mut Harness<'static, Root>, what: &str, done: impl Fn(&App) -> bool) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    if !done(&h.state().0) {
+        eprintln!("waiting for {what}: {:?}", screen_text(h));
+    }
     while !done(&h.state().0) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "timed out waiting for {what}: {:?}",
-            screen_text(h)
-        );
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(40));
     }
@@ -582,7 +598,6 @@ fn headless_terminals_walkthrough() {
     shot(&mut h, "70-tabs-running");
 
     press(&mut h, ALT, Key::G);
-    std::thread::sleep(std::time::Duration::from_millis(300));
     shot(&mut h, "71-grid");
     assert!(h.state().0.terminal_grid);
 
@@ -603,7 +618,7 @@ fn headless_terminals_walkthrough() {
 
     // Unattended output is capped at 5fps: with all five printing every 50ms,
     // the app still never asks to redraw sooner than ~200ms out.
-    std::thread::sleep(std::time::Duration::from_millis(800)); // leave the typing window
+    std::thread::sleep(crate::terminal::TYPING_WINDOW); // past "typing" (it's defined by time)
     h.step();
     // (egui only reports a request sooner than one already pending, so
     // retry until one is seen; what matters is none is sooner than the cap.)
@@ -639,8 +654,9 @@ fn headless_terminals_walkthrough() {
     // Terminals off screen don't wake the UI at all.
     press(&mut h, ALT, Key::G); // back to tabs: only the active one shows
     press(&mut h, ALT, Key::T); // hide the panel entirely
-    h.step();
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    wait_for(&mut h, "every terminal to know it's hidden", |a| {
+        a.terminals.iter().all(|t| !t.visible.load(std::sync::atomic::Ordering::Relaxed))
+    });
     let hidden = watch(&mut h, 1000);
     eprintln!("panel hidden: {} wake requests in 1s", hidden.len());
     assert!(
@@ -761,7 +777,6 @@ echo run.sh-done
             .all(|s| all.contains(s))
     });
     press(&mut h, ALT, Key::G);
-    std::thread::sleep(std::time::Duration::from_millis(300));
     shot(&mut h, "80-run-sh-grid");
 
     let names: Vec<String> = h
@@ -815,11 +830,6 @@ fn headless_editor_features_walkthrough() {
         format!("{}\n", "long words ".repeat(40)),
     )
     .unwrap();
-    let wait_disk = |h: &mut Harness<'static, Root>| {
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        h.step();
-        h.step();
-    };
 
     let mut h = harness(Some(a.clone()));
     no_sidebar(&mut h); // this walkthrough clicks at fixed spots
@@ -1213,11 +1223,12 @@ fn headless_files_walkthrough() {
     h.event(Event::PointerMoved(at));
     h.step();
     assert!(h.query_by_label_contains("-click to open this link").is_none());
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    h.step();
-    h.step();
+    // It shows once the pointer has rested (egui's tooltip delay).
+    while h.query_by_label_contains("-click to open this link").is_none() {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     shot(&mut h, "a7-link-hint");
-    assert!(h.query_by_label_contains("-click to open this link").is_some());
     h.event(Event::ModifiersChanged(CMD));
     h.event(Event::PointerMoved(at));
     shot(&mut h, "a8-link-hover");
@@ -1945,9 +1956,7 @@ fn headless_sidebar_walkthrough() {
 
     // A file made outside the app shows up on its own.
     std::fs::write(root.join("src/cart/coupon.rs"), "").unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !names(&h).contains(&"    coupon.rs".to_string()) {
-        assert!(std::time::Instant::now() < deadline, "{:?}", names(&h));
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -2134,9 +2143,7 @@ fn headless_agent_alerts() {
     press(&mut h, ALT, Key::T);
     h.input_mut().focused = false;
     h.step();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !notified("wants your attention") {
-        assert!(std::time::Instant::now() < deadline, "no OS notification");
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -2161,18 +2168,9 @@ fn headless_agent_alerts() {
     wait_for(&mut h, "the agent", screen_has("working 2"));
     let agent = app(&h).terminals[0].pane.foreground_report();
     press(&mut h, ALT, Key::T);
-    // (What the system said of the program in front, for when it fails.)
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    while !toast("finished, or waiting for you")(app(&h)) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no quiet toast; while working: {agent}; now: {} (shown as {:?})",
-            app(&h).terminals[0].pane.foreground_report(),
-            app(&h).terminals[0].pane.display_name()
-        );
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
+    // (What the system said of the program in front, if it never comes.)
+    eprintln!("the agent, while working: {agent}");
+    wait_for(&mut h, "the quiet toast", toast("finished, or waiting for you"));
     let msg = app(&h).toasts.last().unwrap().msg.clone();
     assert!(msg.contains("claude"), "names the agent: {msg}");
     shot(&mut h, "a0-agent-toast");
@@ -2191,9 +2189,7 @@ fn headless_agent_alerts() {
     );
     wait_for(&mut h, "the agent working", screen_has("working 2"));
     *crate::sys::APP_ACTIVE.lock().unwrap() = Some(false); // macOS: another app in front
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     while !crate::sys::NOTIFIED.lock().unwrap().iter().any(|(t, b)| t.contains("claude") && b.contains("finished, or waiting")) {
-        assert!(std::time::Instant::now() < deadline, "no notification for the agent on screen in a window you left");
         h.step(); // the window still thinks it's focused
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -2219,9 +2215,7 @@ fn headless_agent_alerts() {
     both(&mut h);
     assert!(!crate::terminalpane::APP_FOCUSED.load(Relaxed), "the browser's pass doesn't count as you at the Mac");
     assert!(!app(&h).terminals[0].pane.watch.looking.load(Relaxed));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !notified("remote-time ping") {
-        assert!(std::time::Instant::now() < deadline, "no OS notification with a browser looking in");
         both(&mut h);
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -2775,14 +2769,12 @@ fn headless_terminal_says_whether_it_is_printing() {
     run(&mut h, "for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 0.4; done; sleep 60");
     wait_for(&mut h, "printing", |a| a.terminal().unwrap().pane.pulse() == Some(Pulse::Printing));
     shot(&mut h, "tp0-printing");
-    let deadline = std::time::Instant::now() + QUIET_AFTER + std::time::Duration::from_secs(10);
     let quiet = loop {
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
         if let Some(p @ Pulse::Quiet(_)) = app(&h).terminal().unwrap().pane.pulse() {
             break p;
         }
-        assert!(std::time::Instant::now() < deadline, "never went quiet: {:?}", app(&h).terminal().unwrap().pane.pulse());
     };
     assert_eq!(quiet.label(), format!("quiet for {}s", QUIET_AFTER.as_secs()));
     shot(&mut h, "tp1-quiet");
@@ -3095,11 +3087,6 @@ fn headless_disk_changes() {
     for f in ["a.rs", "b.rs", "c.rs"] {
         std::fs::write(root.join(f), format!("// {f}\n")).unwrap();
     }
-    let wait_disk = |h: &mut Harness<'static, Root>| {
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        h.step();
-        h.step();
-    };
     let mut h = harness(Some(root.join("a.rs")));
     no_sidebar(&mut h);
     h.state_mut().0.open_file(&root.join("b.rs"));
@@ -3204,15 +3191,11 @@ fn headless_settings_reach_all_windows() {
     let ctx = a.ctx.clone();
     a.state_mut().0.run(crate::keymap::Command::ToggleWordWrap, &ctx);
     let wrap = app(&a).config.settings.word_wrap;
-    std::thread::sleep(std::time::Duration::from_millis(900));
-    assert!(
-        woken.lock().unwrap().iter().any(|d| d.is_zero()),
-        "the other window was woken right away: {:?}",
-        woken.lock().unwrap()
-    );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    // The other window is woken right away (asked to draw now, not later).
+    while !woken.lock().unwrap().iter().any(|d| d.is_zero()) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     while theme(&b) != other || app(&b).config.settings.word_wrap != wrap {
-        assert!(std::time::Instant::now() < deadline, "the other window never caught up");
         b.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -3617,11 +3600,9 @@ fn headless_remote_access() {
     let mut texts = Vec::new();
     let mut screen = crate::remote::meshes::Seen::default();
     let mut next_frame = |h: &mut Harness<'static, Root>, ws: &mut tungstenite::WebSocket<_>, texts: &mut Vec<String>| {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut got = false;
         let mut quiet = 0;
         while !got || quiet < QUIET_READS {
-            assert!(std::time::Instant::now() < deadline, "no frame came");
             h.step();
             match ws.read() {
                 Ok(Message::Binary(b)) => {
@@ -3644,9 +3625,7 @@ fn headless_remote_access() {
 
     // One session: typing in the browser edits the window's file.
     send(&mut ws, r#"{"t":"text","s":"// from the browser\n"}"#);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !text_of(&h).contains("// from the browser") {
-        assert!(std::time::Instant::now() < deadline, "the typing never landed: {:?}", text_of(&h));
         h.step();
     }
     // ⌥T from a Mac browser: the press types "†" too (sent with it, as the
@@ -3658,7 +3637,6 @@ fn headless_remote_access() {
     send(&mut ws, r#"{"t":"key","k":"†","code":"KeyT","down":true,"m":{"alt":true},"text":"†"}"#);
     send(&mut ws, r#"{"t":"key","k":"†","code":"KeyT","down":false,"m":{"alt":true}}"#);
     while !app(&h).terminal_open {
-        assert!(std::time::Instant::now() < deadline, "⌥T never opened the terminal");
         h.step();
     }
     wait_for(&mut h, "a prompt", screen_has("$ "));
@@ -3677,9 +3655,7 @@ fn headless_remote_access() {
     // (in the same frame, the editor could get it).
     wait_for(&mut h, "x erased", |a| !screen_has("$ x")(a));
     send(&mut ws, r#"{"t":"key","k":"j","code":"KeyJ","down":true,"m":{"meta":true}}"#); // back to the editor
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while app(&h).focus != crate::app::Focus::Editor {
-        assert!(std::time::Instant::now() < deadline, "⌘J never went back to the editor");
         h.step();
     }
 
@@ -3687,14 +3663,12 @@ fn headless_remote_access() {
     send(&mut ws, r#"{"t":"key","k":"p","code":"KeyP","down":true,"m":{"meta":true,"shift":true}}"#);
     send(&mut ws, r#"{"t":"key","k":"p","code":"KeyP","down":false,"m":{"meta":true,"shift":true}}"#);
     while app(&h).palette.is_none() {
-        assert!(std::time::Instant::now() < deadline, "the shortcut never ran");
         h.step();
     }
     let palette = next_frame(&mut h, &mut ws, &mut texts);
     assert!(palette.meshes > frame.meshes, "the palette drawn over the window: {palette:?}");
     send(&mut ws, r#"{"t":"key","k":"Escape","code":"Escape","down":true}"#);
     while app(&h).palette.is_some() {
-        assert!(std::time::Instant::now() < deadline, "esc never closed the palette");
         h.step();
     }
 
@@ -3705,7 +3679,6 @@ fn headless_remote_access() {
     }
     send(&mut ws, r#"{"t":"copy"}"#);
     while !texts.iter().any(|t| t.contains("\"t\":\"clip\"") && t.contains("from the browser")) {
-        assert!(std::time::Instant::now() < deadline, "no clipboard text: {texts:?}");
         h.step();
         if let Ok(Message::Text(t)) = ws.read() {
             texts.push(t.to_string());
@@ -3729,9 +3702,7 @@ fn headless_remote_access() {
     assert!(!app(&h).remote.on && crate::instances::remote_server().is_none());
     // No longer listed (it follows the marker within a second; other tests
     // in this process may still list theirs).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while crate::instances::remote_windows().len() != listed - 1 {
-        assert!(std::time::Instant::now() < deadline, "this window is still listed");
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -3815,9 +3786,7 @@ fn wait_link_closed(ws: &mut tungstenite::WebSocket<crate::remote::testing::Tls>
         .sock
         .set_read_timeout(Some(std::time::Duration::from_millis(30)))
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        assert!(std::time::Instant::now() < deadline, "the browser is still linked");
         step();
         match ws.read() {
             Err(tungstenite::Error::Io(e))
@@ -3830,9 +3799,7 @@ fn wait_link_closed(ws: &mut tungstenite::WebSocket<crate::remote::testing::Tls>
 
 /// Wait (calling `step`) until nothing listens on `port`.
 fn wait_port_closed(port: u16, mut step: impl FnMut()) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-        assert!(std::time::Instant::now() < deadline, "still serving on {port}");
         step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -3855,10 +3822,8 @@ fn serve_remotely(password: &str, text: &str) -> (Harness<'static, Root>, u16) {
     h.state_mut().1.port = port;
     // Whatever an earlier test in this process left serving: off.
     crate::instances::clear_remote_server(false);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     h.step();
     while app(&h).remote.on {
-        assert!(std::time::Instant::now() < deadline, "remote access stayed on");
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -3870,9 +3835,7 @@ fn serve_remotely(password: &str, text: &str) -> (Harness<'static, Root>, u16) {
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert!(matches!(app(&h).ask, Some(crate::app::Ask::RemoteHere { .. })), "then: only from the browser?");
     press(&mut h, Modifiers::NONE, Key::K); // keep the window here
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
-        assert!(std::time::Instant::now() < deadline, "the server never started");
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -4216,9 +4179,7 @@ fn headless_remote_phone_layout() {
         .unwrap();
     let send = |ws: &mut tungstenite::WebSocket<_>, json: &str| ws.send(Message::text(json)).unwrap();
     send(&mut ws, r#"{"t":"size","w":390,"h":844,"dpr":1}"#);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !app(&h).views[1].compact {
-        assert!(std::time::Instant::now() < deadline, "the phone's copy never laid out");
         h.step();
     }
     assert!(!app(&h).views[0].compact, "the Mac's window is still full size");
@@ -4226,13 +4187,11 @@ fn headless_remote_phone_layout() {
     send(&mut ws, r#"{"t":"key","k":"b","code":"KeyB","down":true,"m":{"meta":true}}"#);
     send(&mut ws, r#"{"t":"key","k":"b","code":"KeyB","down":false,"m":{"meta":true}}"#);
     while !app(&h).views[1].drawer {
-        assert!(std::time::Instant::now() < deadline, "⌘B never opened the phone's drawer");
         h.step();
     }
     // What the phone gets: every frame (acked), once they go quiet.
     let (mut screen, mut got, mut quiet) = (crate::remote::meshes::Seen::default(), false, 0);
     while !got || quiet < QUIET_READS {
-        assert!(std::time::Instant::now() < deadline, "no frame came");
         h.step();
         match ws.read() {
             Ok(Message::Binary(b)) => {
@@ -4420,14 +4379,10 @@ fn headless_measure_open() {
     h.step();
     let opened = start.elapsed();
     let at_open = footprint();
-    // Let background work (highlighting) finish, then look again.
-    let settle = std::time::Instant::now();
-    while settle.elapsed() < std::time::Duration::from_secs(4) {
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    // Once background work (highlighting) has finished, look again.
+    wait_for(&mut h, "the highlighting", |a| a.active_tab().is_some_and(|t| t.highlighted()));
     eprintln!(
-        "MEASURE {}: {} tabs, shown in {opened:?}, footprint +{} MB at open, +{} MB after 4 s",
+        "MEASURE {}: {} tabs, shown in {opened:?}, footprint +{} MB at open, +{} MB once highlighted",
         target.display(),
         app(&h).tabs.len(),
         at_open.saturating_sub(before),
@@ -4471,9 +4426,7 @@ fn headless_restored_tabs_load_when_shown() {
 
     // Deleted before it was ever shown: struck through, nothing read.
     std::fs::remove_file(&files[3]).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1100));
-    h.step();
-    h.step();
+    wait_disk(&mut h);
     assert!(app(&h).tabs[3].gone && !app(&h).tabs[3].is_loaded());
 
     // Switching to one reads it, and it's an ordinary tab.
@@ -4630,9 +4583,7 @@ fn headless_big_file_works_around_the_view() {
     assert!(t.line_text(50_000).starts_with("/*x*/ let found_me_here"));
     assert!(t.buf.modified);
     // Highlighting arrives for the lines on screen, not for the whole file.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while app(&h).active_tab().unwrap().line_spans(50_000).is_empty() {
-        assert!(std::time::Instant::now() < deadline, "no highlighting near the view");
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(30));
     }

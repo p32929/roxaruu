@@ -214,6 +214,8 @@ pub struct App {
     /// A file dialog (new / rename / delete) or "open this link?".
     pub ask: Option<Ask>,
     last_file_check: Instant,
+    /// Looks at the open files on disk so far (tests wait for the next one).
+    pub(crate) file_checks: u64,
     /// Set once unsaved work is dealt with, so the window may really close.
     pub(crate) allow_close: bool,
     pub palette: Option<Palette>,
@@ -284,6 +286,7 @@ impl App {
             conflict: None,
             ask: None,
             last_file_check: Instant::now(),
+            file_checks: 0,
             allow_close: false,
             palette: None,
             find: None,
@@ -439,8 +442,10 @@ impl App {
         if let Some(t) = self.active_tab_mut() {
             t.refresh(Some(ctx));
         }
-        if let (Some(f), Some(i)) = (&mut self.find, self.active) {
-            f.refresh(&self.tabs[i].buf, i);
+        if let (Some(f), Some(i)) = (&mut self.find, self.active)
+            && let Some(t) = self.tabs.get(i)
+        {
+            f.refresh(&t.buf, i);
         }
         // Coming back to the window is when files most likely changed.
         if ctx.input(|i| {
@@ -1129,7 +1134,7 @@ impl App {
 
     fn save_all(&mut self) {
         let dirty: Vec<usize> = (0..self.tabs.len())
-            .filter(|&i| self.tabs[i].buf.modified)
+            .filter(|&i| self.tabs.get(i).is_some_and(|t| t.buf.modified))
             .collect();
         let saved = dirty.iter().filter(|&&i| self.save_tab(i)).count();
         if saved == dirty.len() {
@@ -1235,11 +1240,12 @@ impl App {
     /// Open the find bar on the active tab (with the replace field if asked).
     fn open_find(&mut self, replace: bool) {
         let Some(i) = self.active else { return };
+        let Some(tab) = self.tabs.get_mut(i) else { return };
         let previous = self.find.take();
-        let mut f = Find::open(&self.tabs[i].buf, i, replace, previous);
-        f.jump_from_origin(&mut self.tabs[i].buf);
-        self.tabs[i].reveal = true;
-        if let Some(h) = &mut self.tabs[i].huge {
+        let mut f = Find::open(&tab.buf, i, replace, previous);
+        f.jump_from_origin(&mut tab.buf);
+        tab.reveal = true;
+        if let Some(h) = &mut tab.huge {
             // Read-only: find, no replace; it searches the file on disk.
             f.replace_open = false;
             f.in_replace = false;
@@ -1261,11 +1267,13 @@ impl App {
     /// Whether a dialog (save changes? / changed on disk?) owns the keyboard.
     /// The layout of the view being drawn (or the window's, between frames).
     pub(crate) fn view(&self) -> View {
-        self.views[usize::from(self.remote_pass)]
+        let [window, remote] = self.views;
+        if self.remote_pass { remote } else { window }
     }
 
     pub(crate) fn view_mut(&mut self) -> &mut View {
-        &mut self.views[usize::from(self.remote_pass)]
+        let [window, remote] = &mut self.views;
+        if self.remote_pass { remote } else { window }
     }
 
     pub fn modal_open(&self) -> bool {
@@ -1461,8 +1469,9 @@ impl App {
             return;
         }
         self.last_file_check = Instant::now();
+        self.file_checks += 1;
         for i in 0..self.tabs.len() {
-            let tab = &mut self.tabs[i];
+            let Some(tab) = self.tabs.get_mut(i) else { continue };
             let name = tab.buf.name();
             if !tab.is_loaded() {
                 // Not read yet: whether it's still there is all that matters.
@@ -1525,7 +1534,7 @@ impl App {
         let Some(i) = self.tabs.iter().position(|t| t.path() == Some(&path)) else {
             return;
         };
-        let tab = &mut self.tabs[i];
+        let Some(tab) = self.tabs.get_mut(i) else { return };
         let news = tab.disk_news.take();
         if news == Some(DiskStatus::Deleted) {
             if first {
@@ -1759,10 +1768,10 @@ impl App {
         let running: Vec<String> =
             self.terminals.iter().filter(|t| t.pane.is_running()).map(|t| t.pane.display_name()).collect();
         let idle = self.terminals.len() - running.len();
-        match running.len() {
-            0 => {}
-            1 => v.push(format!("A terminal is still running ({}): it will be stopped.", running[0])),
-            n => v.push(format!("{n} terminals are still running ({}): they will be stopped.", running.join(", "))),
+        match running.as_slice() {
+            [] => {}
+            [one] => v.push(format!("A terminal is still running ({one}): it will be stopped.")),
+            many => v.push(format!("{} terminals are still running ({}): they will be stopped.", many.len(), running.join(", "))),
         }
         match idle {
             0 => {}
@@ -1810,7 +1819,7 @@ impl App {
         {
             let idx = self.tabs.iter().position(|t| t.path() == Some(&path));
             match idx {
-                Some(i) if self.tabs[i].buf.modified => {
+                Some(i) if self.tabs.get(i).is_some_and(|t| t.buf.modified) => {
                     self.active = Some(i);
                     if let Some(all) = self.prompt.as_ref().and_then(|p| p.all) {
                         return self.answer_prompt(all, ctx);
@@ -2210,7 +2219,7 @@ impl App {
                 icon: icon::TERMINAL,
                 matched: fuzzy::positions(query, &label),
                 label,
-                detail: self.terminals[i].pane.pulse().map(|p| p.label()).unwrap_or_default(),
+                detail: self.terminals.get(i).and_then(|t| t.pane.pulse()).map(|p| p.label()).unwrap_or_default(),
                 caps: if i < 9 {
                     self.config
                         .keymap

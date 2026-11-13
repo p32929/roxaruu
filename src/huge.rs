@@ -54,7 +54,7 @@ impl LineIndex {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e),
             };
-            for i in memchr::memchr_iter(b'\n', &buf[..n]) {
+            for i in memchr::memchr_iter(b'\n', buf.get(..n).unwrap_or_default()) {
                 let end = ix.bytes + i as u64;
                 ix.longest = ix.longest.max((end - line_start) as usize);
                 line_start = end + 1;
@@ -101,7 +101,7 @@ impl LineIndex {
             };
             if line >= range.start {
                 let room = LINE_CAP.saturating_sub(cur.len());
-                cur.extend_from_slice(&buf[..take.min(room)]);
+                cur.extend_from_slice(buf.get(..take.min(room)).unwrap_or_default());
             }
             r.consume(take + usize::from(done));
             if done {
@@ -149,7 +149,7 @@ impl LineIndex {
                 break;
             }
             let n = buf.len().min((offset - pos) as usize);
-            for i in memchr::memchr_iter(b'\n', &buf[..n]) {
+            for i in memchr::memchr_iter(b'\n', buf.get(..n).unwrap_or_default()) {
                 line += 1;
                 start = pos + i as u64 + 1;
             }
@@ -286,7 +286,7 @@ impl HugeView {
         let (first, have) = (self.cache.0, &self.cache.1);
         let a = range.start.saturating_sub(first).min(have.len());
         let b = end.saturating_sub(first).clamp(a, have.len());
-        Ok(&have[a..b])
+        Ok(have.get(a..b).unwrap_or_default())
     }
 
     /// One line, read now (for previews and copying).
@@ -331,7 +331,7 @@ impl HugeView {
         let (line, start) = self.index.line_at(&file, at)?;
         let text = self.line(line);
         let before = ((at - start) as usize).min(text.len());
-        let col = String::from_utf8_lossy(&text.as_bytes()[..before]).chars().count();
+        let col = String::from_utf8_lossy(text.as_bytes().get(..before).unwrap_or_default()).chars().count();
         self.found = Some((line, col, col + needle.chars().count(), at));
         self.go_to(line);
         if col < self.col || col + needle.len() > self.col + self.cols_shown {

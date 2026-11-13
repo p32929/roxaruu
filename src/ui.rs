@@ -674,10 +674,10 @@ impl Paint {
     /// As many of `hints` as fit in `room`, left to right, keeping their
     /// order: put the most useful first, so a narrow window drops the rest.
     fn hints_in(&self, ui: &egui::Ui, p: &egui::Painter, room: Rect, hints: &[Hint], size: f32) {
-        let width = |n: usize| self.key_hints(ui, None, &hints[..n], size, Pos2::ZERO);
+        let width = |n: usize| self.key_hints(ui, None, hints.get(..n).unwrap_or(hints), size, Pos2::ZERO);
         let n = (0..=hints.len()).rev().find(|&n| width(n) <= room.width()).unwrap_or(0);
-        if n > 0 {
-            self.key_hints(ui, Some(p), &hints[..n], size, room.left_center());
+        if let Some(shown) = hints.get(..n).filter(|h| !h.is_empty()) {
+            self.key_hints(ui, Some(p), shown, size, room.left_center());
         }
     }
 
@@ -1029,10 +1029,11 @@ impl App {
         let galleys: Vec<_> = self
             .tabs
             .iter()
+            .zip(&names)
             .enumerate()
-            .map(|(i, tab)| {
+            .map(|(i, (tab, name))| {
                 // Same-named files get their folder alongside, to tell them apart.
-                let dup = names.iter().filter(|n| **n == names[i]).count() > 1;
+                let dup = names.iter().filter(|n| *n == name).count() > 1;
                 let detail = tab
                     .path()
                     .and_then(|p| p.parent())
@@ -1048,7 +1049,7 @@ impl App {
                     fmt.color = c.error.gamma_multiply(0.85);
                     fmt.strikethrough = Stroke::new(1.5 * s, c.error.gamma_multiply(0.85));
                 }
-                job.append(&short_name(&names[i], TAB_NAME_MAX), 0.0, fmt);
+                job.append(&short_name(name, TAB_NAME_MAX), 0.0, fmt);
                 if !detail.is_empty() {
                     job.append(
                         &format!("  {detail}"),
@@ -1071,12 +1072,16 @@ impl App {
         // The dragged tab drawn last, over the others.
         let order = (0..self.tabs.len()).filter(|i| Some(*i) != dragged).chain(dragged);
         for i in order {
-            let (tab, g, rect) = (&self.tabs[i], galleys[i].clone(), lay.rects[i]);
+            let (Some(tab), Some(g), Some(&rect), Some(name)) =
+                (self.tabs.get(i), galleys.get(i).cloned(), lay.rects.get(i), names.get(i))
+            else {
+                continue;
+            };
             if !rect.intersects(room) {
                 continue;
             }
             let active = self.active == Some(i);
-            let (glyph, tint) = icon::for_file(&names[i]);
+            let (glyph, tint) = icon::for_file(name);
             let resp = ui.interact(rect.intersect(room), ui.scope_id().with(("tab", i)), Sense::click_and_drag());
             if resp.drag_started()
                 && let Some(at) = resp.interact_pointer_pos()
@@ -1123,7 +1128,7 @@ impl App {
                 let path = if tab.path().is_some() {
                     self.tab_rel(tab)
                 } else {
-                    names[i].clone()
+                    name.clone()
                 };
                 let gone = if tab.gone {
                     format!(
@@ -1313,14 +1318,16 @@ impl App {
             )),
             None,
         );
-        let answer = picked.map(|i| {
+        let answer = picked.and_then(|i| {
             [
                 Answer::Discard,
                 Answer::Cancel,
                 Answer::Save,
                 Answer::DiscardAll,
                 Answer::SaveAll,
-            ][i]
+            ]
+            .get(i)
+            .copied()
         });
         if let Some(a) = answer {
             self.answer_prompt(a, ctx);
@@ -1784,8 +1791,9 @@ impl App {
                         if stacked {
                             let order = (1..buttons.len()).rev().chain(buttons.first().map(|_| 0));
                             for i in order {
+                                let Some(b) = buttons.get(i) else { continue };
                                 let full = egui::Layout::top_down_justified(egui::Align::Center);
-                                if ui.with_layout(full, |ui| button(ui, &buttons[i])).inner {
+                                if ui.with_layout(full, |ui| button(ui, b)).inner {
                                     clicked = Some(i);
                                 }
                             }
@@ -2539,7 +2547,7 @@ impl App {
             self.welcome_selected = (self.welcome_selected + n - 1) % n;
         }
         self.welcome_selected %= n;
-        let mut chosen = enter.then(|| actions[self.welcome_selected]);
+        let mut chosen = enter.then(|| actions.get(self.welcome_selected).copied()).flatten();
 
         let area = ui.max_rect();
         let mark = 56.0 * s;
@@ -2715,7 +2723,7 @@ impl App {
         let page = ((view.y / row_h) as usize).saturating_sub(2).max(1);
         let now = ui.input(|inp| inp.time);
         let wrap = self.config.settings.word_wrap;
-        let v = usize::from(self.remote_pass);
+        let v = self.remote_pass;
         // The right-click menu, made before the tab is borrowed for drawing.
         let menu = self.editor_menu();
         let keys: Vec<(Command, String)> = menu
@@ -2754,7 +2762,7 @@ impl App {
         let wrap_cols = ((view.x - text_x - 24.0) / char_w).floor().max(20.0) as usize;
         let (rows, shift) = if wrap {
             let crow = tab.buf.cursor_row();
-            let near = if tab.reveal_in[v] { crow..crow + 1 } else { tab.view.clone() };
+            let near = if *side(&mut tab.reveal_in, v) { crow..crow + 1 } else { tab.view.clone() };
             let (layout, shift) = tab.wrap_layout(wrap_cols, near);
             (layout.clone(), shift)
         } else {
@@ -2804,16 +2812,16 @@ impl App {
             egui::scroll_area::ScrollSource::MOUSE_WHEEL
                 | egui::scroll_area::ScrollSource::SCROLL_BAR,
         );
-        if std::mem::take(&mut tab.restore_in[v]) {
-            area = area.vertical_scroll_offset(tab.scroll[v].y.max(0.0));
+        if std::mem::take(side(&mut tab.restore_in, v)) {
+            area = area.vertical_scroll_offset(side(&mut tab.scroll, v).y.max(0.0));
             if !wrap {
-                area = area.horizontal_scroll_offset(tab.scroll[v].x.max(0.0));
+                area = area.horizontal_scroll_offset(side(&mut tab.scroll, v).x.max(0.0));
             }
         }
-        let revealing = std::mem::take(&mut tab.reveal_in[v]);
+        let revealing = std::mem::take(side(&mut tab.reveal_in, v));
         if revealing {
             let (top, bottom) = (caret_row as f32 * row_h, (caret_row + 1) as f32 * row_h);
-            let mut y = tab.scroll[v].y;
+            let mut y = side(&mut tab.scroll, v).y;
             if top < y {
                 y = top;
             } else if bottom > y + view.y - row_h {
@@ -2821,7 +2829,7 @@ impl App {
             }
             area = area.vertical_scroll_offset(y.max(0.0));
             if !wrap {
-                let mut x = tab.scroll[v].x;
+                let mut x = side(&mut tab.scroll, v).x;
                 if caret_x - text_x - 4.0 * char_w < x {
                     x = (caret_x - text_x - 4.0 * char_w).max(0.0);
                 } else if caret_x + 4.0 * char_w > x + view.x {
@@ -2832,7 +2840,7 @@ impl App {
         }
 
         if shift != 0 && !revealing {
-            area = area.vertical_scroll_offset((tab.scroll[v].y + shift as f32 * row_h).max(0.0));
+            area = area.vertical_scroll_offset((side(&mut tab.scroll, v).y + shift as f32 * row_h).max(0.0));
         }
 
         // Caret: solid while typing, then blinking; none while the keyboard is elsewhere.
@@ -2922,7 +2930,7 @@ impl App {
 
                 // Find matches on this row (they're sorted: skip to the first).
                 let first = found.partition_point(|m| m.1 <= start);
-                for &(a, e) in found[first..].iter().take_while(|m| m.0 <= start + len) {
+                for &(a, e) in found.iter().skip(first).take_while(|m| m.0 <= start + len) {
                     let x0 = tx + char_to_col(line, a.max(start) - start) as f32 * char_w;
                     let x1 = tx + char_to_col(line, e.min(start + len) - start) as f32 * char_w;
                     let r =
@@ -2987,7 +2995,7 @@ impl App {
                 }
             }
         });
-        tab.scroll[v] = out.state.clamped_offset();
+        *side(&mut tab.scroll, v) = out.state.clamped_offset();
         tab.view = shown;
 
         // Mouse: click places the caret, drag selects, Shift+click extends,
@@ -3020,7 +3028,7 @@ impl App {
         if !(pressed || dragging || resp.double_clicked() || resp.triple_clicked()) {
             return false;
         }
-        let r = (((ptr.y - viewport.top() + tab.scroll[v].y) / row_h)
+        let r = (((ptr.y - viewport.top() + side(&mut tab.scroll, v).y) / row_h)
             .floor()
             .max(0.0) as usize)
             .min(n_rows.saturating_sub(1));
@@ -3034,7 +3042,7 @@ impl App {
             s.trim_end_matches(['\n', '\r']).to_string()
         };
         let piece: String = full.chars().skip(s0).take(e0.saturating_sub(s0)).collect();
-        let col = (ptr.x - viewport.left() + tab.scroll[v].x - text_x) / char_w;
+        let col = (ptr.x - viewport.left() + side(&mut tab.scroll, v).x - text_x) / char_w;
         let idx = b.rope.line_to_char(l) + s0 + col_to_char(&piece, col.max(0.0));
         let shift = ui.input(|inp| inp.modifiers.shift);
         if resp.triple_clicked() {
@@ -3461,8 +3469,8 @@ impl App {
             title_resp.context_menu(|ui| {
                 tile_pick = tile_pick.or(command_menu(ui, &self.tab_menu(i), &|c| self.shortcut(c)));
             });
-            let name = self.tabs[i].buf.name();
-            let dot = if self.tabs[i].buf.modified {
+            let (name, modified) = self.tabs.get(i).map_or_else(Default::default, |t| (t.buf.name(), t.buf.modified));
+            let dot = if modified {
                 "  ●"
             } else {
                 ""
@@ -3855,7 +3863,9 @@ impl App {
         let dragged = strip.drag.map(|d| d.from);
         let order = (0..labels.len()).filter(|i| Some(*i) != dragged).chain(dragged);
         for i in order {
-            let (label, g, rect) = (&labels[i], galleys[i].clone(), lay.rects[i]);
+            let (Some(label), Some(g), Some(&rect)) = (labels.get(i), galleys.get(i).cloned(), lay.rects.get(i)) else {
+                continue;
+            };
             if !rect.intersects(room) {
                 continue;
             }
@@ -3905,7 +3915,7 @@ impl App {
                 } else {
                     None
                 };
-                let status = self.terminals[i].pane.pulse().map_or("idle".into(), Pulse::label);
+                let status = self.terminals.get(i).and_then(|t| t.pane.pulse()).map_or("idle".into(), Pulse::label);
                 // Switch Terminal's list only with more than one.
                 let all = self
                     .available(Command::SwitchTerminal)
@@ -3953,7 +3963,7 @@ impl App {
             // Right slot: × on hover; else what it's doing, in the accent:
             // printing (the dot breathes), running but quiet (it holds
             // still), or finished unseen (✓).
-            let t = &self.terminals[i];
+            let Some(t) = self.terminals.get(i) else { continue };
             let pulse = t.pane.pulse();
             let (glyph, color, size) = if resp.hovered() {
                 (
@@ -4048,7 +4058,7 @@ impl App {
                     tile_pick =
                         tile_pick.or(command_menu(ui, &self.terminal_menu(i), &|c| self.shortcut(c)));
                 });
-                let label = format!("{}  {}", i + 1, labels[i]);
+                let label = format!("{}  {}", i + 1, labels.get(i).map_or("", String::as_str));
                 p.with_clip_rect(title.shrink(4.0)).text(
                     pos2(title.left() + 10.0 * s, title.center().y),
                     Align2::LEFT_CENTER,
@@ -4282,38 +4292,23 @@ impl App {
             }
             let x_of = |col: u16| inner.left() + col as f32 * char_w;
             // Backgrounds.
-            let mut i = 0;
-            while i < cells.len() {
-                let mut j = i + 1;
-                while j < cells.len() && cells[j].bg == cells[i].bg {
-                    j += 1;
-                }
-                if let Some(bg) = cells[i].bg {
-                    let end = cells[j - 1].col + if cells[j - 1].wide { 2 } else { 1 };
+            for run in cells.chunk_by(|a, b| a.bg == b.bg) {
+                let (Some(first), Some(last)) = (run.first(), run.last()) else { continue };
+                if let Some(bg) = first.bg {
+                    let end = last.col + if last.wide { 2 } else { 1 };
                     p.rect_filled(
-                        Rect::from_x_y_ranges(x_of(cells[i].col)..=x_of(end), y..=y + row_h),
+                        Rect::from_x_y_ranges(x_of(first.col)..=x_of(end), y..=y + row_h),
                         0.0,
                         bg,
                     );
                 }
-                i = j;
             }
             // Text.
-            let mut i = 0;
-            while i < cells.len() {
-                let first = &cells[i];
-                let simple = |k: &Cell| k.text.is_ascii() && !k.wide;
-                let mut j = i + 1;
-                if simple(first) {
-                    while j < cells.len()
-                        && simple(&cells[j])
-                        && (cells[j].fg, cells[j].italic, cells[j].underline)
-                            == (first.fg, first.italic, first.underline)
-                    {
-                        j += 1;
-                    }
-                }
-                let text: String = cells[i..j].iter().map(|k| k.text.as_str()).collect();
+            let simple = |k: &Cell| k.text.is_ascii() && !k.wide;
+            let style = |k: &Cell| (k.fg, k.italic, k.underline);
+            for run in cells.chunk_by(|a, b| simple(a) && simple(b) && style(a) == style(b)) {
+                let Some(first) = run.first() else { continue };
+                let text: String = run.iter().map(|k| k.text.as_str()).collect();
                 if !text.trim().is_empty() || first.underline {
                     let mut fmt = egui::TextFormat::simple(font.clone(), first.fg);
                     fmt.italics = first.italic;
@@ -4327,7 +4322,6 @@ impl App {
                         first.fg,
                     );
                 }
-                i = j;
             }
         }
         if !screen.hide_cursor() && pane.scroll_offset() == 0 && !pane.copy_mode() {
@@ -5322,7 +5316,7 @@ impl App {
                 }
                 let painter = ui.painter().clone();
                 for (n, idx) in (pal.scroll..pal.scroll + shown).enumerate() {
-                    let item = &pal.items[idx];
+                    let Some(item) = pal.items.get(idx) else { break };
                     let t = if idx == pal.selected { 1.0 } else { 0.0 };
                     let label = pt.label(
                         &item.label,
@@ -5364,7 +5358,7 @@ impl App {
                     .hline(foot.x_range(), foot.top() + 0.5, Stroke::new(1.0, c.border));
                 for (i, h) in hints.iter().enumerate() {
                     let (row, col) = (i / cols, i % cols);
-                    let x = foot.left() + x0 + col_w[..col].iter().sum::<f32>() + gap * col as f32;
+                    let x = foot.left() + x0 + col_w.iter().take(col).sum::<f32>() + gap * col as f32;
                     pt.key_hints(
                         ui,
                         Some(ui.painter()),
@@ -5532,11 +5526,13 @@ fn help_rows(ui: &mut egui::Ui, pt: &Paint, rows: &[(String, Vec<String>)]) {
             ui.allocate_exact_size(vec2(ui.available_width(), 26.0 * s), Sense::hover());
         let p = ui.painter();
         // Commands get keycaps; free-form hints ("⌘-click") read better as text.
-        let caps_w = if caps.len() == 1 && caps[0].chars().count() > 3 {
+        let caps_w = if let [only] = caps.as_slice()
+            && only.chars().count() > 3
+        {
             p.text(
                 rect.right_center(),
                 Align2::RIGHT_CENTER,
-                &caps[0],
+                only,
                 pt.font(12.5, Weight::Medium),
                 c.text,
             )
@@ -5588,6 +5584,12 @@ impl App {
 /// `/Users/me/x` → `~/x`.
 /// `text`, or as much of its end as `fits`, after a "…": a long path keeps
 /// the folders nearest the file.
+/// A tab's per-surface pair (`[desktop, browser]`): the one for this pass.
+fn side<T>(pair: &mut [T; 2], remote: bool) -> &mut T {
+    let [desktop, browser] = pair;
+    if remote { browser } else { desktop }
+}
+
 /// The most characters a tab's name shows (the title bar has it whole).
 const TAB_NAME_MAX: usize = 20;
 
@@ -5615,7 +5617,7 @@ fn elide_start(text: &str, fits: impl Fn(&str) -> bool) -> String {
     }
     let chars: Vec<char> = text.chars().collect();
     (1..chars.len())
-        .map(|n| format!("…{}", chars[n..].iter().collect::<String>()))
+        .map(|n| format!("…{}", chars.iter().skip(n).collect::<String>()))
         .find(|t| fits(t))
         .unwrap_or_else(|| "…".into())
 }

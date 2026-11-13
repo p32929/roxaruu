@@ -898,7 +898,7 @@ impl Buffer {
             if start + nee.len() > n {
                 continue;
             }
-            if hay[start..start + nee.len()] == nee[..] && !taken.iter().any(|&(s, _)| s == start) {
+            if hay.get(start..start + nee.len()) == Some(nee.as_slice()) && !taken.iter().any(|&(s, _)| s == start) {
                 return Some(start);
             }
         }

@@ -193,7 +193,10 @@ impl App {
             self.sidebar.hits.clear(); // still indexing: try again next frame
             return;
         };
-        let recent = |i: usize| self.mru.iter().position(|r| *r == p.root.join(&p.files[i].0));
+        let recent = |i: usize| {
+            let f = p.files.get(i)?;
+            self.mru.iter().position(|r| *r == p.root.join(&f.0))
+        };
         self.sidebar.hits = if key.0.trim().is_empty() {
             Vec::new()
         } else {
@@ -489,8 +492,7 @@ impl App {
         let mut select_click = None;
         let out = area.show_rows(ui, row_h, entries.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            for i in range {
-                let e = &entries[i];
+            for (i, e) in range.clone().zip(entries.get(range).unwrap_or_default()) {
                 let (r, resp) =
                     ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
                 let p = ui.painter();
@@ -698,7 +700,9 @@ impl App {
         let out = area.show_rows(ui, row_h, self.sidebar.hits.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for n in range {
-                let (rel, ignored) = &p.files[self.sidebar.hits[n]];
+                let Some((rel, ignored)) = self.sidebar.hits.get(n).and_then(|&h| p.files.get(h)) else {
+                    continue;
+                };
                 let (dir, name) = rel.rsplit_once('/').unwrap_or(("", rel));
                 let (r, resp) =
                     ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());

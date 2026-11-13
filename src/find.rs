@@ -77,7 +77,9 @@ impl Find {
         let n = self.matches.len() as isize;
         if n > 0 {
             self.current = (self.current as isize + delta).rem_euclid(n) as usize;
-            self.origin = self.matches[self.current].0;
+            if let Some(m) = self.matches.get(self.current) {
+                self.origin = m.0;
+            }
             self.select(b);
         }
     }
@@ -135,7 +137,7 @@ fn find_all(hay: &[char], needle: &[char], case: bool, word: bool) -> Vec<(usize
     let ident = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
     let mut i = 0;
     while i + n <= hay.len() {
-        if hay[i..i + n].iter().zip(needle).all(|(a, b)| same(a, b))
+        if hay.get(i..i + n).is_some_and(|w| w.iter().zip(needle).all(|(a, b)| same(a, b)))
             && (!word
                 || !ident(i.checked_sub(1).and_then(|j| hay.get(j))) && !ident(hay.get(i + n)))
         {

@@ -37,9 +37,10 @@ impl Request {
             if n == 0 {
                 return None;
             }
-            buf.extend_from_slice(&chunk[..n]);
+            buf.extend_from_slice(chunk.get(..n)?);
         };
-        let head = std::str::from_utf8(&buf[..end]).ok()?;
+        let (head_bytes, rest) = buf.split_at_checked(end)?;
+        let head = std::str::from_utf8(head_bytes).ok()?;
         let mut lines = head.split("\r\n");
         let mut first = lines.next()?.split(' ');
         let (method, path) = (first.next()?.to_string(), first.next()?.to_string());
@@ -51,8 +52,8 @@ impl Request {
             method,
             path,
             headers,
-            rest: buf[end..].to_vec(),
-            raw_head: buf[..end].to_vec(),
+            rest: rest.to_vec(),
+            raw_head: head_bytes.to_vec(),
         })
     }
 
@@ -82,7 +83,7 @@ impl Request {
             if n == 0 {
                 return None;
             }
-            body.extend_from_slice(&chunk[..n]);
+            body.extend_from_slice(chunk.get(..n)?);
         }
         body.truncate(len);
         Some(body)
@@ -112,12 +113,12 @@ pub fn url_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(s.len());
     let b = s.as_bytes();
     let mut i = 0;
-    while i < b.len() {
+    while let Some(&c) = b.get(i) {
         let hex = b
             .get(i + 1..i + 3)
             .and_then(|h| std::str::from_utf8(h).ok())
             .and_then(|h| u8::from_str_radix(h, 16).ok());
-        match (b[i], hex) {
+        match (c, hex) {
             (b'+', _) => out.push(b' '),
             (b'%', Some(v)) => {
                 out.push(v);

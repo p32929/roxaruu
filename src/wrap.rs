@@ -26,10 +26,10 @@ pub fn wrap_line_ranges(chars: &[char], width: usize) -> Vec<(usize, usize)> {
     // token itself doesn't fit on an empty row.
     let mut tokens: Vec<(usize, usize)> = Vec::new();
     let mut i = 0;
-    while i < n {
+    while let Some(c) = chars.get(i) {
         let start = i;
-        let is_ws = chars[i].is_whitespace();
-        while i < n && chars[i].is_whitespace() == is_ws {
+        let is_ws = c.is_whitespace();
+        while chars.get(i).is_some_and(|c| c.is_whitespace() == is_ws) {
             i += 1;
         }
         tokens.push((start, i));
@@ -51,7 +51,7 @@ pub fn wrap_line_ranges(chars: &[char], width: usize) -> Vec<(usize, usize)> {
 
     for &(ts, te) in &tokens {
         let tok_len = te - ts;
-        let is_ws = chars[ts].is_whitespace();
+        let is_ws = chars.get(ts).is_some_and(|c| c.is_whitespace());
         let cur_len = row_end - row_start;
         if cur_len == 0 {
             // First token on an otherwise-empty row: place it unconditionally

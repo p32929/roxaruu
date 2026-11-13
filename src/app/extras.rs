@@ -130,7 +130,7 @@ impl App {
         }
         for i in 0..self.terminals.len() {
             let shown = self.terminal_open && (self.terminal_grid || i == self.active_terminal);
-            let t = &mut self.terminals[i];
+            let Some(t) = self.terminals.get_mut(i) else { continue };
             t.pane.refresh_foreground();
             if own {
                 t.pane.watch.looking.store(focused && shown, Relaxed);
@@ -494,7 +494,8 @@ impl App {
                     .iter()
                     .position(|f| *f == st.terminal_fps)
                     .unwrap_or(0) as i32;
-                TERMINAL_FPS[(at + delta).clamp(0, TERMINAL_FPS.len() as i32 - 1) as usize].into()
+                let next = (at + delta).clamp(0, TERMINAL_FPS.len() as i32 - 1) as usize;
+                TERMINAL_FPS.get(next).copied().unwrap_or(st.terminal_fps).into()
             }
             // The shells this computer has, the system's own first.
             Setting::TerminalShell => cycle(
@@ -580,7 +581,7 @@ impl App {
                 } else if combos.is_empty() {
                     "no shortcut".into()
                 } else if keys.len() > 1 {
-                    format!("also {}", keys[1..].join(", "))
+                    format!("also {}", keys.get(1..).unwrap_or_default().join(", "))
                 } else if km.is_custom(info.command) {
                     "custom".into()
                 } else {

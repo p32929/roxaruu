@@ -89,8 +89,8 @@ impl WrapLayout {
             return first;
         }
         (first..self.from + self.rows.len())
-            .take_while(|&r| self.rows[r - self.from].0 == line)
-            .filter(|&r| self.rows[r - self.from].1 <= col)
+            .take_while(|&r| self.rows.get(r - self.from).is_some_and(|w| w.0 == line))
+            .filter(|&r| self.rows.get(r - self.from).is_some_and(|w| w.1 <= col))
             .last()
             .unwrap_or(first)
     }
@@ -183,6 +183,15 @@ impl Tab {
 
     pub fn is_loaded(&self) -> bool {
         self.loaded
+    }
+
+    /// The highlighting is this text's, with nothing still working on it
+    /// (tests wait for it rather than for a while). Plain text counts as done.
+    #[cfg(test)]
+    pub fn highlighted(&self) -> bool {
+        self.buf.lang.is_none()
+            || self.huge.is_some() // read from disk a screen at a time: never highlighted whole
+            || (self.job.is_none() && self.spans_rev == Some(self.buf.revision()))
     }
 
     /// Read the file if that hasn't happened yet (a restored tab coming into

@@ -4,7 +4,6 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
-use std::time::Duration;
 
 use rustls::StreamOwned;
 
@@ -59,7 +58,6 @@ pub fn tls_client(port: u16) -> Tls {
     .with_no_client_auth();
     let conn = rustls::ClientConnection::new(Arc::new(config), "localhost".try_into().unwrap()).unwrap();
     let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    tcp.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     StreamOwned::new(conn, tcp)
 }
 

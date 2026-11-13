@@ -22,8 +22,9 @@ mod fonts;
 mod fstree;
 mod fuzzy;
 mod huge;
-// The UI walkthroughs drive real Unix shells (zsh), symlinks and file modes.
-#[cfg(all(test, unix))]
+// The UI walkthroughs drive real Unix shells (zsh), symlinks and file modes
+// (Unix only: inside). `cfg(test)` alone, so clippy knows it's test code.
+#[cfg(test)]
 mod headless;
 mod instances;
 mod keymap;
@@ -64,12 +65,8 @@ const RENDERER_ENV: &str = "ROXARUU_RENDERER";
 /// draws it in software if it must). Both through wgpu, the one renderer.
 static SAFE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Already saying the window can't open (the watchdog mustn't say it twice).
+/// Already saying the window can't open (two threads mustn't say it twice).
 static GIVING_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// How long a window may take to first draw before its renderer counts as
-/// stuck (a driver that hangs rather than fails).
-const FIRST_DRAW_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
 
 fn main() -> eframe::Result {
     use std::io::IsTerminal;
@@ -140,9 +137,9 @@ fn main() -> eframe::Result {
             eprintln!("roxaruu: there's no screen here to open a window on; on a server, install Xvfb (sudo apt install xvfb)");
             std::process::exit(1);
         }
-        if detach(&launch.target, password.as_deref()) {
+        if let Some(window) = detach(&launch.target, password.as_deref()) {
             if password.is_some() {
-                say_where_remote_is();
+                say_where_remote_is(window);
             }
             return Ok(());
         }
@@ -179,7 +176,18 @@ fn main() -> eframe::Result {
     let safe = match std::env::var(RENDERER_ENV) {
         Ok(r) => r == "safe",
         Err(_) => {
-            let last = renderer_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+            let read = || renderer_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+            // Another start still trying (it hasn't drawn, and runs): wait
+            // until it draws or dies, however long a slow machine takes —
+            // then that's the answer for this one too.
+            let mut last = read();
+            while let Some(pid) = last.trim().split_once(':').and_then(|(_, p)| p.parse::<i32>().ok())
+                && pid != std::process::id() as i32
+                && sys::process_alive(pid)
+            {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                last = read();
+            }
             match next_renderer(&last, sys::process_alive) {
                 Start::Gpu => false,
                 Start::Safe => {
@@ -196,16 +204,10 @@ fn main() -> eframe::Result {
         }
     };
     SAFE.store(safe, std::sync::atomic::Ordering::Relaxed);
+    // Until the window draws, the file says this start is still trying: a
+    // start that crashes leaves that behind, and the next one goes the safe
+    // way. (No time limit: a slow machine is given as long as it takes.)
     remember_renderer(true);
-    // A driver can hang instead of failing: no window after a while is a
-    // renderer that can't start, like a crash.
-    std::thread::spawn(|| {
-        std::thread::sleep(FIRST_DRAW_WITHIN);
-        if !DRAWN.load(std::sync::atomic::Ordering::Relaxed) {
-            tracing::error!(secs = FIRST_DRAW_WITHIN.as_secs(), "no window yet");
-            couldnt_start("The window didn't appear.");
-        }
-    });
     let renderer = eframe::Renderer::Wgpu;
     tracing::info!(safe, "opening the window");
     let result = eframe::run_native(
@@ -494,10 +496,10 @@ fn no_screen() -> bool {
 
 /// Start this program again, detached: its own process group, no terminal
 /// for input or output (on a virtual screen if there's no real one), the
-/// password for remote access, if any, on its stdin. Returns whether it
+/// password for remote access, if any, on its stdin. Returns it, if it
 /// started.
-fn detach(target: &Option<std::path::PathBuf>, password: Option<&str>) -> bool {
-    let Ok(exe) = std::env::current_exe() else { return false };
+fn detach(target: &Option<std::path::PathBuf>, password: Option<&str>) -> Option<std::process::Child> {
+    let exe = std::env::current_exe().ok()?;
     let mut args: Vec<std::ffi::OsString> = Vec::new();
     if password.is_some() {
         args.extend(["--remote".into(), "on".into()]);
@@ -515,7 +517,7 @@ fn detach(target: &Option<std::path::PathBuf>, password: Option<&str>) -> bool {
         }
         None => std::process::Command::new(&exe),
     };
-    spawn_detached(cmd, args.iter().map(|a| a.as_os_str()), password).is_ok()
+    spawn_detached(cmd, args.iter().map(|a| a.as_os_str()), password).ok()
 }
 
 fn spawn_detached<'a>(
@@ -539,19 +541,21 @@ fn spawn_detached<'a>(
     Ok(child)
 }
 
-/// After `--remote on`: wait for the new window to serve, then say where.
-fn say_where_remote_is() {
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while std::time::Instant::now() < until {
+/// After `--remote on`: wait for the new window to serve (however long it
+/// takes to start), then say where — or, if it ended first, that it did.
+fn say_where_remote_is(mut window: std::process::Child) {
+    loop {
         if let Some(s) = instances::remote_server() {
             println!("Remote access is on: {}", remote::address(s.port));
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        if let Ok(Some(status)) = window.try_wait() {
+            let log = log_path().map(|p| p.display().to_string()).unwrap_or_default();
+            eprintln!("roxaruu: the window ended ({status}) before serving; see {log}");
+            std::process::exit(1);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    let log = log_path().map(|p| p.display().to_string()).unwrap_or_default();
-    eprintln!("roxaruu: the window didn't start serving within 30s; see {log}");
-    std::process::exit(1);
 }
 
 /// The window: the app, and its side of remote access (which stops when

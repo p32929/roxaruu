@@ -155,7 +155,7 @@ pub fn process_name(pid: i32) -> Option<String> {
         return None;
     }
     let len = (n as usize).min(buf.len());
-    Some(String::from_utf8_lossy(&buf[..len]).into_owned())
+    Some(String::from_utf8_lossy(buf.get(..len).unwrap_or_default()).into_owned())
 }
 
 #[cfg(not(target_os = "macos"))]

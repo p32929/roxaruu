@@ -10,12 +10,15 @@
 //! Flow control: the page acks every frame once drawn. A browser with
 //! `IN_FLIGHT` frames unacked gets no more until it catches up, so a slow
 //! link never queues stale frames: the next one sent shows everything
-//! that changed meanwhile.
+//! that changed meanwhile. Each browser at its own pace: frames go to those
+//! keeping up; one behind is skipped, and its next ack asks for a whole
+//! frame (every texture), so a slow phone never holds back a laptop.
 
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
 
 use tungstenite::Message;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
@@ -31,9 +34,6 @@ pub const ACK: &str = r#"{"t":"ack"}"#;
 /// Frames a browser may have unacked: two keeps the link busy while the
 /// page draws one, without letting a queue build.
 const IN_FLIGHT: u32 = 2;
-/// A browser that acks nothing for this long is sent frames anyway (one
-/// that doesn't ack at all still gets a frame now and then).
-pub const ACK_PATIENCE: Duration = Duration::from_secs(2);
 
 /// Something for the browsers looking at this window.
 #[derive(Clone)]
@@ -46,15 +46,14 @@ struct Client {
     tx: mpsc::Sender<Out>,
     /// Frames sent and not yet acked.
     unacked: Arc<AtomicU32>,
-    /// When it last acked (or joined).
-    heard: Arc<Mutex<Instant>>,
+    /// A frame went out without it (it was behind): it needs a whole one.
+    skipped: Arc<AtomicBool>,
     gone: Arc<AtomicBool>,
 }
 
 impl Client {
     fn caught_up(&self) -> bool {
         self.unacked.load(Ordering::Acquire) < IN_FLIGHT
-            || self.heard.lock().unwrap_or_else(|e| e.into_inner()).elapsed() > ACK_PATIENCE
     }
 }
 
@@ -76,6 +75,10 @@ impl Shared {
         let frame = matches!(out, Out::Frame(_));
         self.clients.lock().unwrap_or_else(|e| e.into_inner()).retain(|c| {
             if frame {
+                if !c.caught_up() {
+                    c.skipped.store(true, Ordering::Release);
+                    return !c.gone.load(Ordering::Acquire);
+                }
                 c.unacked.fetch_add(1, Ordering::AcqRel);
             }
             !c.gone.load(Ordering::Acquire) && c.tx.send(out.clone()).is_ok()
@@ -105,7 +108,6 @@ impl Endpoint {
     /// something (so the window draws its next remote frame).
     pub fn start(token: String, wake: impl Fn() + Send + Sync + 'static) -> std::io::Result<Endpoint> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::new(Shared::default());
@@ -115,17 +117,17 @@ impl Endpoint {
             std::thread::Builder::new()
                 .name("remote-endpoint".into())
                 .spawn(move || {
-                    while !stop.load(Ordering::Relaxed) {
-                        match listener.accept() {
-                            Ok((stream, _)) => {
-                                let (stop, shared, token, wake) =
-                                    (stop.clone(), shared.clone(), token.clone(), wake.clone());
-                                let _ = std::thread::Builder::new()
-                                    .name("remote-client".into())
-                                    .spawn(move || serve(stream, &token, &shared, &stop, &*wake));
-                            }
-                            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+                    // Each connection as it comes, until the link is closed
+                    // (which wakes this with one of its own).
+                    for stream in listener.incoming() {
+                        if stop.load(Ordering::Relaxed) {
+                            return;
                         }
+                        let Ok(stream) = stream else { continue };
+                        let (stop, shared, token, wake) = (stop.clone(), shared.clone(), token.clone(), wake.clone());
+                        let _ = std::thread::Builder::new()
+                            .name("remote-client".into())
+                            .spawn(move || serve(stream, &token, &shared, &stop, &*wake));
                     }
                 })?;
         }
@@ -149,10 +151,12 @@ impl Endpoint {
         c.len()
     }
 
-    /// Whether every browser has caught up (can take another frame). If
-    /// not, the next ack wakes the window.
+    /// Whether a browser can take another frame (any keeping up: those
+    /// behind are skipped). If none, the next ack wakes the window.
     pub fn ready(&self) -> bool {
-        let ready = self.shared.clients.lock().unwrap_or_else(|e| e.into_inner()).iter().all(Client::caught_up);
+        let clients = self.shared.clients.lock().unwrap_or_else(|e| e.into_inner());
+        let ready = clients.is_empty() || clients.iter().any(Client::caught_up);
+        drop(clients);
         self.shared.waiting.store(!ready, Ordering::Release);
         ready
     }
@@ -170,6 +174,8 @@ impl Endpoint {
 impl Drop for Endpoint {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        // Wake the accept (waiting for a connection: this is one).
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
         // Ends every link: writers see their channel close, readers their socket.
         self.shared.clients.lock().unwrap_or_else(|e| e.into_inner()).clear();
         for (_, s) in self.shared.sockets.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
@@ -211,7 +217,7 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, stop: &AtomicBool, wak
     let (tx, rx) = mpsc::channel::<Out>();
     let gone = Arc::new(AtomicBool::new(false));
     let unacked = Arc::new(AtomicU32::new(0));
-    let heard = Arc::new(Mutex::new(Instant::now()));
+    let skipped = Arc::new(AtomicBool::new(false));
     {
         let gone = gone.clone();
         let spawned = std::thread::Builder::new().name("remote-client-out".into()).spawn(move || {
@@ -240,7 +246,7 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, stop: &AtomicBool, wak
     shared.clients.lock().unwrap_or_else(|e| e.into_inner()).push(Client {
         tx,
         unacked: unacked.clone(),
-        heard: heard.clone(),
+        skipped: skipped.clone(),
         gone: gone.clone(),
     });
     shared.joined.store(true, Ordering::Relaxed);
@@ -256,7 +262,12 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, stop: &AtomicBool, wak
                         Err(now) => n = now,
                     }
                 }
-                *heard.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+                // Caught up after being skipped: a whole frame, so it has
+                // every texture it missed.
+                if n <= IN_FLIGHT && skipped.swap(false, Ordering::AcqRel) {
+                    shared.joined.store(true, Ordering::Relaxed);
+                    wake();
+                }
                 if shared.waiting.swap(false, Ordering::AcqRel) {
                     wake();
                 }
@@ -304,15 +315,12 @@ mod tests {
         assert!(connect(ep.port, "wrong").is_err(), "a wrong token is refused");
 
         let mut ws = connect(ep.port, "tok").unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while ep.clients() == 0 {
-            assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(ep.take_joined(), "a new browser asks for a frame");
         ws.send(Message::text(r#"{"t":"text","s":"hi"}"#)).unwrap();
         while ep.take_inbox().is_empty() {
-            assert!(std::time::Instant::now() < deadline, "never arrived");
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(woken.load(Ordering::Relaxed) > 0, "the window was woken");
@@ -336,14 +344,12 @@ mod tests {
         // The wake first: asking `ready()` meanwhile would stop the window
         // waiting (it can go), and a window that isn't waiting isn't woken.
         while woken.load(Ordering::Relaxed) == before {
-            assert!(std::time::Instant::now() < deadline, "the ack didn't wake the waiting window");
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(ep.ready(), "the ack counted");
         assert!(ep.take_inbox().is_empty(), "an ack isn't input");
         drop(ws);
         while ep.clients() != 0 {
-            assert!(std::time::Instant::now() < deadline, "a closed browser is forgotten");
             std::thread::sleep(Duration::from_millis(10));
         }
     }

@@ -140,24 +140,28 @@ fn char_score(
     ti: usize,
     seq_len: i64,
 ) -> i64 {
-    if q_lower != target_lower[ti] && !(is_path_sep(q_lower) && is_path_sep(target_lower[ti])) {
+    let (Some(&t), Some(&t_lower)) = (target.get(ti), target_lower.get(ti)) else {
+        return 0;
+    };
+    if q_lower != t_lower && !(is_path_sep(q_lower) && is_path_sep(t_lower)) {
         return 0;
     }
     let mut score = 1;
     if seq_len > 0 {
         score += seq_len.min(3) * 6 + (seq_len - 3).max(0) * 3;
     }
-    if q_char == target[ti] {
+    if q_char == t {
         score += 1;
     }
-    if ti == 0 {
-        score += 8;
-    } else {
-        let sep = separator_bonus(target[ti - 1]);
-        if sep != 0 {
-            score += sep;
-        } else if target[ti].is_uppercase() && seq_len == 0 {
-            score += 2; // camelCase hump
+    match ti.checked_sub(1).and_then(|i| target.get(i)) {
+        None => score += 8,
+        Some(&prev) => {
+            let sep = separator_bonus(prev);
+            if sep != 0 {
+                score += sep;
+            } else if t.is_uppercase() && seq_len == 0 {
+                score += 2; // camelCase hump
+            }
         }
     }
     score
@@ -176,14 +180,14 @@ fn score_fuzzy(
     }
     let mut scores = vec![0i64; ql * tl];
     let mut matches = vec![0i64; ql * tl];
-    for qi in 0..ql {
+    for (qi, (&q_char, &q_lower)) in query.iter().zip(query_lower).enumerate() {
         let q_off = qi * tl;
         for ti in 0..tl {
             let cur = q_off + ti;
-            let left = if ti > 0 { scores[cur - 1] } else { 0 };
+            let left = if ti > 0 { scores.get(cur - 1).copied().unwrap_or(0) } else { 0 };
             let (diag, seq_len) = if qi > 0 && ti > 0 {
                 let d = q_off - tl + ti - 1;
-                (scores[d], matches[d])
+                (scores.get(d).copied().unwrap_or(0), matches.get(d).copied().unwrap_or(0))
             } else {
                 (0, 0)
             };
@@ -191,28 +195,23 @@ fn score_fuzzy(
             let score = if diag == 0 && qi > 0 {
                 0
             } else {
-                char_score(
-                    query[qi],
-                    query_lower[qi],
-                    target,
-                    target_lower,
-                    ti,
-                    seq_len,
-                )
+                char_score(q_char, q_lower, target, target_lower, ti, seq_len)
             };
-            if score != 0 && diag + score >= left {
-                matches[cur] = seq_len + 1;
-                scores[cur] = diag + score;
+            let (m, s) = if score != 0 && diag + score >= left {
+                (seq_len + 1, diag + score)
             } else {
-                matches[cur] = 0;
-                scores[cur] = left;
+                (0, left)
+            };
+            if let (Some(mc), Some(sc)) = (matches.get_mut(cur), scores.get_mut(cur)) {
+                *mc = m;
+                *sc = s;
             }
         }
     }
     let mut positions = Vec::new();
     let (mut qi, mut ti) = (ql as isize - 1, tl as isize - 1);
     while qi >= 0 && ti >= 0 {
-        if matches[qi as usize * tl + ti as usize] == 0 {
+        if matches.get(qi as usize * tl + ti as usize).is_none_or(|&m| m == 0) {
             ti -= 1;
         } else {
             positions.push(ti as usize);
@@ -221,7 +220,7 @@ fn score_fuzzy(
         }
     }
     positions.reverse();
-    (scores[ql * tl - 1], positions)
+    (scores.last().copied().unwrap_or(0), positions)
 }
 
 /// One query piece: filename first (prefix > boundary > anywhere), then the
@@ -230,8 +229,8 @@ fn score_piece(p: &Prepared, query: &str, prefer_label: bool) -> Option<(i64, Ve
     let q: Vec<char> = query.chars().collect();
     let q_lower: Vec<char> = query.to_lowercase().chars().collect();
     if prefer_label {
-        let lab = &p.chars[p.label_start..];
-        let lab_lower = &p.lower[p.label_start..];
+        let lab = p.chars.get(p.label_start..).unwrap_or_default();
+        let lab_lower = p.lower.get(p.label_start..).unwrap_or_default();
         let (ls, lpos) = score_fuzzy(lab, lab_lower, &q, &q_lower);
         if ls > 0 {
             let base = if lab_lower.starts_with(&q_lower) {

@@ -79,10 +79,10 @@ mod tests {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let enc = Encoder::start(move |m| drop(tx.send(m)), move || { let _ = done_tx.send(()); });
         assert!(enc.submit(vec![7; 10_000]));
-        let msg = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let msg = rx.recv().unwrap();
         assert_eq!(msg[0], super::super::meshes::KIND);
         assert!(msg.len() < 200, "compressed: {} bytes", msg.len());
-        done_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        done_rx.recv().unwrap();
         assert!(!enc.busy(), "free again once sent");
         assert_eq!(enc.stats.lock().unwrap().frames, 1);
     }

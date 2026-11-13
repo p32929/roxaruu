@@ -92,7 +92,7 @@ fn build_preview(line: &str, col: usize, end_col: usize) -> (String, usize, usiz
         new_col += 2;
         new_end += 2;
     }
-    out.push_str(&chars[start..end].iter().collect::<String>());
+    out.push_str(&chars.get(start..end).unwrap_or_default().iter().collect::<String>());
     if end < chars.len() {
         out.push_str(" \u{2026}");
     }

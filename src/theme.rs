@@ -116,7 +116,7 @@ impl Colors {
             self.ansi_14,
             self.ansi_15,
         ];
-        all[(i & 15) as usize]
+        all.get(usize::from(i & 15)).copied().unwrap_or_default()
     }
 }
 
@@ -187,8 +187,8 @@ pub fn load_all(user_sources: &[(String, String)]) -> (Vec<Theme>, Vec<String>) 
     let mut errors = Vec::new();
     // The two complete themes; the built-in files are tested, so failing here
     // is impossible in practice, but degrade to an empty list rather than panic.
-    let dark = Theme::parse(BUILTIN[0], None).ok();
-    let light = Theme::parse(BUILTIN[1], None).ok();
+    let dark = BUILTIN.first().and_then(|s| Theme::parse(s, None).ok());
+    let light = BUILTIN.get(1).and_then(|s| Theme::parse(s, None).ok());
     let base_for = |src: &str| -> Option<&Theme> {
         let light_kind = json5::from_str::<ThemeFile>(src).is_ok_and(|f| f.kind == Kind::Light);
         if light_kind {

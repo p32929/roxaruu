@@ -27,7 +27,7 @@ fn main() {
         .map(|s| s.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     if invoked == "claude" {
-        std::process::exit(run_claude(&args[1..]));
+        std::process::exit(run_claude(args.get(1..).unwrap_or_default()));
     }
     match args.get(1).and_then(|a| a.to_str()) {
         Some(event @ ("stop" | "notification")) => {

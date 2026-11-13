@@ -717,11 +717,7 @@ impl Remote {
         }
         if !ep.ready() {
             self.timing.held_browser += 1;
-            // An ack wakes the window; a browser that never acks gets
-            // frames anyway after a while.
-            if let Some(c) = &self.clock {
-                c.at(Instant::now() + endpoint::ACK_PATIENCE);
-            }
+            // An ack wakes the window.
             return;
         }
         self.held.store(true, Ordering::SeqCst);

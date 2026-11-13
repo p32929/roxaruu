@@ -129,7 +129,9 @@ impl FileTree {
             return;
         };
         let children = self.read_dir(&e.path.clone(), e.depth + 1);
-        self.entries[idx].expanded = true;
+        if let Some(e) = self.entries.get_mut(idx) {
+            e.expanded = true;
+        }
         self.entries.splice(idx + 1..idx + 1, children);
     }
 
@@ -138,11 +140,13 @@ impl FileTree {
             return;
         };
         let depth = e.depth;
-        let end = self.entries[idx + 1..]
+        let end = self.entries.get(idx + 1..).unwrap_or_default()
             .iter()
             .position(|c| c.depth <= depth)
             .map_or(self.entries.len(), |p| idx + 1 + p);
-        self.entries[idx].expanded = false;
+        if let Some(e) = self.entries.get_mut(idx) {
+            e.expanded = false;
+        }
         self.entries.drain(idx + 1..end);
     }
 
@@ -155,7 +159,7 @@ impl FileTree {
     /// The index of `idx`'s parent folder, if it isn't top level.
     pub fn parent(&self, idx: usize) -> Option<usize> {
         let depth = self.entries.get(idx)?.depth;
-        (0..idx).rev().find(|&i| self.entries[i].depth + 1 == depth)
+        self.entries.get(..idx)?.iter().rposition(|e| e.depth + 1 == depth)
     }
 
     fn read_dir(&self, dir: &Path, depth: usize) -> Vec<Entry> {

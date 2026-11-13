@@ -468,7 +468,7 @@ fn spans_for(lang: &'static Lang, source: &str) -> Option<Vec<LineSpans>> {
                 stack.pop();
             }
             HighlightEvent::Source { start, end } => {
-                let token = stack.last().and_then(|&i| token_for(CAPTURES[i]));
+                let token = stack.last().and_then(|&i| CAPTURES.get(i)).and_then(|c| token_for(c));
                 // Split the run at newlines into per-line ranges.
                 let mut pos = start;
                 while pos < end {

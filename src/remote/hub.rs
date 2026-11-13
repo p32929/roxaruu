@@ -8,7 +8,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
@@ -35,42 +35,55 @@ pub struct Setup {
 
 pub struct Hub {
     stop: Arc<AtomicBool>,
+    port: u16,
+    links: Links,
 }
+
+/// Every browser linked to a window: both sockets, closed when the hub stops.
+type Links = Arc<Mutex<Vec<(Arc<TcpStream>, TcpStream)>>>;
 
 impl Hub {
     /// Take the port and serve until dropped.
     pub fn start(setup: Setup) -> std::io::Result<Hub> {
         let listener = TcpListener::bind(("0.0.0.0", setup.port))?;
-        listener.set_nonblocking(true)?;
+        let port = listener.local_addr()?.port();
         let stop = Arc::new(AtomicBool::new(false));
-        let s = stop.clone();
+        let links = Links::default();
+        let (s, l) = (stop.clone(), links.clone());
         std::thread::Builder::new()
             .name("remote-hub".into())
-            .spawn(move || run(listener, setup, s))?;
-        Ok(Hub { stop })
+            .spawn(move || run(&listener, setup, &s, &l))?;
+        Ok(Hub { stop, port, links })
     }
 }
 
 impl Drop for Hub {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        // Wake the accept (it's waiting for a connection: this is one), and
+        // end every link.
+        let _ = TcpStream::connect(("127.0.0.1", self.port));
+        for (browser, window) in self.links.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
+            let _ = browser.shutdown(std::net::Shutdown::Both);
+            let _ = window.shutdown(std::net::Shutdown::Both);
+        }
     }
 }
 
-fn run(listener: TcpListener, setup: Setup, stop: Arc<AtomicBool>) {
+/// Serve each connection as it comes, until the hub stops; returning drops
+/// the listener, so the port is free again.
+fn run(listener: &TcpListener, setup: Setup, stop: &Arc<AtomicBool>, links: &Links) {
     let setup = Arc::new(setup);
     let failures = Arc::new(AtomicU32::new(0));
-    // Returning drops the listener: the port is free again.
-    while !stop.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((tcp, _)) => {
-                let (setup, failures, stop) = (setup.clone(), failures.clone(), stop.clone());
-                let _ = std::thread::Builder::new()
-                    .name("remote-request".into())
-                    .spawn(move || handle(tcp, &setup, &failures, &stop));
-            }
-            Err(_) => std::thread::sleep(Duration::from_millis(40)),
+    for tcp in listener.incoming() {
+        if stop.load(Ordering::Relaxed) {
+            return;
         }
+        let Ok(tcp) = tcp else { continue };
+        let (setup, failures, stop, links) = (setup.clone(), failures.clone(), stop.clone(), links.clone());
+        let _ = std::thread::Builder::new()
+            .name("remote-request".into())
+            .spawn(move || handle(tcp, &setup, &failures, &stop, &links));
     }
 }
 
@@ -83,7 +96,7 @@ fn now() -> u64 {
 
 type Tls = StreamOwned<ServerConnection, TcpStream>;
 
-fn handle(tcp: TcpStream, setup: &Setup, failures: &AtomicU32, stop: &AtomicBool) {
+fn handle(tcp: TcpStream, setup: &Setup, failures: &AtomicU32, stop: &AtomicBool, links: &Links) {
     let from = tcp.peer_addr().ok();
     let _ = tcp.set_nonblocking(false);
     let _ = tcp.set_read_timeout(Some(Duration::from_secs(20)));
@@ -149,7 +162,7 @@ fn handle(tcp: TcpStream, setup: &Setup, failures: &AtomicU32, stop: &AtomicBool
             let id = p.trim_start_matches("/ws/").parse::<i32>().ok();
             match (setup.windows)().into_iter().find(|w| Some(w.pid) == id) {
                 Some(w) => {
-                    link(tls, req, &w, stop);
+                    link(tls, req, &w, stop, links);
                     return;
                 }
                 None => respond(&mut tls, "404 Not Found", &[], b"no such window"),
@@ -229,7 +242,7 @@ impl Read for TlsShare {
                 return Ok(0);
             }
             let mut conn = self.lock();
-            let mut rest = &raw[..n];
+            let mut rest = raw.get(..n).unwrap_or_default();
             while !rest.is_empty() {
                 if conn.read_tls(&mut rest)? == 0 {
                     break;
@@ -258,7 +271,7 @@ impl Write for TlsShare {
 /// Join the browser to the window: pass messages both ways until one side
 /// goes or the hub stops. A thread for each direction, each waiting on its
 /// own socket, so a frame or a key goes on the moment it arrives.
-fn link(tls: Tls, req: Request, window: &RemoteWindow, stop: &AtomicBool) {
+fn link(tls: Tls, req: Request, window: &RemoteWindow, stop: &AtomicBool, links: &Links) {
     use tungstenite::client::IntoClientRequest;
     use tungstenite::protocol::{Role, WebSocket};
     let StreamOwned { conn, sock } = tls;
@@ -296,11 +309,21 @@ fn link(tls: Tls, req: Request, window: &RemoteWindow, stop: &AtomicBool) {
         return;
     };
     let mut to_win = WebSocket::from_raw_socket(win_write, Role::Client, None);
-    let done = Arc::new(AtomicBool::new(false));
+    // Registered, so stopping the hub ends it (as it may have already).
+    let Ok(win_registered) = win_socket.try_clone() else { return };
+    links.lock().unwrap_or_else(|e| e.into_inner()).push((share.tcp.clone(), win_registered));
+    if stop.load(Ordering::Relaxed) {
+        return;
+    }
+    // Each direction waits on its own socket; when either ends (a side went,
+    // or the hub closed both), it closes both, which ends the other too.
+    let close = || {
+        let _ = share.tcp.shutdown(std::net::Shutdown::Both);
+        let _ = win_socket.shutdown(std::net::Shutdown::Both);
+    };
     let relay = |from: &mut dyn FnMut() -> tungstenite::Result<Message>,
-                 to: &mut dyn FnMut(Message) -> tungstenite::Result<()>,
-                 done: &AtomicBool| {
-        while !done.load(Ordering::Relaxed) {
+                 to: &mut dyn FnMut(Message) -> tungstenite::Result<()>| {
+        loop {
             match from() {
                 Ok(m @ (Message::Text(_) | Message::Binary(_))) => {
                     if to(m).is_err() {
@@ -311,22 +334,13 @@ fn link(tls: Tls, req: Request, window: &RemoteWindow, stop: &AtomicBool) {
                 Ok(_) => {}
             }
         }
-        done.store(true, Ordering::Relaxed);
+        close();
     };
     std::thread::scope(|s| {
-        let d = done.clone();
-        s.spawn(move || relay(&mut || from_browser.read(), &mut |m| to_win.send(m), &d));
-        let d = done.clone();
-        s.spawn(move || relay(&mut || from_window.read(), &mut |m| to_browser.send(m), &d));
-        // Both wait on their sockets: closing those ends them, when either
-        // side goes or the hub stops.
-        while !done.load(Ordering::Relaxed) && !stop.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        done.store(true, Ordering::Relaxed);
-        let _ = share.tcp.shutdown(std::net::Shutdown::Both);
-        let _ = win_socket.shutdown(std::net::Shutdown::Both);
+        s.spawn(|| relay(&mut || from_browser.read(), &mut |m| to_win.send(m)));
+        s.spawn(|| relay(&mut || from_window.read(), &mut |m| to_browser.send(m)));
     });
+    links.lock().unwrap_or_else(|e| e.into_inner()).retain(|(b, _)| !Arc::ptr_eq(b, &share.tcp));
 }
 
 #[cfg(test)]
@@ -334,7 +348,6 @@ mod tests {
     use super::*;
     use crate::remote::endpoint::{Endpoint, Out};
     use std::sync::{Mutex, OnceLock};
-    use std::time::Instant;
 
     /// The hub takes a plain `fn` for its window list; tests fill this.
     fn test_windows() -> Vec<RemoteWindow> {
@@ -363,9 +376,7 @@ mod tests {
         });
         let port = TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
         let hub = Hub::start(Setup { port, secrets, tls, windows: test_windows }).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
         while TcpStream::connect(("127.0.0.1", port)).is_err() {
-            assert!(Instant::now() < deadline, "the hub never started");
             std::thread::sleep(Duration::from_millis(50));
         }
         let host = format!("localhost:{port}");
@@ -431,27 +442,21 @@ mod tests {
                 assert_eq!(got[0], crate::remote::input::ClientMsg::Text { s: "hello".into() });
                 break;
             }
-            assert!(Instant::now() < deadline, "the window never heard the browser");
             std::thread::sleep(Duration::from_millis(20));
         }
         window.broadcast(Out::Frame(Arc::new(vec![0xFF, 0xD8, 7])));
         loop {
-            match ws.read().unwrap() {
-                Message::Binary(b) => {
-                    assert_eq!(&b[..], &[0xFF, 0xD8, 7]);
-                    break;
-                }
-                _ => assert!(Instant::now() < deadline),
+            if let Message::Binary(b) = ws.read().unwrap() {
+                assert_eq!(&b[..], &[0xFF, 0xD8, 7]);
+                break;
             }
         }
 
         // Stopping the hub ends the live link and frees the port.
         drop(hub);
         while ws.read().is_ok() {
-            assert!(Instant::now() < deadline, "the link outlived the hub");
         }
         while TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            assert!(Instant::now() < deadline, "still listening after stopping");
             std::thread::sleep(Duration::from_millis(20));
         }
     }

@@ -318,9 +318,9 @@ fn set_key(src: &str, key: &str, value: &serde_json::Value) -> Result<String, St
         })
     };
     let mut lines: Vec<String> = src.lines().map(String::from).collect();
-    if let Some(i) = lines.iter().position(|l| is_key_line(l)) {
-        let indent = lines[i].len() - lines[i].trim_start().len();
-        lines[i] = format!("{}{entry}", &lines[i][..indent]);
+    if let Some(line) = lines.iter_mut().find(|l| is_key_line(l)) {
+        let indent = line.len() - line.trim_start().len();
+        *line = format!("{}{entry}", line.get(..indent).unwrap_or_default());
     } else if let Some(i) = lines.iter().position(|l| l.trim_start().starts_with('{')) {
         lines.insert(i + 1, format!("  {entry}"));
     }

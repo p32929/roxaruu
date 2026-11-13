@@ -54,8 +54,9 @@ impl Textures {
                     let [w, h] = image.size;
                     for row in 0..h {
                         let at = (y + row) * whole.size[0] + x;
-                        if let Some(to) = whole.pixels.get_mut(at..at + w) {
-                            to.copy_from_slice(&image.pixels[row * w..(row + 1) * w]);
+                        let from = image.pixels.get(row * w..(row + 1) * w);
+                        if let (Some(to), Some(from)) = (whole.pixels.get_mut(at..at + w), from) {
+                            to.copy_from_slice(from);
                         }
                     }
                 }

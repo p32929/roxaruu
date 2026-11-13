@@ -184,9 +184,15 @@ HOME=$SP/home SHOTS=$SP/shots PROJECT=<a file inside a git repo> BIG=<a big sour
   (On this machine prefix with `CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup`.)
   `HOME` must point at a scratch folder: tests write settings, and must
   never touch the real `~/.config/oxru`. A test that changes shared files
-  restores them (see `headless_settings_reach_all_windows`). Timing-based
-  terminal tests can be flaky under load: re-run alone before blaming the
-  change, and fix the test if it's racy.
+  restores them (see `headless_settings_reach_all_windows`).
+- **No fixed waits, in code or tests.** Wait for the thing itself (the
+  window drew, the line arrived — `settle(term, last)`, the app looked at
+  the disk — `wait_disk`, the highlighting is done — `Tab::highlighted`),
+  never "N seconds, then give up / assume". A test without a deadline that
+  hangs is a bug it found (CI ends a stuck job after an hour). Durations
+  that *are* behaviour stay ("quiet 10 s = maybe stuck", a debounce, a
+  rate measured over a window), as do security limits (the TLS handshake's
+  read limit, slowing wrong passwords).
 
 ## 4. Every desktop: macOS, Windows, Linux
 
@@ -257,6 +263,11 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 - Comments explain why, briefly; match the surrounding style. A deliberate
   shortcut with a known limit gets a `ponytail:` comment naming the limit.
 - Report honestly: what was verified (and how), what wasn't, and why.
+- Nothing that ships may panic: no `unwrap`, `expect`, `panic!` or
+  unchecked indexing (`Cargo.toml` `[lints.clippy]` denies them; tests may,
+  `clippy.toml`). Handle the error, or take the safe form (`get`, `?`,
+  `let else`). Test-only modules use a plain `#[cfg(test)]` (clippy only
+  recognises that one).
 
 ## Map
 

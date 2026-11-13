@@ -3,17 +3,18 @@
 
 use std::io::Write;
 
-fn main() {
-    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").ok_or("cargo sets OUT_DIR")?);
     println!("cargo:rerun-if-changed=assets/fonts");
-    for entry in std::fs::read_dir("assets/fonts").unwrap().flatten() {
+    for entry in std::fs::read_dir("assets/fonts")?.flatten() {
         let path = entry.path();
-        if path.extension().is_none_or(|e| e != "ttf") {
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+        if !name.ends_with(".ttf") {
             continue;
         }
         let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
-        z.write_all(&std::fs::read(&path).unwrap()).unwrap();
-        let name = format!("{}.z", path.file_name().unwrap().to_string_lossy());
-        std::fs::write(out.join(name), z.finish().unwrap()).unwrap();
+        z.write_all(&std::fs::read(&path)?)?;
+        std::fs::write(out.join(format!("{name}.z")), z.finish()?)?;
     }
+    Ok(())
 }

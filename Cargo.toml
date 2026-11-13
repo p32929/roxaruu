@@ -78,6 +78,17 @@ sysinfo = "0.40.1"
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
+# Nothing that ships may panic: every error is handled. (Tests may: a test
+# that fails says so; clippy.toml lets them.)
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+
 [build-dependencies]
 flate2 = "1"
 

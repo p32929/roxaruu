@@ -650,8 +650,10 @@ pub fn cleanup() {
 #[cfg(test)]
 pub(crate) static TEST_FILES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-// The Terminal.app catching is for Unix shells.
-#[cfg(all(test, unix))]
+// The Terminal.app catching is for Unix shells. (`cfg(test)` alone, so
+// clippy knows it's test code.)
+#[cfg(test)]
+#[cfg(unix)]
 mod tests {
 
     use super::*;

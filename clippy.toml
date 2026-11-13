@@ -1,0 +1,6 @@
+# Tests may unwrap, panic and index: a failing test says so (Cargo.toml's
+# [lints.clippy] keeps all of it out of what ships).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

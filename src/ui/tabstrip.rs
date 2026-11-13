@@ -55,7 +55,7 @@ impl Strip {
     ) -> Layout {
         let n = widths.len();
         let starts = starts(widths, gap);
-        let total = starts.last().map_or(0.0, |s| s + widths[n - 1]);
+        let total = starts.last().zip(widths.last()).map_or(0.0, |(s, w)| s + w);
         let pointer = ui.input(|i| i.pointer.hover_pos());
         if pointer.is_some_and(|p| room.contains(p)) {
             // Up and down on a wheel go sideways here.
@@ -72,11 +72,12 @@ impl Strip {
         if self.follow
             && self.drag.is_none()
             && let Some(a) = active.filter(|a| *a < n)
+            && let (Some(&s), Some(&w)) = (starts.get(a), widths.get(a))
         {
             // With tabs past it on a side, that side's end marker covers
             // the strip's edge: clear it too.
-            let left = starts[a] - if a > 0 { end } else { 0.0 };
-            let right = starts[a] + widths[a] + if a + 1 < n { end } else { 0.0 };
+            let left = s - if a > 0 { end } else { 0.0 };
+            let right = s + w + if a + 1 < n { end } else { 0.0 };
             self.offset = reveal(self.offset, left, right, room.width());
         }
         let mut moved = None;
@@ -85,7 +86,7 @@ impl Strip {
             match pointer.filter(|_| down && d.from < n) {
                 Some(p) => {
                     // Its middle, along the unscrolled strip, says where it lands.
-                    let mid = p.x - d.grab + widths[d.from] / 2.0 - room.left() + self.offset;
+                    let mid = p.x - d.grab + widths.get(d.from).copied().unwrap_or(0.0) / 2.0 - room.left() + self.offset;
                     d.to = drop_index(widths, gap, d.from, mid);
                     // Held near an end: the strip scrolls on.
                     let edge = 28.0;
@@ -118,12 +119,17 @@ impl Strip {
         let mut rects = vec![Rect::NOTHING; n];
         let mut x = room.left() - self.offset;
         for i in order {
-            rects[i] = Rect::from_min_size(pos2(x, room.top()), vec2(widths[i], room.height()));
-            x += widths[i] + gap;
+            let w = widths.get(i).copied().unwrap_or(0.0);
+            if let Some(r) = rects.get_mut(i) {
+                *r = Rect::from_min_size(pos2(x, room.top()), vec2(w, room.height()));
+            }
+            x += w + gap;
         }
-        if let (Some(d), Some(p)) = (self.drag, pointer) {
-            let left = (p.x - d.grab).clamp(room.left(), (room.right() - widths[d.from]).max(room.left()));
-            rects[d.from] = Rect::from_min_size(pos2(left, room.top()), vec2(widths[d.from], room.height()));
+        if let (Some(d), Some(p)) = (self.drag, pointer)
+            && let (Some(&w), Some(r)) = (widths.get(d.from), rects.get_mut(d.from))
+        {
+            let left = (p.x - d.grab).clamp(room.left(), (room.right() - w).max(room.left()));
+            *r = Rect::from_min_size(pos2(left, room.top()), vec2(w, room.height()));
         }
         #[cfg(test)]
         LAID.with(|l| l.borrow_mut().push((room, rects.clone())));
@@ -183,7 +189,8 @@ impl Strip {
             p.rect_filled(r, 0.0, if resp.hovered() { mix(c.surface, c.hover, 1.0) } else { c.surface });
             p.galley(pos2(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, c.text_subtle);
             let side = if left { "left" } else { "right" };
-            let key = &keys[usize::from(!left)];
+            let [to_left, to_right] = &keys;
+            let key = if left { to_left } else { to_right };
             let tip = format!("{count} more to the {side} · click, scroll or {key} to see them");
             if resp.on_hover_text(tip).clicked() {
                 // The first tab cut off at that end comes fully in.
@@ -248,7 +255,7 @@ fn drop_index(widths: &[f32], gap: f32, from: usize, mid: f32) -> usize {
     let starts = starts(widths, gap);
     (0..widths.len())
         .filter(|i| *i != from)
-        .position(|i| mid < starts[i] + widths[i] / 2.0)
+        .position(|i| starts.get(i).zip(widths.get(i)).is_some_and(|(s, w)| mid < s + w / 2.0))
         .unwrap_or(widths.len().saturating_sub(1))
 }
 

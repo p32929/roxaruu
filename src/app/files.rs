@@ -308,7 +308,9 @@ impl App {
             let text = shell_args(&dropped) + " ";
             self.active_terminal = i;
             self.focus = Focus::Terminal;
-            self.terminals[i].pane.paste(&text);
+            if let Some(t) = self.terminals.get_mut(i) {
+                t.pane.paste(&text);
+            }
             return;
         }
         for path in dropped {
