@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Before anything leaves this machine: this system's whole test suite, here
 # (CI runs the other systems; see prepare-commit-msg). A failure stops the
-# push. Pushing only tags, or deleting a branch, tests nothing.
+# push. Pushing only tags or docs, or deleting a branch, tests nothing.
 set -eo pipefail
 z=0000000000000000000000000000000000000000
 branches=0
-while read -r _ local_sha remote_ref _; do
+while read -r _ local_sha remote_ref remote_sha; do
   case "$remote_ref" in refs/tags/*) continue ;; esac
   [ "$local_sha" = "$z" ] && continue
+  # Only docs changed (CI skips those too): nothing to test.
+  if [ "$remote_sha" != "$z" ] && git cat-file -e "$remote_sha" 2>/dev/null &&
+    [ -z "$(git diff --name-only "$remote_sha" "$local_sha" | grep -v '\.md$')" ]; then
+    continue
+  fi
   branches=1
 done
 [ "$branches" = 0 ] && exit 0

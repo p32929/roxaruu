@@ -8,15 +8,18 @@
 # `gh workflow run build -f build_only=true -f system=Linux`).
 #
 # Everything runs side by side: per system, one machine builds the packages
-# (and opens the installed app), two others build the tests (the faster
-# `ci-test` profile) and run half each.
+# (and opens the installed app; macOS: one per chip, joined after), two
+# others build the tests (the faster `ci-test` profile) and run half each.
+# Only a release gets link-time optimisation: it's ¾ of a build's time.
 name: build
 
 on:
   push:
     branches: ["**"]
     tags: ["v*"]
+    paths-ignore: ["**.md"] # docs alone build nothing (tags always build)
   pull_request:
+    paths-ignore: ["**.md"]
   workflow_dispatch:
     inputs:
       build_only:
@@ -33,6 +36,9 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_PROFILE_RELEASE_LTO: ${{ startsWith(github.ref, 'refs/tags/v') && 'thin' || 'off' }}
+
 jobs:
   # Which systems to build here (all but the one the push was tested on),
   # and their tests in two parts each.
@@ -40,6 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       systems: ${{ steps.pick.outputs.systems }}
+      builds: ${{ steps.pick.outputs.builds }}
+      mac: ${{ steps.pick.outputs.mac }}
       tests: ${{ steps.pick.outputs.tests }}
     steps:
       - id: pick
@@ -65,7 +73,13 @@ jobs:
           else
             tests=$(jq -c '[.[] as $s | range(0; 2) as $p | $s + {part: $p, label: "\($p + 1)/2"}]' <<<"$systems")
           fi
+          # macOS builds on two machines, one per chip, joined into one app.
+          builds=$(jq -c '[.[] | if .name == "macOS" then
+            (. + {name: "macOS Apple Silicon", target: "aarch64-apple-darwin"}),
+            (. + {name: "macOS Intel", target: "x86_64-apple-darwin"}) else . end]' <<<"$systems")
           echo "systems=$systems" >> "$GITHUB_OUTPUT"
+          echo "builds=$builds" >> "$GITHUB_OUTPUT"
+          echo "mac=$(jq 'any(.name == "macOS")' <<<"$systems")" >> "$GITHUB_OUTPUT"
           echo "tests=$tests" >> "$GITHUB_OUTPUT"
           echo "building $(jq -r 'map(.name) | join(", ")' <<<"$systems"); tests: $(jq length <<<"$tests") parts"
 
@@ -117,7 +131,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.plan.outputs.systems) }}
+        include: ${{ fromJSON(needs.plan.outputs.builds) }}
     defaults:
       run:
         shell: bash
@@ -125,8 +139,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
       - name: Linux libraries
         if: runner.os == 'Linux'
         run: |
@@ -137,27 +153,17 @@ jobs:
       - name: Version
         run: echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_ENV"
       - name: Build
-        if: runner.os != 'macOS' # macOS builds for each chip below
-        run: cargo build --release
-
-      # ---- packages -------------------------------------------------------
-      - name: Package (macOS, one app for Apple Silicon and Intel)
+        run: cargo build --release ${{ matrix.target && format('--target {0}', matrix.target) }}
+      - name: Keep this chip's programs (macOS)
         if: runner.os == 'macOS'
-        run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-          mkdir -p dist dmg/Roxaruu.app/Contents/MacOS dmg/Roxaruu.app/Contents/Resources
-          for exe in roxaruu roxaruu-hook; do
-            lipo -create -output "dmg/Roxaruu.app/Contents/MacOS/$exe" \
-              "target/aarch64-apple-darwin/release/$exe" "target/x86_64-apple-darwin/release/$exe"
-          done
-          cp assets/AppIcon.icns dmg/Roxaruu.app/Contents/Resources/AppIcon.icns
-          sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > dmg/Roxaruu.app/Contents/Info.plist
-          codesign --force --deep -s - dmg/Roxaruu.app
-          ln -s /Applications dmg/Applications
-          # Sized by hand: hdiutil's own guess runs out of room for big apps.
-          size=$(( $(du -sm dmg | cut -f1) + 64 ))
-          hdiutil create -volname Roxaruu -srcfolder dmg -size "${size}m" -ov -format UDZO "dist/Roxaruu-$VERSION-macos.dmg"
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/roxaruu
+            target/${{ matrix.target }}/release/roxaruu-hook
+
+      # ---- packages (macOS: in the `macos` job, from both chips) ----------
 
       - name: Package (Windows installer and zip)
         if: runner.os == 'Windows'
@@ -199,6 +205,7 @@ jobs:
           tar -czf "dist/Roxaruu-$VERSION-linux-x64.tar.gz" -C pkg/usr .
 
       - uses: actions/upload-artifact@v4
+        if: runner.os != 'macOS'
         with:
           name: Roxaruu-${{ matrix.name }}
           path: dist/*
@@ -277,8 +284,47 @@ jobs:
           [ "$(grep -c "the window is up" "$log")" -ge 2 ]
           [ "$(cat "$HOME/.local/share/Roxaruu/renderer")" = safe ]
 
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os != 'macOS'
+        with:
+          name: Screenshot-${{ matrix.name }}
+          path: smoke/*
+          if-no-files-found: ignore
+
+  # One app for Apple Silicon and Intel, from the two chips' builds.
+  macos:
+    name: macOS
+    needs: [plan, package]
+    if: needs.plan.outputs.mac == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mac-*
+      - name: Version
+        run: echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_ENV"
+      - name: Package (macOS, one app for Apple Silicon and Intel)
+        run: |
+          mkdir -p dist dmg/Roxaruu.app/Contents/MacOS dmg/Roxaruu.app/Contents/Resources
+          for exe in roxaruu roxaruu-hook; do
+            lipo -create -output "dmg/Roxaruu.app/Contents/MacOS/$exe" \
+              "mac-aarch64-apple-darwin/$exe" "mac-x86_64-apple-darwin/$exe"
+            chmod 755 "dmg/Roxaruu.app/Contents/MacOS/$exe"
+          done
+          cp assets/AppIcon.icns dmg/Roxaruu.app/Contents/Resources/AppIcon.icns
+          sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > dmg/Roxaruu.app/Contents/Info.plist
+          codesign --force --deep -s - dmg/Roxaruu.app
+          ln -s /Applications dmg/Applications
+          # Sized by hand: hdiutil's own guess runs out of room for big apps.
+          size=$(( $(du -sm dmg | cut -f1) + 64 ))
+          hdiutil create -volname Roxaruu -srcfolder dmg -size "${size}m" -ov -format UDZO "dist/Roxaruu-$VERSION-macos.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Roxaruu-macOS
+          path: dist/*
+          if-no-files-found: error
       - name: Open it (macOS)
-        if: runner.os == 'macOS'
         run: |
           mkdir -p smoke
           hdiutil attach -nobrowse -mountpoint /tmp/roxaruu "dist/Roxaruu-$VERSION-macos.dmg"
@@ -296,14 +342,14 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Screenshot-${{ matrix.name }}
+          name: Screenshot-macOS
           path: smoke/*
           if-no-files-found: ignore
 
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [package, test]
+    needs: [package, macos, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -311,6 +357,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: Roxaruu-*
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
