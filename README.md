@@ -4,16 +4,9 @@
 
 Every action in Roxaruu has a keyboard shortcut, and the shortcuts that work *right where you are* are always on screen: in the editor you see the editor's keys, in a terminal the terminal's, in a list or a dialog its own. You never have to remember a shortcut or dig through a menu to find one. It runs on macOS, Windows and Linux, and you can use it from any browser too, even on a Linux server with no screen.
 
-[![Roxaruu's start screen: click to watch the video](media/demo.png)](media/demo.mp4)
+![Roxaruu's start screen](media/demo.png)
 
-*▶ Click to watch (1 min): a script that opens three Terminal windows opens them as tabs in Roxaruu instead, with every shortcut on screen.*
-
-| | |
-|---|---|
-| ![Editor and terminals side by side](media/editor.png) | ![Several projects' terminals in one window](media/terminals.png) |
-| *Editor and terminals, with the keys that apply shown underneath* | *A project's terminals as tabs, or all at once in a grid* |
-| ![Command palette](media/palette.png) | ![Remote access from a phone](media/remote.png) |
-| *Every command, searchable, with its key* | *The same window from a browser or a phone* |
+▶ **[Watch the video](https://cdn.jsdelivr.net/gh/p32929/roxaruu@master/media/demo.mp4)** (1 min): a script that opens three Terminal windows opens them as tabs in Roxaruu instead, with every shortcut on screen.
 
 ## Why I made it
 
