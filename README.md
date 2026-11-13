@@ -12,8 +12,8 @@ Get the file for your system from the
 
 ### macOS (Apple Silicon and Intel)
 
-1. Open `Roxaruu-<version>-macos-apple-silicon.dmg` (M1 and later) or
-   `Roxaruu-<version>-macos-intel.dmg` (older Macs; Apple menu → About This
+1. Open `roxaruu_v<version>_macos_apple-silicon.dmg` (M1 and later) or
+   `roxaruu_v<version>_macos_intel.dmg` (older Macs; Apple menu → About This
    Mac says which), and drag **Roxaruu** into **Applications**.
 2. The first time, right-click Roxaruu in Applications and choose **Open**, then
    **Open** again (it isn't notarized by Apple yet, so a plain double-click is
@@ -21,13 +21,13 @@ Get the file for your system from the
 
 ### Windows (10 and 11, 64-bit)
 
-1. Run `Roxaruu-<version>-windows-x64-setup.exe`. It installs for you only (no
+1. Run `roxaruu_v<version>_windows_x64_setup.exe`. It installs for you only (no
    admin password), adds Roxaruu to the Start Menu, the `rox` command, and
    **Open with Roxaruu** to File Explorer's right-click menu.
 2. If Windows says "Windows protected your PC", choose **More info → Run
    anyway** (the installer isn't signed yet).
 
-Or unzip `Roxaruu-<version>-windows-x64.zip` anywhere and run `roxaruu.exe`.
+Or unzip `roxaruu_v<version>_windows_x64.zip` anywhere and run `roxaruu.exe`.
 
 Terminals run Git Bash, so install [Git for Windows](https://git-scm.com/downloads/win)
 if you haven't (Roxaruu offers the link when you open a terminal without it).
@@ -36,8 +36,8 @@ terminals use WSL by themselves.
 
 ### Linux (64-bit)
 
-- Debian, Ubuntu, Mint, Pop!_OS: `sudo apt install ./roxaruu_<version>_amd64.deb`
-- Anything else: unpack `Roxaruu-<version>-linux-x64.tar.xz`; the program is
+- Debian, Ubuntu, Mint, Pop!_OS: `sudo apt install ./roxaruu_v<version>_linux_x64.deb`
+- Anything else: unpack `roxaruu_v<version>_linux_x64.tar.xz`; the program is
   `bin/roxaruu` (copy `share/` into `~/.local/share/` for the app-menu entry).
 
 ## Use

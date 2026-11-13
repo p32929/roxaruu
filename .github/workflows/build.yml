@@ -180,7 +180,7 @@ jobs:
           [ -f "$ISCC" ] || choco install innosetup -y --no-progress
           # (Git Bash would take "/DVersion" for a path and rewrite it.)
           MSYS_NO_PATHCONV=1 "$ISCC" "/DVersion=$VERSION" packaging/roxaruu.iss
-          7z a -mx9 "dist/Roxaruu-$VERSION-windows-x64.zip" ./target/release/roxaruu.exe ./target/release/roxaruu-hook.exe ./dist/rox.cmd
+          7z a -mx9 "dist/roxaruu_v${VERSION}_windows_x64.zip" ./target/release/roxaruu.exe ./target/release/roxaruu-hook.exe ./dist/rox.cmd
           rm dist/roxaruu.ico dist/rox.cmd
 
       - name: Package (Linux .deb and .tar.xz)
@@ -206,8 +206,8 @@ jobs:
           Description: A keyboard-first code editor with built-in terminals
           EOF
           # xz: zstd (the newer default) is unreadable to Debian 11 and older.
-          dpkg-deb -Zxz -z9 --build --root-owner-group pkg "dist/roxaruu_${VERSION}_amd64.deb"
-          tar -cJf "dist/Roxaruu-$VERSION-linux-x64.tar.xz" -C pkg/usr .
+          dpkg-deb -Zxz -z9 --build --root-owner-group pkg "dist/roxaruu_v${VERSION}_linux_x64.deb"
+          tar -cJf "dist/roxaruu_v${VERSION}_linux_x64.tar.xz" -C pkg/usr .
 
       - uses: actions/upload-artifact@v4
         if: runner.os != 'macOS'
@@ -224,7 +224,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force smoke | Out-Null
-          $setup = (Get-ChildItem dist\*-setup.exe | Select-Object -First 1).FullName
+          $setup = (Get-ChildItem dist\*_setup.exe | Select-Object -First 1).FullName
           Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER' -Wait
           $exe = "$env:LOCALAPPDATA\Programs\Roxaruu\roxaruu.exe"
           if (!(Test-Path $exe)) { throw "the installer didn't put it at $exe" }
@@ -264,7 +264,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y xvfb imagemagick mesa-vulkan-drivers libgl1-mesa-dri
-          sudo apt-get install -y "./dist/roxaruu_${VERSION}_amd64.deb"
+          sudo apt-get install -y "./dist/roxaruu_v${VERSION}_linux_x64.deb"
           mkdir -p smoke
           export XDG_RUNTIME_DIR="$(mktemp -d)"
           xvfb-run -a -s "-screen 0 1600x1000x24" bash -c '
@@ -326,7 +326,7 @@ jobs:
             # Sized by hand: hdiutil's own guess runs out of room for big apps.
             size=$(( $(du -sm dmg | cut -f1) + 64 ))
             # LZMA (ULMO): the smallest disk image (macOS 10.15+).
-            hdiutil create -volname Roxaruu -srcfolder dmg -size "${size}m" -ov -format ULMO "dist/Roxaruu-$VERSION-macos-$name.dmg"
+            hdiutil create -volname Roxaruu -srcfolder dmg -size "${size}m" -ov -format ULMO "dist/roxaruu_v${VERSION}_macos_$name.dmg"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -336,7 +336,7 @@ jobs:
       - name: Open it (macOS)
         run: |
           mkdir -p smoke
-          hdiutil attach -nobrowse -mountpoint /tmp/roxaruu "dist/Roxaruu-$VERSION-macos-apple-silicon.dmg"
+          hdiutil attach -nobrowse -mountpoint /tmp/roxaruu "dist/roxaruu_v${VERSION}_macos_apple-silicon.dmg"
           mkdir -p "$HOME/Applications"
           cp -R /tmp/roxaruu/Roxaruu.app "$HOME/Applications/"
           "$HOME/Applications/Roxaruu.app/Contents/MacOS/roxaruu" --foreground "$PWD" & pid=$!
