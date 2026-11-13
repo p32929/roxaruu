@@ -222,8 +222,8 @@ fn watch(
     w: std::sync::Weak<Watch>,
     waker: Option<Waker>,
 ) {
-    // When something was last raised, and when the program last said
-    // something itself.
+    // When something was last raised, and when Claude Code's hooks last
+    // said something themselves.
     let (mut last, mut spoke): (Option<Instant>, Option<Instant>) = (None, None);
     loop {
         thread::sleep(Duration::from_millis(500));
@@ -251,11 +251,15 @@ fn watch(
             if std::fs::rename(&path, &taken).is_ok() {
                 let text = std::fs::read_to_string(&taken).unwrap_or_default();
                 let _ = std::fs::remove_file(&taken);
-                said.extend(text.lines().filter(|l| !l.trim().is_empty()).map(str::to_string));
+                let lines: Vec<String> = text.lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect();
+                // The hooks said it: "went quiet" would only repeat it. (A
+                // bell or a printed notice earlier doesn't: the agent may
+                // work on after it, then finish.)
+                if !lines.is_empty() {
+                    spoke = Some(Instant::now());
+                }
+                said.extend(lines);
             }
-        }
-        if said.iter().any(|m| !m.is_empty()) {
-            spoke = Some(Instant::now());
         }
         let recent = spoke.is_some_and(|t| t.elapsed() < Duration::from_secs(5));
         if said.is_empty() && quiet && !recent && w.agent.load(Ordering::Relaxed) {

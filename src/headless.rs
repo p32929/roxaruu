@@ -3593,6 +3593,8 @@ fn headless_remote_access() {
     assert_eq!(marker, format!(r#"{{"pid":{},"port":{port},"browser_only":false}}"#, std::process::id()));
 
     // Sign in; this window is listed.
+    let listed = crate::instances::remote_windows().len();
+    assert!(listed >= 1);
     assert!(sign_in(port, "wrong").is_none());
     let session = sign_in(port, "open sesame").expect("signed in");
     let me = std::process::id() as i32;
@@ -3725,7 +3727,8 @@ fn headless_remote_access() {
     wait_port_closed(port, || h.step());
     h.step();
     assert!(!app(&h).remote.on && crate::instances::remote_server().is_none());
-    assert!(crate::instances::remote_windows().is_empty());
+    // (Other tests in this process may still list theirs.)
+    assert_eq!(crate::instances::remote_windows().len(), listed - 1, "this window no longer listed");
 
     // Turning on again asks for a password again (typed hidden).
     h.state_mut().0.run(crate::keymap::Command::ToggleRemoteAccess, &ctx);
@@ -3778,9 +3781,10 @@ fn headless_remote_stops_with_the_window() {
     let (h, port) = serve_remotely("pw", "");
     let session = sign_in(port, "pw").expect("signed in");
     let mut ws = link(port, std::process::id() as i32, &session);
+    let listed = crate::instances::remote_windows().len();
     drop(h);
     assert!(crate::instances::remote_server().is_none(), "the marker went with the window");
-    assert!(crate::instances::remote_windows().is_empty());
+    assert_eq!(crate::instances::remote_windows().len(), listed - 1, "nor is it listed");
     wait_link_closed(&mut ws, || {});
     wait_port_closed(port, || {});
 }
