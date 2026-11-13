@@ -1250,10 +1250,15 @@ impl TerminalPane {
             return;
         }
         self.last_proc_check = Instant::now();
-        let name = self.foreground_pid().and_then(process_name).unwrap_or_default();
+        let pid = self.foreground_pid();
+        // The shell itself in front is a bare prompt, whatever it's called:
+        // for a moment after spawning, before it execs the shell, the child
+        // is a copy of this process, named (on Linux) after the thread that
+        // started it. ponytail: `exec prog` in the shell reads as idle too.
+        let shell = pid.is_some() && pid == self.child.process_id().map(|p| p as i32);
+        let name = pid.filter(|_| !shell).and_then(process_name).unwrap_or_default();
         // Treat the bare shell (login or not, e.g. "-zsh"/"zsh") as idle —
-        // and our own name too: for a moment after spawning, before it execs
-        // the shell, the child is still a copy of this process.
+        // and our own name too (a fork, as above).
         let trimmed = name.trim_start_matches('-');
         let proc = if trimmed.is_empty() || trimmed == self.shell_name || is_own_name(trimmed) {
             String::new()

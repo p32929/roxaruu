@@ -579,6 +579,7 @@ impl App {
         let list = match command {
             Command::Palette => Some(Mode::Commands),
             Command::RecentFolders => Some(Mode::Recent),
+            Command::OpenFolder => Some(Mode::Folders),
             Command::SearchInFiles => Some(Mode::Search),
             Command::GoToLine => Some(Mode::Line),
             Command::SwitchTerminal => Some(Mode::Terminals),
@@ -601,11 +602,9 @@ impl App {
                     self.notify("Open a folder first")
                 }
             }
-            Command::OpenFolder => {
-                // The system's folder picker takes over: nothing should be left open behind it.
-                self.close_palette(false, ctx);
-                self.open_folders(pick_folders(), ctx);
-            }
+            // Our own picker, never the system's: that one is missing on a
+            // server and opens out of sight of a browser using remote access.
+            Command::OpenFolder => self.open_palette(Mode::Folders, ctx),
             Command::RecentFolders => self.open_palette(Mode::Recent, ctx),
             Command::CloseFolder => self.begin_close(self.tab_paths(), After::CloseFolder, ctx),
             Command::SelectTheme => self.open_palette(Mode::Themes, ctx),
@@ -1926,6 +1925,14 @@ impl App {
             Mode::UiFonts | Mode::CodeFonts => Some(Revert::Settings(self.config.settings.clone())),
             _ => None,
         };
+        if mode == Mode::Folders {
+            // Start beside the folder that's open, else at home.
+            let start = self.project.as_ref().and_then(|p| p.root.parent()).map(PathBuf::from).or_else(crate::config::home);
+            if let Some(start) = start {
+                p.query = folder_text(&start);
+                p.to_end = true;
+            }
+        }
         self.palette = Some(p);
         self.refresh_items();
         // Start the pickers on the current choice.
@@ -1980,6 +1987,7 @@ impl App {
                 Pick::CodeFont,
             ),
             Mode::Recent => self.recent_items(&query),
+            Mode::Folders => folder_items(&query),
             Mode::Terminals => self.terminal_items(&query),
             Mode::Links => self.link_items(&query),
             Mode::Search => {
@@ -2242,12 +2250,7 @@ impl App {
             .chain(std::iter::once(Item {
                 icon: icon::FOLDER_OPEN,
                 label: "Open Another Folder…".into(),
-                detail: if cfg!(target_os = "macos") {
-                    "choose one or several in Finder (⌘-click)"
-                } else {
-                    "choose one or several (Ctrl-click)"
-                }
-                .into(),
+                detail: "browse to any folder".into(),
                 caps: self
                     .config
                     .keymap
@@ -2466,22 +2469,46 @@ fn recall_place(tab: &mut Tab) {
     }
 }
 
-/// The system's folder picker (Finder, Explorer, the desktop's portal): one
-/// folder, or several (Ctrl/⌘- or ⇧-click).
-#[cfg(not(test))]
-fn pick_folders() -> Vec<PathBuf> {
-    let picked = rfd::FileDialog::new()
-        .set_title("Open Folders")
-        .pick_folders()
-        .unwrap_or_default();
-    tracing::info!(?picked, "folder picker");
-    picked
+/// A folder as Open Folder's query shows it: `~` for home, ending in a
+/// separator, so its folders are listed.
+pub fn folder_text(dir: &Path) -> String {
+    let text = crate::ui::tilde(&dir.to_string_lossy());
+    if text.ends_with(std::path::is_separator) {
+        text
+    } else {
+        format!("{text}{}", std::path::MAIN_SEPARATOR)
+    }
 }
 
-/// Tests never open the real picker.
-#[cfg(test)]
-fn pick_folders() -> Vec<PathBuf> {
-    Vec::new()
+/// Open Folder's list: the folder typed, then the folders in it (see
+/// `palette::folder_query`); hidden ones only once a `.` is typed.
+fn folder_items(query: &str) -> Vec<Item> {
+    let home = crate::config::home().unwrap_or_default();
+    let (dir, filter) = crate::palette::folder_query(query, &home);
+    let mut found: Vec<(i64, String)> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir()) // links to folders too
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') && !filter.starts_with('.') {
+                return None;
+            }
+            Some((fuzzy::score(&filter, &name)?, name))
+        })
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+    let here = (filter.is_empty() && dir.is_dir()).then(|| {
+        Item::new(icon::FOLDER_OPEN, "Open This Folder", Pick::Folder(dir.clone()))
+            .detail(crate::ui::tilde(&dir.to_string_lossy()))
+    });
+    here.into_iter()
+        .chain(found.into_iter().take(MAX_RESULTS).map(|(_, name)| Item {
+            matched: fuzzy::positions(&filter, &name),
+            ..Item::new(icon::FOLDER, name.clone(), Pick::Folder(dir.join(&name)))
+        }))
+        .collect()
 }
 
 /// Maximize the window, or restore it (the title bar's double-click).

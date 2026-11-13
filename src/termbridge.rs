@@ -331,7 +331,10 @@ fn bridge_dir_name(pid: u32) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("oxru-{pid}-{nonce:x}")
+    // The clock can read the same twice (macOS: to the microsecond).
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("oxru-{pid}-{nonce:x}{n:x}")
 }
 
 /// The PID a bridge directory belongs to, for both the current

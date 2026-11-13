@@ -4516,6 +4516,30 @@ impl App {
             {
                 self.reset_binding(ctx)
             }
+            Mode::Folders => {
+                // ⇥ into the selected folder, ⇧⇥ up out of the one typed.
+                let (up, into) = ctx.input_mut(|i| {
+                    (i.consume_key(Modifiers::SHIFT, Key::Tab), i.consume_key(Modifiers::NONE, Key::Tab))
+                });
+                let Some(pal) = &mut self.palette else { return false };
+                let home = crate::config::home().unwrap_or_default();
+                let to = match pal.selected_pick() {
+                    Some(Pick::Folder(dir)) if into => Some(dir.clone()),
+                    _ if up => {
+                        let (dir, filter) = crate::palette::folder_query(&pal.query, &home);
+                        // With a name half typed, ⇧⇥ first drops the name.
+                        if filter.is_empty() { dir.parent().map(std::path::Path::to_path_buf) } else { Some(dir) }
+                    }
+                    _ => None,
+                };
+                if let Some(to) = to {
+                    pal.query = crate::app::folder_text(&to);
+                    pal.to_end = true;
+                    pal.selected = 0;
+                    pal.scroll = 0;
+                    self.refresh_items();
+                }
+            }
             _ => {}
         }
         false
@@ -4856,6 +4880,16 @@ impl App {
                 ],
                 vec![],
             ),
+            Some(Mode::Folders) => (
+                "Open Folder",
+                vec![
+                    ("↵", "Open the selected folder"),
+                    ("⇥", "Go into it, to list its folders"),
+                    ("⇧⇥", "Go up a folder"),
+                    ("~/", "Start from your home folder"),
+                ],
+                vec![],
+            ),
             Some(Mode::Keybindings) => (
                 "Keyboard Shortcuts",
                 vec![
@@ -5158,6 +5192,13 @@ impl App {
                 } else {
                     let resp = ui.put(edit_rect, edit);
                     resp.request_focus();
+                    if std::mem::take(&mut pal.to_end)
+                        && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), resp.id)
+                    {
+                        let end = egui::text::CCursor::new(pal.query.chars().count());
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+                        state.store(ui.ctx(), resp.id);
+                    }
                     if resp.changed() {
                         // To-do's box is for new tasks, not a filter: keep the selection.
                         if mode != Mode::Todos {
@@ -5204,6 +5245,7 @@ impl App {
                             "Type to search every file in the project"
                         }
                         Mode::Search if searching => "Searching…",
+                        Mode::Folders => "No folder here — ⇧⇥ goes up",
                         _ => "No matches",
                     };
                     ui.painter().text(
@@ -5396,6 +5438,13 @@ impl App {
                 v.push(esc);
                 v
             }
+            Mode::Folders => vec![
+                (k("↑ ↓"), "move"),
+                (k("↵"), "open folder"),
+                (k("⇥"), "into folder"),
+                (k("⇧⇥"), "up a folder"),
+                esc,
+            ],
             Mode::Search => vec![(k("↑ ↓"), "move"), (k("↵"), "open at match"), esc],
             Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to it"), esc],
             Mode::Links => vec![(k("↑ ↓"), "move"), (k("↵"), "open in browser"), esc],

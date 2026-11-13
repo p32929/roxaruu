@@ -3,7 +3,7 @@
 //! keyboard shortcuts. This is just its state; `app` fills the items
 //! and `ui` draws it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::Settings;
 use crate::keymap::Command;
@@ -16,6 +16,8 @@ pub enum Mode {
     UiFonts,
     CodeFonts,
     Recent,
+    /// Open Folder: browse to any folder, by typing its path.
+    Folders,
     Terminals,
     Search,
     Todos,
@@ -34,6 +36,7 @@ impl Mode {
             Mode::UiFonts => "Select a UI font — ↑↓ to preview",
             Mode::CodeFonts => "Select a code font — ↑↓ to preview",
             Mode::Recent => "Open a recent folder…",
+            Mode::Folders => "Type a folder's path…",
             Mode::Terminals => "Switch to a terminal…",
             Mode::Line => "Line number — or line:column",
             Mode::Search => "Search in files…",
@@ -139,6 +142,8 @@ pub struct Palette {
     pub armed: bool,
     /// The egui pass it opened in; presses from that pass don't arm it.
     pub opened: u64,
+    /// The query was set for you (Open Folder's ⇥): put the cursor at its end.
+    pub to_end: bool,
 }
 
 impl Palette {
@@ -155,6 +160,7 @@ impl Palette {
             capture: None,
             armed: false,
             opened: 0,
+            to_end: false,
         }
     }
 
@@ -234,6 +240,25 @@ pub fn label_positions(full: &str, positions: &[usize]) -> Vec<usize> {
         .collect()
 }
 
+/// Open Folder's query, a path: the folder whose folders to list, and the
+/// start of a name to narrow them by. `~/code/` lists ~/code; `~/code/ap`
+/// lists ~/code's folders matching "ap". `~` is the home folder, and a path
+/// that doesn't start at a root starts there too.
+pub fn folder_query(query: &str, home: &Path) -> (PathBuf, String) {
+    let sep = |c: char| std::path::is_separator(c);
+    let rest = match query.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with(sep) => rest.trim_start_matches(sep),
+        _ => query,
+    };
+    // Split the text, not a `Path`: that drops a trailing `.`, the start of a
+    // hidden folder's name.
+    let (dir, name) = match rest.rfind(sep) {
+        Some(i) => rest.split_at(i + 1),
+        None => ("", rest),
+    };
+    (home.join(dir), name.to_string()) // `dir` from a root replaces `home`
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +278,24 @@ mod tests {
             });
         }
         p
+    }
+
+    #[test]
+    fn folder_query_splits_a_typed_path() {
+        let home = Path::new("/home/me");
+        let q = |s: &str| folder_query(s, home);
+        // Paths compare by component: the same on every system.
+        let s = |d: &str, f: &str| (PathBuf::from(d), f.to_string());
+        assert_eq!(q(""), s("/home/me", ""));
+        assert_eq!(q("~"), s("/home/me", ""));
+        assert_eq!(q("~/"), s("/home/me", ""));
+        assert_eq!(q("~/code/"), s("/home/me/code/", ""));
+        assert_eq!(q("~/code/ap"), s("/home/me/code", "ap"));
+        assert_eq!(q("code"), s("/home/me", "code"));
+        assert_eq!(q("~me"), s("/home/me", "~me"));
+        assert_eq!(q("/"), s("/", ""));
+        assert_eq!(q("/usr/lo"), s("/usr", "lo"));
+        assert_eq!(q("~/code/."), s("/home/me/code", "."));
     }
 
     #[test]

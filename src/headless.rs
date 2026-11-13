@@ -2260,6 +2260,66 @@ fn headless_focus_keys() {
     assert!(app(&h).palette.is_none(), "so does ⌥F");
 }
 
+/// Open Folder is our own list, on every system (the system's picker is
+/// missing on a server, and out of sight of remote access): it starts at
+/// home, lists the folders in the one typed (hidden ones only once a `.` is
+/// typed), narrows by name, ⇥ goes in, ⇧⇥ up, ↵ opens.
+#[test]
+#[ignore]
+fn headless_open_folder_list() {
+    use crate::palette::{Mode, Pick};
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    for d in ["alpha", "shop/src", ".hidden"] {
+        std::fs::create_dir_all(base.join(d)).unwrap();
+    }
+    std::fs::write(base.join("notes.txt"), "not a folder").unwrap();
+    let mut h = harness(None);
+    let rows = |h: &Harness<'static, Root>| -> Vec<String> {
+        app(h).palette.as_ref().unwrap().items.iter().map(|i| i.label.clone()).collect()
+    };
+    let query = |h: &Harness<'static, Root>| app(h).palette.as_ref().unwrap().query.clone();
+
+    press(&mut h, CMD, Key::O);
+    let p = app(&h).palette.as_ref().expect("Open Folder opens the list");
+    assert_eq!(p.mode, Mode::Folders);
+    let home = crate::config::home().unwrap();
+    assert_eq!(p.query, crate::app::folder_text(&home), "it starts at home");
+    assert_eq!(p.items[0].pick, Pick::Folder(home.clone()));
+
+    let p = h.state_mut().0.palette.as_mut().unwrap();
+    p.query = crate::app::folder_text(&base);
+    p.to_end = true;
+    h.state_mut().0.refresh_items();
+    h.step();
+    assert_eq!(rows(&h), ["Open This Folder", "alpha", "shop"], "folders only, hidden ones left out");
+    shot(&mut h, "o0-folders");
+    type_text(&mut h, ".");
+    assert_eq!(rows(&h), [".hidden"]);
+    press(&mut h, Modifiers::NONE, Key::Backspace);
+    type_text(&mut h, "sh");
+    assert_eq!(rows(&h), ["shop"]);
+
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert_eq!(query(&h), crate::app::folder_text(&base.join("shop")), "⇥ goes in");
+    assert_eq!(rows(&h), ["Open This Folder", "src"]);
+    type_text(&mut h, "s");
+    assert!(query(&h).ends_with("s"), "and typing goes on at the end: {}", query(&h));
+    press(&mut h, Modifiers::SHIFT, Key::Tab);
+    assert_eq!(query(&h), crate::app::folder_text(&base.join("shop")), "⇧⇥ drops a half-typed name");
+    press(&mut h, Modifiers::SHIFT, Key::Tab);
+    assert_eq!(query(&h), crate::app::folder_text(&base), "then goes up");
+
+    type_text(&mut h, "sh");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(app(&h).palette.is_none());
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(base.join("shop")), "↵ opens it");
+
+    press(&mut h, CMD, Key::O);
+    press(&mut h, CMD, Key::O);
+    assert!(app(&h).palette.is_none(), "its key closes it again");
+}
+
 /// Recent Folders, several at once: space / ⇥ tick one, ⇧↓ ticks a run,
 /// ⌘-click and ⇧-click too; ticks survive the search; ↵ opens them all,
 /// the first here, the rest each in a window of its own.

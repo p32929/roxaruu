@@ -188,10 +188,14 @@ HOME=$SP/home SHOTS=$SP/shots PROJECT=<a file inside a git repo> BIG=<a big sour
 
 Roxaruu runs everywhere VS Code does, every feature on every system.
 - Works out of the box: nothing for the user to install, but for Windows
-  terminals (below). Use what each system has (its notifications, its file
-  dialogs), and for anything cross-platform prefer an existing crate
-  (`sysinfo`, `opener`, `notify-rust`, `rfd`, `which`, `keepawake`) to
-  hand-written OS code.
+  terminals (below). Build it into the app rather than use the system's
+  version whenever it can be (the owner's rule): a system dialog can be
+  missing (a server has no folder picker) and opens out of sight of remote
+  access, so Open Folder is our own list (`Mode::Folders`,
+  `headless_open_folder_list`). The system's only where nothing of ours can
+  run (`main::couldnt_start`, before any window). Where the OS must be asked
+  (notifications, opening a link), prefer an existing crate (`sysinfo`,
+  `opener`, `notify-rust`, `which`, `keepawake`) to hand-written OS code.
 - Anything that asks the OS lives in `sys.rs`, with a version for each of
   macOS, Windows and Linux (not an empty stand-in). Terminals run the
   `terminalShell` setting (`sys::shell_for`): the login shell on macOS and
