@@ -355,6 +355,22 @@ fn wait_disk(h: &mut Harness<'static, Root>) {
     h.step();
 }
 
+/// Remote access off, whatever an earlier test in this process left on
+/// (tests share the running dir): before a test that starts from off.
+fn remote_off_elsewhere() {
+    crate::instances::clear_remote_server(false);
+}
+
+/// The same, once `h` has followed it (it reads the marker within a second).
+fn remote_off(h: &mut Harness<'static, Root>) {
+    remote_off_elsewhere();
+    h.step();
+    while app(h).remote.on {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Step until `done` holds (the shell runs in real time), however long that
 /// takes: no time limit to trip on a slow machine. (`what`, said once if it
 /// isn't so at first, names what a stuck test waits for.)
@@ -3734,6 +3750,7 @@ fn headless_remote_stops_with_the_window() {
     std::fs::write(crate::config::settings_path(), "{ \"remoteAccess\": true }").unwrap();
     std::fs::write(crate::remote::old_secrets_path(), r#"{"salt":"00","hash":"00","iterations":1,"key":"00"}"#)
         .unwrap();
+    remote_off_elsewhere();
     let mut h = harness(None);
     for _ in 0..3 {
         h.step();
@@ -3822,13 +3839,7 @@ fn serve_remotely(password: &str, text: &str) -> (Harness<'static, Root>, u16) {
         .unwrap()
         .port();
     h.state_mut().1.port = port;
-    // Whatever an earlier test in this process left serving: off.
-    crate::instances::clear_remote_server(false);
-    h.step();
-    while app(&h).remote.on {
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    remote_off(&mut h);
     let ctx = h.ctx.clone();
     h.state_mut().0.run(crate::keymap::Command::ToggleRemoteAccess, &ctx);
     h.step(); // the field takes the keyboard as the dialog appears
