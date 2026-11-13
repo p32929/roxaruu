@@ -162,8 +162,9 @@ esac
 case "$OS" in
 linux)
     DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
-    mkdir -p "$DATA/applications" "$DATA/icons/hicolor/512x512/apps"
+    mkdir -p "$DATA/applications" "$DATA/icons/hicolor/512x512/apps" "$DATA/icons/hicolor/scalable/apps"
     cp assets/icon.png "$DATA/icons/hicolor/512x512/apps/roxaruu.png"
+    cp assets/icon.svg "$DATA/icons/hicolor/scalable/apps/roxaruu.svg" # sharp at any size
     # The app-menu entry: one file, shared with the release builds.
     sed -e "s|@EXEC@|$BIN_DIR/roxaruu|" -e "s/@VERSION@/$VERSION/" packaging/roxaruu.desktop \
         > "$DATA/applications/roxaruu.desktop"

@@ -171,6 +171,9 @@ fn main() -> eframe::Result {
     if let Ok(icon) = eframe::icon_data::from_png_bytes(ICON) {
         viewport = viewport.with_icon(icon);
     }
+    // Linux: who this window is (Wayland's app id, X11's WM_CLASS), so the
+    // desktop puts roxaruu.desktop's icon on it and groups it in the dock.
+    viewport = viewport.with_app_id("roxaruu");
     // Terminals keep streaming while the window is in the background.
     sys::prevent_app_nap();
     let safe = match std::env::var(RENDERER_ENV) {

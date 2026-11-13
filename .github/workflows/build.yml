@@ -186,13 +186,15 @@ jobs:
       - name: Package (Linux .deb and .tar.xz)
         if: runner.os == 'Linux'
         run: |
-          mkdir -p dist pkg/DEBIAN pkg/usr/bin pkg/usr/share/applications pkg/usr/share/icons/hicolor/512x512/apps
+          mkdir -p dist pkg/DEBIAN pkg/usr/bin pkg/usr/share/applications pkg/usr/share/icons/hicolor/512x512/apps \
+            pkg/usr/share/icons/hicolor/scalable/apps
           cp target/release/roxaruu target/release/roxaruu-hook pkg/usr/bin/
           printf '#!/bin/sh\nexec /usr/bin/roxaruu "$@"\n' > pkg/usr/bin/rox
           chmod 755 pkg/usr/bin/roxaruu pkg/usr/bin/roxaruu-hook pkg/usr/bin/rox
           sed -e "s|@EXEC@|/usr/bin/roxaruu|" -e "s/@VERSION@/$VERSION/" packaging/roxaruu.desktop \
             > pkg/usr/share/applications/roxaruu.desktop
           cp assets/icon.png pkg/usr/share/icons/hicolor/512x512/apps/roxaruu.png
+          cp assets/icon.svg pkg/usr/share/icons/hicolor/scalable/apps/roxaruu.svg # sharp at any size
           cat > pkg/DEBIAN/control <<EOF
           Package: roxaruu
           Version: $VERSION

@@ -146,6 +146,9 @@ fn handle(tcp: TcpStream, setup: &Setup, failures: &AtomicU32, stop: &AtomicBool
             ],
             b"",
         ),
+        // The app's icon, for the browser tab and a phone's home screen
+        // (the sign-in page shows it too: nothing private).
+        ("GET", "/icon.png") => respond(&mut tls, "200 OK", &[("Content-Type", "image/png"), ("Cache-Control", "max-age=86400")], crate::ICON),
         ("GET", "/api/windows") if signed_in => {
             let list: Vec<serde_json::Value> = (setup.windows)()
                 .into_iter()
@@ -385,6 +388,12 @@ mod tests {
         let page = https(port, &format!("GET / HTTP/1.1\r\nHost: {host}\r\n\r\n"));
         assert!(page.starts_with("HTTP/1.1 200") && page.contains("type=\"password\""), "{page}");
         assert!(page.contains("X-Frame-Options: DENY"), "never shown inside another site's frame");
+        // The icon (browser tab, home screen) is there before signing in, as
+        // the sign-in page shows it; the page and sign-in link to it.
+        let icon = https(port, &format!("GET /icon.png HTTP/1.1\r\nHost: {host}\r\n\r\n"));
+        assert!(icon.starts_with("HTTP/1.1 200") && icon.contains("Content-Type: image/png"), "{}", &icon[..80.min(icon.len())]);
+        assert!(icon.contains("PNG\r\n"), "the PNG itself");
+        assert!(PAGE.contains(r#"rel="icon""#) && LOGIN.contains(r#"rel="icon""#));
         let api = https(port, &format!("GET /api/windows HTTP/1.1\r\nHost: {host}\r\n\r\n"));
         assert!(api.starts_with("HTTP/1.1 401"), "{api}");
 
