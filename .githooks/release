@@ -1,27 +1,12 @@
 #!/usr/bin/env bash
-# Publish this version for anyone to download: tags the commit you're on as
-# v<version> (from Cargo.toml) and pushes the tag. CI then builds, tests and
-# packages every system (the Mac disk images, the Windows installer and zip,
-# the Linux .deb and .tar.xz) and, if all of it passes, makes a GitHub
-# release with them — https://github.com/<repo>/releases/latest. Followed
-# here until it's done.
+# Publish this version for anyone to download: starts the build workflow
+# (it runs only when started) for the branch you're on, which builds, tests
+# and packages Windows, macOS and Linux and, if every test passes, publishes
+# GitHub release v<version> (Cargo.toml's) with the downloads — replacing
+# that version's release if it was published before. Followed here.
 set -euo pipefail
-root=$(git rev-parse --show-toplevel)
-cd "$root"
+cd "$(git rev-parse --show-toplevel)"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-tag="v$version"
-sha=$(git rev-parse HEAD)
 [ -z "$(git status --porcelain)" ] || { echo "release: commit (or stash) your changes first"; exit 1; }
-[ "$(git rev-parse "@{u}" 2>/dev/null)" = "$sha" ] || { echo "release: push $(git branch --show-current) first"; exit 1; }
-if git rev-parse -q --verify "refs/tags/$tag" >/dev/null || git ls-remote --exit-code --tags origin "$tag" >/dev/null 2>&1; then
-  echo "release: $tag exists already; bump the version (Cargo.toml) for a new one"
-  exit 1
-fi
-git tag -a "$tag" -m "Roxaruu $version"
-git push origin "$tag"
-echo "release: $tag pushed; CI builds every system, then publishes it"
-repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-until run=$(gh run list --branch "$tag" -L1 --json databaseId -q '.[0].databaseId' 2>/dev/null) && [ -n "$run" ]; do
-  sleep 3
-done
-"$(dirname "$0")/ci-watch" "$run" && echo "release: published — https://github.com/$repo/releases/tag/$tag"
+echo "release: v$version, from $(git branch --show-current) ($(git rev-parse --short HEAD))"
+"$(dirname "$0")/ci-watch" --run

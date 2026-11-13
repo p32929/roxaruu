@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Before anything leaves this machine: this system's whole test suite, here
-# (CI runs the other systems; see prepare-commit-msg). A failure stops the
+# (the others run with a release: .githooks/release). A failure stops the
 # push. Pushing only tags or docs, or deleting a branch, tests nothing.
 set -eo pipefail
 z=0000000000000000000000000000000000000000
@@ -20,7 +20,7 @@ done
 platform=$("$(dirname "$0")/platform")
 root=$(git rev-parse --show-toplevel)
 cd "$root"
-echo "pre-push: $platform tests, here (the others: .githooks/ci-watch --run)"
+echo "pre-push: $platform tests, here (every system, and a release: .githooks/release)"
 cargo clippy --release --all-targets -- -D warnings
 "$(dirname "$0")/test-all" # every test, in a few processes, scratch homes
 echo "pre-push: $platform tests passed"

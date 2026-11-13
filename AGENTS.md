@@ -172,7 +172,7 @@ same list twice, make one table and read it from both places.
   the tests fast (every test, in a few processes side by side,
   each with its own scratch HOME; pre-push and CI use it; each test's
   line as it finishes, `✓ passed 1.2s name` / `✗ FAILED`, via
-  `format-tests`). `.githooks/ci-watch --run` starts CI for the pushed branch and follows it here. By hand:
+  `format-tests`). `.githooks/release` starts CI (every system, then a release) and follows it here. By hand:
 
 ```sh
 cargo clippy --release --all-targets          # must be clean
@@ -232,33 +232,28 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 - Off macOS, Roxaruu's keys are Ctrl chords, which a terminal's shell wants
   too: only `terminal::passes_the_shell` get past it, and hints in a
   terminal never show one that doesn't (`key_reaches`).
-- Tests run where you work, CI runs the rest when asked: with
-  `git config core.hooksPath .githooks` (once per clone), each commit says
-  which system it was made on (`Tested-on: macOS`, `prepare-commit-msg`),
-  `pre-push` runs that system's whole suite (above) there and stops the
-  push on a failure. A push starts no CI (each run costs; batch changes,
-  and ask before starting one): `.github/workflows/build.yml` runs for a
-  pull request into master, a release tag, or a manual run
-  (`.githooks/ci-watch --run`), whose `plan` job builds, tests and packages
-  only the systems the commit wasn't tested on — every test: on
-  macOS and Linux with `--include-ignored` (the UI walkthroughs,
-  screenshots kept with the run), on Windows all that builds there. A
-  release tag or a pull request: all three (a manual run can pick one, or
-  `all`, and skip the tests: `build_only`). Side by side, per
-  system: one machine packages (macOS: one per chip, joined by the `macos`
-  job), two run half the tests each (`test-all` `PART`/`PARTS`, built with
-  the faster `fast` profile); link-time optimisation (¾ of a build) only
-  for a release tag.
-  The package machine installs each package and opens the app (it must still
-  run with its window drawn; screenshots kept with the run) (`packaging/`: the macOS Info.plist and Linux menu entry
-  `install-local.sh` uses too, the Windows installer). It must stay green
+- Tests run where you work; CI runs only when started by hand, and then it
+  releases: with `git config core.hooksPath .githooks` (once per clone),
+  `pre-push` runs this system's whole suite (above) here and stops the push
+  on a failure. `.github/workflows/build.yml` has no automatic trigger
+  (not a push, a tag or a pull request): "Run workflow" (or
+  `.githooks/release`) builds, tests and packages all three systems — every
+  test: on macOS and Linux with `--include-ignored` (the UI walkthroughs,
+  screenshots kept with the run), on Windows all that builds there — and,
+  if all pass, publishes GitHub release `v<Cargo.toml's version>` (the same
+  version again replaces it). Each run costs: start one only when the owner
+  asks. Side by side, per system: one machine packages (macOS: one per
+  chip, a disk image each), two run half the tests each (`test-all`
+  `PART`/`PARTS`, built with the faster `fast` profile). The package
+  machine installs each package and opens the app (it must still run with
+  its window drawn; screenshots kept with the run) (`packaging/`: the macOS
+  Info.plist and Linux menu entry `install-local.sh` uses too, the Windows
+  installer). It must stay green
   on all three; a test that needs a Unix shell is marked
   `#[cfg_attr(not(unix), ignore = "needs a Unix shell")]` and gets a Windows
   counterpart where the feature matters there.
-- A tag `v*` publishes the downloads as a GitHub release (README says how
-  to install each): `.githooks/release` tags `v<Cargo.toml's version>`,
-  pushes it and follows CI until it's published. Publishing is for the
-  owner to ask for.
+- A release (README says how to install each download) is a run of the
+  workflow: `.githooks/release`. Publishing is for the owner to ask for.
 
 ## 5. Ground rules
 

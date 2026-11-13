@@ -1,48 +1,24 @@
-# Builds, tests and packages Roxaruu (kept as this run's artifacts). Runs only
-# when asked, never on a plain push (each push is tested on its own system
-# by the pre-push hook): a pull request into master, a release tag `v*`
-# (which also publishes the downloads as a GitHub release), or a manual run —
-# `.githooks/ci-watch --run` (or GitHub's "Run workflow"). A manual run
-# builds the systems the commit wasn't tested on (it says "Tested-on: macOS"
-# when made with this repo's hooks), or the one picked, and can skip the
-# tests (`-f build_only=true`).
+# Publishes a release: builds, tests and packages Roxaruu for Windows, macOS
+# and Linux, and — if every test passes on every system — publishes GitHub
+# release v<version> (Cargo.toml's) with all the downloads, replacing that
+# version's release if it was published before. It runs only when started
+# by hand ("Run workflow" on GitHub, or `.githooks/release`), and asks
+# nothing: never on a push, a tag or a pull request.
 #
 # Everything runs side by side: per system, one machine builds the packages
 # (and opens the installed app; macOS: one per chip, joined after), two
 # others build the tests (the faster `fast` profile) and run half each.
-# Only a release gets link-time optimisation (and one codegen unit): ¾ of a
-# build's time, and the smallest binary.
 name: build
 
 on:
-  push:
-    tags: ["v*"] # a release; a branch push runs nothing
-  pull_request:
-    branches: [master]
-    paths-ignore: ["**.md"]
   workflow_dispatch:
-    inputs:
-      build_only:
-        description: "Only build the downloads (skip the tests)"
-        type: boolean
-        default: false
-      system:
-        description: "Which system (others: those the commit wasn't tested on)"
-        type: choice
-        options: [others, all, Linux, Windows, macOS]
-        default: others
 
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_PROFILE_RELEASE_LTO: ${{ startsWith(github.ref, 'refs/tags/v') && 'fat' || 'off' }}
-  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '16' }}
-
 jobs:
-  # Which systems to build here (all but the one the push was tested on),
-  # and their tests in two parts each.
+  # Every system, and its tests in two parts.
   plan:
     runs-on: ubuntu-latest
     outputs:
@@ -52,37 +28,17 @@ jobs:
       tests: ${{ steps.pick.outputs.tests }}
     steps:
       - id: pick
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          SYSTEM: ${{ inputs.system }}
-          BUILD_ONLY: ${{ inputs.build_only }}
         run: |
-          all='[{"name":"macOS","os":"macos-latest"},{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]'
-          if [[ "$EVENT" != workflow_dispatch || "$SYSTEM" == all ]]; then
-            systems=$all # a release, a pull request, or asked for all
-          elif [[ "$SYSTEM" == others ]]; then
-            message=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" -q .commit.message || true)
-            tested=$(printf '%s\n' "$message" | sed -n 's/^Tested-on: *//p' | tail -1)
-            systems=$(jq -c --arg t "$tested" 'map(select(.name != $t))' <<<"$all")
-            echo "tested on ${tested:-nothing} already: building the others"
-          else
-            systems=$(jq -c --arg s "$SYSTEM" 'map(select(.name == $s))' <<<"$all")
-          fi
-          if [[ "$BUILD_ONLY" == true ]]; then
-            tests='[]'
-          else
-            tests=$(jq -c '[.[] as $s | range(0; 2) as $p | $s + {part: $p, label: "\($p + 1)/2"}]' <<<"$systems")
-          fi
-          # macOS builds on two machines, one per chip, joined into one app.
+          systems='[{"name":"macOS","os":"macos-latest"},{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]'
+          tests=$(jq -c '[.[] as $s | range(0; 2) as $p | $s + {part: $p, label: "\($p + 1)/2"}]' <<<"$systems")
+          # macOS builds on two machines, one per chip, a disk image each.
           builds=$(jq -c '[.[] | if .name == "macOS" then
             (. + {name: "macOS Apple Silicon", target: "aarch64-apple-darwin"}),
             (. + {name: "macOS Intel", target: "x86_64-apple-darwin"}) else . end]' <<<"$systems")
           echo "systems=$systems" >> "$GITHUB_OUTPUT"
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
-          echo "mac=$(jq 'any(.name == "macOS")' <<<"$systems")" >> "$GITHUB_OUTPUT"
+          echo "mac=true" >> "$GITHUB_OUTPUT"
           echo "tests=$tests" >> "$GITHUB_OUTPUT"
-          echo "building $(jq -r 'map(.name) | join(", ")' <<<"$systems"); tests: $(jq length <<<"$tests") parts"
 
   # Every test, on every system: the unit tests, and on macOS and Linux the
   # UI walkthroughs too (`headless.rs`: real shells, simulated keys and
@@ -355,21 +311,30 @@ jobs:
           path: smoke/*
           if-no-files-found: ignore
 
+  # v<version> (Cargo.toml's), with every download, once everything passed;
+  # a version released before is replaced (its tag moves here too).
   release:
     name: Release
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: [package, macos, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           pattern: Roxaruu-*
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          name: Roxaruu ${{ github.ref_name }}
-          files: dist/*
-          generate_release_notes: true
+      - name: Publish
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          tag="v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag was released before: replacing it"
+            gh release delete "$tag" --yes --cleanup-tag
+          fi
+          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Roxaruu $tag" --generate-notes
+          echo "published: $(gh release view "$tag" --json url -q .url)"

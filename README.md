@@ -60,18 +60,14 @@ libdbus-1-dev`.
 
 Working on it: run `git config core.hooksPath .githooks` once. Then every
 `git push` first runs your system's whole test suite on your machine (and
-stops if it fails). A push starts no CI: it runs for pull requests into
-`master`, release tags, and when asked — `.githooks/ci-watch --run` tests
-and packages the other two systems and follows it in the terminal
-([.githooks](.githooks), `.github/workflows/build.yml`). Each test shows as
-it finishes: `✓ passed  1.2s  name` or `✗ FAILED`. `.githooks/test-all` runs
-them by hand. Just the downloads, no tests (about 4 minutes):
-`.githooks/ci-watch --run -f build_only=true -f system=Linux` (or `all`).
+stops if it fails). CI never runs by itself ([.githooks](.githooks),
+`.github/workflows/build.yml`). Each test shows as it finishes:
+`✓ passed  1.2s  name` or `✗ FAILED`. `.githooks/test-all` runs them by hand.
 
 ## Releases
 
-`.githooks/release` publishes the version in `Cargo.toml`: it tags the
-commit as `v<version>` and pushes the tag; CI builds, tests and packages
-every system and, if it all passes, makes a GitHub release with the
+`.githooks/release` (or "Run workflow" on GitHub's Actions page — it asks
+nothing) builds, tests and packages Windows, macOS and Linux and, if every
+test passes, publishes release `v<version>` from `Cargo.toml` with the
 downloads above ([latest](https://github.com/p32929/roxaruu/releases/latest)).
-Bump the version for each one (a version is released once).
+The same version again replaces its release.

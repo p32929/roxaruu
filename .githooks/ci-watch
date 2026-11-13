@@ -5,9 +5,9 @@
 # failed. GitHub hands over a job's log only once the job has finished, so
 # tests show job by job. Exits 0 if every job passed.
 #
-# A push starts no CI. `ci-watch --run` starts it for the branch you're on
-# (pushed first) and follows it: the systems the commit wasn't tested on,
-# or say which — `ci-watch --run -f system=Linux -f build_only=true`.
+# CI runs only when started: `ci-watch --run` starts it for the branch
+# you're on (pushed first) and follows it — every system, then the release
+# (`.githooks/release` says so first).
 set -uo pipefail
 run=${1:-}
 sha=$(git rev-parse HEAD)
