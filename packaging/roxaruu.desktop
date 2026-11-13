@@ -2,7 +2,7 @@
 Type=Application
 Name=Roxaruu
 GenericName=Code Editor
-Comment=A keyboard-first editor with terminals
+Comment=A keyboard-first code editor with terminals built in
 Exec="@EXEC@" %F
 Icon=roxaruu
 Terminal=false

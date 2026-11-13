@@ -2,10 +2,14 @@
 name = "roxaruu"
 version = "0.2.49"
 edition = "2024"
+description = "A keyboard-first code editor with terminals built in, for macOS, Windows, Linux and any browser"
+repository = "https://github.com/p32929/roxaruu"
+homepage = "https://github.com/p32929/roxaruu"
+license = "MIT"
 
 [dependencies]
-# wgpu first (eframe's default); OpenGL (glow) when a machine's GPU driver
-# can't give wgpu a window (a VM, Remote Desktop, an old driver).
+# One renderer, wgpu: the GPU, else its safe way (software DirectX on
+# Windows, OpenGL elsewhere) when a driver can't give it a window.
 eframe = "0.37" # draws through wgpu only (no glow): one renderer everywhere
 json5 = "1"
 serde = { version = "1.0.229", features = ["derive"] }

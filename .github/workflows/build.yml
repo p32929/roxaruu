@@ -159,7 +159,11 @@ jobs:
           Depends: libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6, libwayland-client0, libwayland-egl1, libgl1, libegl1, libvulkan1, libdbus-1-3
           Section: editors
           Priority: optional
-          Description: A keyboard-first code editor with built-in terminals
+          Homepage: https://github.com/p32929/roxaruu
+          Description: A keyboard-first code editor with terminals built in
+           Every shortcut is shown where it applies, every action is a command
+           with a remappable key, and a project's terminals live beside its code.
+           Remote access serves the same window to any browser.
           EOF
           # xz: zstd (the newer default) is unreadable to Debian 11 and older.
           dpkg-deb -Zxz -z9 --build --root-owner-group pkg "dist/roxaruu_v${VERSION}_linux_x64.deb"
