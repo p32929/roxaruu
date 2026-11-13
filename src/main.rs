@@ -82,7 +82,13 @@ fn main() -> eframe::Result {
     );
     on_crash();
     let from_shell = std::io::stdin().is_terminal();
-    let launch = Launch::parse(std::env::args_os().skip(1));
+    let mut launch = Launch::parse(std::env::args_os().skip(1));
+    // Typed in a terminal with nothing after it (`rox`, `roxaruu`): the
+    // folder you're in. Opened from the app list, the Dock or the Start Menu
+    // (no terminal), or `rox --remote on …` without a folder: nothing.
+    if launch.target.is_none() && opens_here(std::env::args_os().len() == 1, from_shell) {
+        launch.target = std::env::current_dir().ok();
+    }
     match &launch.info {
         Some(Info::Help) => {
             println!("{}", help());
@@ -394,7 +400,8 @@ fn help() -> String {
         "Roxaruu {} — a keyboard-first editor with terminals.
 
 Usage:
-  rox                  Open Roxaruu; pick a folder in it (`rox .`: the one you're in).
+  rox                  Open the folder you're in (same as `rox .`). From the
+                       app list or the Dock: no folder, you pick one.
   rox <folder>         Open a folder; if it's already open, go to its window.
   rox <file>           Open the file, in its project (the git repo it's in).
   rox --foreground ... Stay attached to this terminal (logs show here).
@@ -445,9 +452,8 @@ struct Launch {
     remote: Option<RemoteArg>,
     /// `--virtual-screen`: started on Xvfb by `detach` (no real screen).
     virtual_screen: bool,
-    /// `roxaruu [folder | file]`. Bare `roxaruu` (or `rox`) opens nothing,
-    /// wherever it's started: you pick the folder (`rox .` for the one
-    /// you're in).
+    /// `roxaruu [folder | file]`. Bare, it's decided in `main` (`opens_here`):
+    /// typed in a terminal, the folder you're in; else nothing.
     target: Option<std::path::PathBuf>,
 }
 
@@ -478,6 +484,12 @@ impl Launch {
         let remote = remote.map(|on| if on { RemoteArg::On(password) } else { RemoteArg::Off });
         Launch { info, foreground, remote, virtual_screen, target }
     }
+}
+
+/// Whether a start with no folder opens the one it's started in: only typed
+/// bare in a terminal.
+fn opens_here(bare: bool, from_terminal: bool) -> bool {
+    bare && from_terminal
 }
 
 /// The arguments, for the log: never a password.
@@ -679,9 +691,12 @@ mod tests {
     }
 
     #[test]
-    fn bare_rox_opens_nothing_and_a_path_opens_it() {
+    fn bare_rox_opens_the_folder_youre_in_and_a_path_opens_it() {
         let here = std::env::current_dir().unwrap();
-        assert_eq!(parse(&[]).target, None, "you pick the folder");
+        assert!(opens_here(true, true), "rox, typed in a terminal: the folder you're in");
+        assert!(!opens_here(true, false), "from the app list, Dock, Start Menu: nothing");
+        assert!(!opens_here(false, true), "rox --remote on (no folder): nothing");
+        assert_eq!(parse(&[]).target, None, "parsing alone never guesses");
         assert_eq!(parse(&["."]).target.map(|t| t.canonicalize().unwrap()), Some(here.canonicalize().unwrap()));
         // An absolute path here (a drive and backslashes on Windows) stays as it is.
         let file = std::env::temp_dir().join("x").join("y.rs");

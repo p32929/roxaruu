@@ -131,7 +131,7 @@ jobs:
         run: |
           mkdir -p dist
           cp assets/icon.ico dist/roxaruu.ico
-          printf '@"%%~dp0roxaruu.exe" %%*\r\n' > dist/rox.cmd
+          cp packaging/rox.cmd dist/rox.cmd
           ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
           [ -f "$ISCC" ] || choco install innosetup -y --no-progress
           # (Git Bash would take "/DVersion" for a path and rewrite it.)

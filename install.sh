@@ -114,4 +114,4 @@ case ":$PATH:" in
     *":$bin:"*) ;;
     *) say "Add $bin to your PATH to use rox from a terminal." ;;
 esac
-say "Open a folder: rox .   (or rox <path>, or Roxaruu from your apps)"
+say "Open a folder: rox     (the one you're in; or rox <path>, or Roxaruu from your apps)"
