@@ -10,7 +10,8 @@
 # Everything runs side by side: per system, one machine builds the packages
 # (and opens the installed app; macOS: one per chip, joined after), two
 # others build the tests (the faster `fast` profile) and run half each.
-# Only a release gets link-time optimisation: it's ¾ of a build's time.
+# Only a release gets link-time optimisation (and one codegen unit): ¾ of a
+# build's time, and the smallest binary.
 name: build
 
 on:
@@ -37,7 +38,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CARGO_PROFILE_RELEASE_LTO: ${{ startsWith(github.ref, 'refs/tags/v') && 'thin' || 'off' }}
+  CARGO_PROFILE_RELEASE_LTO: ${{ startsWith(github.ref, 'refs/tags/v') && 'fat' || 'off' }}
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '16' }}
 
 jobs:
   # Which systems to build here (all but the one the push was tested on),
@@ -109,7 +111,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libxrandr-dev \
             libxi-dev libxcursor-dev libxinerama-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev \
-            libgtk-3-dev libdbus-1-dev zsh mesa-vulkan-drivers
+            libdbus-1-dev zsh mesa-vulkan-drivers
       - name: Tests
         run: |
           # This machine's half, in a few processes, each with a scratch home
@@ -149,7 +151,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libxrandr-dev \
             libxi-dev libxcursor-dev libxinerama-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev \
-            libgtk-3-dev libdbus-1-dev
+            libdbus-1-dev
       - name: Version
         run: echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_ENV"
       - name: Build
@@ -176,10 +178,10 @@ jobs:
           [ -f "$ISCC" ] || choco install innosetup -y --no-progress
           # (Git Bash would take "/DVersion" for a path and rewrite it.)
           MSYS_NO_PATHCONV=1 "$ISCC" "/DVersion=$VERSION" packaging/roxaruu.iss
-          7z a "dist/Roxaruu-$VERSION-windows-x64.zip" ./target/release/roxaruu.exe ./target/release/roxaruu-hook.exe ./dist/rox.cmd
+          7z a -mx9 "dist/Roxaruu-$VERSION-windows-x64.zip" ./target/release/roxaruu.exe ./target/release/roxaruu-hook.exe ./dist/rox.cmd
           rm dist/roxaruu.ico dist/rox.cmd
 
-      - name: Package (Linux .deb and .tar.gz)
+      - name: Package (Linux .deb and .tar.xz)
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist pkg/DEBIAN pkg/usr/bin pkg/usr/share/applications pkg/usr/share/icons/hicolor/512x512/apps
@@ -194,15 +196,14 @@ jobs:
           Version: $VERSION
           Architecture: amd64
           Maintainer: p32929 <https://github.com/p32929/roxaruu>
-          Depends: libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6, libwayland-client0, libwayland-egl1, libgl1, libegl1, libvulkan1, libgtk-3-0, libdbus-1-3
-          Recommends: xdg-desktop-portal
+          Depends: libxkbcommon0, libxkbcommon-x11-0, libx11-6, libxcursor1, libxrandr2, libxi6, libwayland-client0, libwayland-egl1, libgl1, libegl1, libvulkan1, libdbus-1-3
           Section: editors
           Priority: optional
           Description: A keyboard-first code editor with built-in terminals
           EOF
           # xz: zstd (the newer default) is unreadable to Debian 11 and older.
-          dpkg-deb -Zxz --build --root-owner-group pkg "dist/roxaruu_${VERSION}_amd64.deb"
-          tar -czf "dist/Roxaruu-$VERSION-linux-x64.tar.gz" -C pkg/usr .
+          dpkg-deb -Zxz -z9 --build --root-owner-group pkg "dist/roxaruu_${VERSION}_amd64.deb"
+          tar -cJf "dist/Roxaruu-$VERSION-linux-x64.tar.xz" -C pkg/usr .
 
       - uses: actions/upload-artifact@v4
         if: runner.os != 'macOS'
@@ -291,7 +292,8 @@ jobs:
           path: smoke/*
           if-no-files-found: ignore
 
-  # One app for Apple Silicon and Intel, from the two chips' builds.
+  # A disk image per chip (Apple Silicon, Intel): one app for both would
+  # carry everything twice (fonts and grammars too), twice the download.
   macos:
     name: macOS
     needs: [plan, package]
@@ -304,21 +306,24 @@ jobs:
           pattern: mac-*
       - name: Version
         run: echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_ENV"
-      - name: Package (macOS, one app for Apple Silicon and Intel)
+      - name: Package (macOS, a disk image per chip)
         run: |
-          mkdir -p dist dmg/Roxaruu.app/Contents/MacOS dmg/Roxaruu.app/Contents/Resources
-          for exe in roxaruu roxaruu-hook; do
-            lipo -create -output "dmg/Roxaruu.app/Contents/MacOS/$exe" \
-              "mac-aarch64-apple-darwin/$exe" "mac-x86_64-apple-darwin/$exe"
-            chmod 755 "dmg/Roxaruu.app/Contents/MacOS/$exe"
+          mkdir -p dist
+          for chip in apple-silicon:aarch64-apple-darwin intel:x86_64-apple-darwin; do
+            name=${chip%%:*} target=${chip#*:}
+            rm -rf dmg && mkdir -p dmg/Roxaruu.app/Contents/MacOS dmg/Roxaruu.app/Contents/Resources
+            for exe in roxaruu roxaruu-hook; do
+              install -m 755 "mac-$target/$exe" "dmg/Roxaruu.app/Contents/MacOS/$exe"
+            done
+            cp assets/AppIcon.icns dmg/Roxaruu.app/Contents/Resources/AppIcon.icns
+            sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > dmg/Roxaruu.app/Contents/Info.plist
+            codesign --force --deep -s - dmg/Roxaruu.app
+            ln -s /Applications dmg/Applications
+            # Sized by hand: hdiutil's own guess runs out of room for big apps.
+            size=$(( $(du -sm dmg | cut -f1) + 64 ))
+            # LZMA (ULMO): the smallest disk image (macOS 10.15+).
+            hdiutil create -volname Roxaruu -srcfolder dmg -size "${size}m" -ov -format ULMO "dist/Roxaruu-$VERSION-macos-$name.dmg"
           done
-          cp assets/AppIcon.icns dmg/Roxaruu.app/Contents/Resources/AppIcon.icns
-          sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > dmg/Roxaruu.app/Contents/Info.plist
-          codesign --force --deep -s - dmg/Roxaruu.app
-          ln -s /Applications dmg/Applications
-          # Sized by hand: hdiutil's own guess runs out of room for big apps.
-          size=$(( $(du -sm dmg | cut -f1) + 64 ))
-          hdiutil create -volname Roxaruu -srcfolder dmg -size "${size}m" -ov -format UDZO "dist/Roxaruu-$VERSION-macos.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: Roxaruu-macOS
@@ -327,7 +332,7 @@ jobs:
       - name: Open it (macOS)
         run: |
           mkdir -p smoke
-          hdiutil attach -nobrowse -mountpoint /tmp/roxaruu "dist/Roxaruu-$VERSION-macos.dmg"
+          hdiutil attach -nobrowse -mountpoint /tmp/roxaruu "dist/Roxaruu-$VERSION-macos-apple-silicon.dmg"
           mkdir -p "$HOME/Applications"
           cp -R /tmp/roxaruu/Roxaruu.app "$HOME/Applications/"
           "$HOME/Applications/Roxaruu.app/Contents/MacOS/roxaruu" --foreground "$PWD" & pid=$!

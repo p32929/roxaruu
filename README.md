@@ -12,7 +12,9 @@ Get the file for your system from the
 
 ### macOS (Apple Silicon and Intel)
 
-1. Open `Roxaruu-<version>-macos.dmg` and drag **Roxaruu** into **Applications**.
+1. Open `Roxaruu-<version>-macos-apple-silicon.dmg` (M1 and later) or
+   `Roxaruu-<version>-macos-intel.dmg` (older Macs; Apple menu → About This
+   Mac says which), and drag **Roxaruu** into **Applications**.
 2. The first time, right-click Roxaruu in Applications and choose **Open**, then
    **Open** again (it isn't notarized by Apple yet, so a plain double-click is
    refused). Or, in a terminal: `xattr -cr /Applications/Roxaruu.app`.
@@ -35,7 +37,7 @@ terminals use WSL by themselves.
 ### Linux (64-bit)
 
 - Debian, Ubuntu, Mint, Pop!_OS: `sudo apt install ./roxaruu_<version>_amd64.deb`
-- Anything else: unpack `Roxaruu-<version>-linux-x64.tar.gz`; the program is
+- Anything else: unpack `Roxaruu-<version>-linux-x64.tar.xz`; the program is
   `bin/roxaruu` (copy `share/` into `~/.local/share/` for the app-menu entry).
 
 ## Use
@@ -54,7 +56,7 @@ one (needs Xvfb: `sudo apt install xvfb`). The password is kept in memory only.
 Needs [Rust](https://rustup.rs). `./install-local.sh` builds and installs it
 on macOS and Linux (and on Windows from Git Bash); `cargo run --release` runs
 it from the checkout. Linux also needs: `libxkbcommon-dev libwayland-dev
-libgtk-3-dev libdbus-1-dev`.
+libdbus-1-dev`.
 
 Working on it: run `git config core.hooksPath .githooks` once. Then every
 `git push` first runs your system's whole test suite on your machine (and

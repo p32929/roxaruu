@@ -372,6 +372,36 @@ pub fn notify(title: &str, body: &str) {
     }
 }
 
+/// A message that waits to be read, for when there's no window of ours to
+/// show it in (it couldn't open): the system's own alert, and stderr.
+pub fn alert(title: &str, body: &str) {
+    eprintln!("{title}\n\n{body}");
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", "on run argv", "-e", "display alert (item 1 of argv) message (item 2 of argv) as critical", "-e", "end run", title, body])
+        .status();
+    // Safety: a modal box with two NUL-terminated wide strings that outlive the call.
+    #[cfg(windows)]
+    #[allow(unsafe_code)]
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let (t, b) = (wide(title), wide(body));
+        MessageBoxW(std::ptr::null_mut(), b.as_ptr(), t.as_ptr(), MB_OK | MB_ICONERROR);
+    }
+    // Linux: whichever dialog program the desktop has (a server has none).
+    #[cfg(not(any(target_os = "macos", windows)))]
+    for (cmd, args) in [
+        ("zenity", vec!["--error".to_string(), format!("--title={title}"), format!("--text={body}")]),
+        ("kdialog", vec!["--title".into(), title.into(), "--error".into(), body.into()]),
+        ("xmessage", vec![format!("{title}\n\n{body}")]),
+    ] {
+        if std::process::Command::new(cmd).args(&args).status().is_ok() {
+            break;
+        }
+    }
+}
+
 /// Tests record notifications instead of showing them.
 #[cfg(test)]
 pub static NOTIFIED: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());

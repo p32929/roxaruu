@@ -3,51 +3,98 @@
 //! disk. JuliaMono (huge Unicode coverage) and the Nerd symbols font sit at
 //! the end of every chain as glyph fallbacks.
 
+use std::sync::OnceLock;
+
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, FontId};
+
+/// A bundled font, deflated in the binary (see `build.rs`): the bytes once
+/// first asked for, inflated then.
+struct Packed {
+    deflated: &'static [u8],
+    bytes: OnceLock<&'static [u8]>,
+}
+
+impl Packed {
+    fn bytes(&self) -> &'static [u8] {
+        self.bytes.get_or_init(|| {
+            use std::io::Read;
+            let mut out = Vec::new();
+            let _ = flate2::read::ZlibDecoder::new(self.deflated).read_to_end(&mut out);
+            Box::leak(out.into_boxed_slice())
+        })
+    }
+
+    fn data(&self) -> FontData {
+        FontData::from_static(self.bytes())
+    }
+}
+
+macro_rules! font {
+    ($file:literal) => {
+        Packed {
+            deflated: include_bytes!(concat!(env!("OUT_DIR"), "/", $file, ".z")),
+            bytes: OnceLock::new(),
+        }
+    };
+}
 
 struct UiFont {
     name: &'static str,
-    regular: &'static [u8],
-    medium: &'static [u8],
-    semibold: &'static [u8],
+    regular: Packed,
+    medium: Packed,
+    semibold: Packed,
 }
 
-const UI_FONTS: &[UiFont] = &[
+static UI_FONTS: [UiFont; 2] = [
     UiFont {
         name: "Inter",
-        regular: include_bytes!("../assets/fonts/Inter-Regular.ttf"),
-        medium: include_bytes!("../assets/fonts/Inter-Medium.ttf"),
-        semibold: include_bytes!("../assets/fonts/Inter-SemiBold.ttf"),
+        regular: font!("Inter-Regular.ttf"),
+        medium: font!("Inter-Medium.ttf"),
+        semibold: font!("Inter-SemiBold.ttf"),
     },
     UiFont {
         name: "Geist",
-        regular: include_bytes!("../assets/fonts/Geist-Regular.ttf"),
-        medium: include_bytes!("../assets/fonts/Geist-Medium.ttf"),
-        semibold: include_bytes!("../assets/fonts/Geist-SemiBold.ttf"),
+        regular: font!("Geist-Regular.ttf"),
+        medium: font!("Geist-Medium.ttf"),
+        semibold: font!("Geist-SemiBold.ttf"),
     },
 ];
 
-const CODE_FONTS: &[(&str, &[u8])] = &[
+static CODE_FONTS: [(&str, Packed); 4] = [
     (
         "JetBrains Mono",
-        include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
+        font!("JetBrainsMono-Regular.ttf"),
     ),
     (
         "Fira Code",
-        include_bytes!("../assets/fonts/FiraCode-Regular.ttf"),
+        font!("FiraCode-Regular.ttf"),
     ),
     (
         "IBM Plex Mono",
-        include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf"),
+        font!("IBMPlexMono-Regular.ttf"),
     ),
     (
         "Geist Mono",
-        include_bytes!("../assets/fonts/GeistMono-Regular.ttf"),
+        font!("GeistMono-Regular.ttf"),
     ),
 ];
 
-const FALLBACK: &[u8] = include_bytes!("../assets/fonts/JuliaMono.ttf");
-const SYMBOLS: &[u8] = include_bytes!("../assets/fonts/SymbolsNerdFontMono.ttf");
+static FALLBACK: Packed = font!("JuliaMono.ttf");
+static SYMBOLS: Packed = font!("SymbolsNerdFontMono.ttf");
+
+/// Inflate the fonts a window starts with, side by side, before it needs them.
+pub fn unpack(ui_font: &str, code_font: &str) {
+    let ui = UI_FONTS.iter().find(|f| f.name.eq_ignore_ascii_case(ui_font)).unwrap_or(&UI_FONTS[0]);
+    let code = CODE_FONTS.iter().find(|f| f.0.eq_ignore_ascii_case(code_font)).map_or(&CODE_FONTS[0].1, |f| &f.1);
+    let all = [&ui.regular, &ui.medium, &ui.semibold, &UI_FONTS[0].medium, code, &FALLBACK, &SYMBOLS];
+    let started = std::time::Instant::now();
+    std::thread::scope(|s| {
+        for f in all {
+            s.spawn(|| f.bytes());
+        }
+    });
+    tracing::debug!(ms = started.elapsed().as_millis(), "fonts unpacked");
+}
 
 pub const DEFAULT_UI: &str = "Inter";
 pub const DEFAULT_CODE: &str = "JetBrains Mono";
@@ -94,14 +141,14 @@ pub fn install(ctx: &egui::Context, ui_font: &str, code_font: &str) -> Vec<Strin
         .iter()
         .find(|f| f.name.eq_ignore_ascii_case(ui_font))
     {
-        Some(f) => [f.regular, f.medium, f.semibold].map(FontData::from_static),
+        Some(f) => [&f.regular, &f.medium, &f.semibold].map(Packed::data),
         None => match read_font_file(ui_font) {
             // One file: the same face serves all three weights.
             Ok(bytes) => [(); 3].map(|_| FontData::from_owned(bytes.clone())),
             Err(e) => {
                 errors.push(format!("uiFont: {e} (choose {})", choices(ui_names())));
                 let f = &UI_FONTS[0];
-                [f.regular, f.medium, f.semibold].map(FontData::from_static)
+                [&f.regular, &f.medium, &f.semibold].map(Packed::data)
             }
         },
     };
@@ -113,19 +160,19 @@ pub fn install(ctx: &egui::Context, ui_font: &str, code_font: &str) -> Vec<Strin
         .iter()
         .find(|f| f.0.eq_ignore_ascii_case(code_font))
     {
-        Some(f) => FontData::from_static(f.1),
+        Some(f) => f.1.data(),
         None => match read_font_file(code_font) {
             Ok(bytes) => FontData::from_owned(bytes),
             Err(e) => {
                 errors.push(format!("codeFont: {e} (choose {})", choices(code_names())));
-                FontData::from_static(CODE_FONTS[0].1)
+                CODE_FONTS[0].1.data()
             }
         },
     };
     add("code", code);
-    add("keycap", FontData::from_static(UI_FONTS[0].medium));
-    add("fallback", FontData::from_static(FALLBACK));
-    add("symbols", FontData::from_static(SYMBOLS));
+    add("keycap", UI_FONTS[0].medium.data());
+    add("fallback", FALLBACK.data());
+    add("symbols", SYMBOLS.data());
 
     let chain = |first: &str| {
         vec![
@@ -160,4 +207,20 @@ fn read_font_file(spec: &str) -> Result<Vec<u8>, String> {
 fn choices(names: impl Iterator<Item = &'static str>) -> String {
     let names: Vec<_> = names.map(|n| format!("\"{n}\"")).collect();
     format!("{}, or a .ttf/.otf path", names.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_fonts_come_back_whole() {
+        let started = std::time::Instant::now();
+        unpack(DEFAULT_UI, DEFAULT_CODE);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "unpacking took {:?}", started.elapsed());
+        for f in UI_FONTS.iter().flat_map(|f| [&f.regular, &f.medium, &f.semibold]).chain(CODE_FONTS.iter().map(|f| &f.1)).chain([&FALLBACK, &SYMBOLS]) {
+            let b = f.bytes();
+            assert!(b.len() > 50_000 && b[..4] == [0, 1, 0, 0], "a TrueType font, whole");
+        }
+    }
 }

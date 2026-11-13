@@ -333,6 +333,7 @@ impl App {
         let s = &self.config.settings;
         let wanted = (s.ui_font.clone(), s.code_font.clone());
         if self.applied_fonts.as_ref() != Some(&wanted) {
+            fonts::unpack(&wanted.0, &wanted.1);
             self.font_errors = fonts::install(ctx, &wanted.0, &wanted.1);
             self.applied_fonts = Some(wanted);
         }

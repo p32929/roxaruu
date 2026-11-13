@@ -374,13 +374,12 @@ fn couldnt_start(why: &str) -> ! {
         let _ = std::fs::remove_file(p);
     }
     let log = log_path().map(|p| p.display().to_string()).unwrap_or_default();
-    let _ = rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Error)
-        .set_title("Roxaruu couldn't start")
-        .set_description(format!(
+    sys::alert(
+        "Roxaruu couldn't start",
+        &format!(
             "Roxaruu couldn't open its window on this computer's graphics (tried the GPU, then without it).\n\n{why}\n\nDetails are in {log}"
-        ))
-        .show();
+        ),
+    );
     std::process::exit(1);
 }
 

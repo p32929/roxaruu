@@ -1,6 +1,6 @@
 [package]
 name = "roxaruu"
-version = "0.2.43"
+version = "0.2.44"
 edition = "2024"
 
 [dependencies]
@@ -59,7 +59,6 @@ flate2 = "1" # mesh frames (remote/meshes.rs); already in through png
 # Native "Open Folder" panel, everywhere (on macOS a folder picked there is
 # granted by user intent, which sidesteps the Documents/Desktop prompt; on
 # Linux it's the desktop's own, through its portal).
-rfd = "0.15"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std", "tracing-log"] }
 which = "8.0.6"
 keepawake = "0.6.1"
@@ -80,15 +79,34 @@ sysinfo = "0.40.1"
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
+[build-dependencies]
+flate2 = "1"
+
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 tempfile = "3.27.0"
 
+# Small: optimised for size (62 MB → 45 here), but at full speed where the
+# time goes (terminals, the text, highlighting, search). Branch builds on CI
+# skip link-time optimisation (build.yml); releases get all of it.
 [profile.release]
-opt-level = 3
-lto = "thin"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
 strip = true
+
+[profile.release.package]
+vt100 = { opt-level = 3 }
+ropey = { opt-level = 3 }
+tree-sitter = { opt-level = 3 }
+tree-sitter-highlight = { opt-level = 3 }
+memchr = { opt-level = 3 }
+regex-automata = { opt-level = 3 }
+grep-searcher = { opt-level = 3 }
+image-webp = { opt-level = 3 }
+flate2 = { opt-level = 3 }
+miniz_oxide = { opt-level = 3 }
 
 # Tests (test-all, here and on CI): built 3x faster than the release (no
 # link-time optimisation, less optimising), they run just as fast; the app
@@ -97,3 +115,4 @@ strip = true
 inherits = "release"
 opt-level = 1
 lto = false
+codegen-units = 16
