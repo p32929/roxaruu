@@ -92,6 +92,10 @@ indexing_slicing = "deny"
 [build-dependencies]
 flate2 = "1"
 
+# Windows: the icon goes into the .exe (build.rs).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }

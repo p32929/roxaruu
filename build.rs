@@ -1,5 +1,7 @@
 //! The bundled fonts go into the binary deflated (7 MB → about 4): they're
-//! inflated once, when first used (`fonts.rs`).
+//! inflated once, when first used (`fonts.rs`). On Windows the app's icon
+//! goes into the .exe itself, so every shortcut, Explorer, the taskbar and
+//! the right-click entries show it, however it was installed.
 
 use std::io::Write;
 
@@ -15,6 +17,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
         z.write_all(&std::fs::read(&path)?)?;
         std::fs::write(out.join(format!("{name}.z")), z.finish()?)?;
+    }
+    println!("cargo:rerun-if-changed=assets/icon.ico");
+    #[cfg(windows)]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        winresource::WindowsResource::new().set_icon("assets/icon.ico").compile()?;
     }
     Ok(())
 }
