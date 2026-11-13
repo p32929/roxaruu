@@ -12,7 +12,7 @@
 #     ./install-local.sh            (--vup [patch|minor|major] bumps the
 #                                    version first; --help for the rest)
 #
-# Re-run it to update. `rox` opens the folder you're in (`rox path` another
+# Re-run it to update. `rox .` opens the folder you're in (`rox path` another
 # one). It never touches Oxru: different command, app and bundle id.
 #
 # Overrides: BIN_DIR (the commands), APP_DIR (macOS app folder),
@@ -172,7 +172,7 @@ linux)
     command -v gtk-update-icon-cache >/dev/null 2>&1 &&
         gtk-update-icon-cache -q "$DATA/icons/hicolor" >/dev/null 2>&1 || true
     green "Installed $DATA/applications/roxaruu.desktop (your app menu)"
-    echo "Open a folder:  rox     (the one you're in; or rox <path>, or Roxaruu from the app menu)"
+    echo "Open a folder:  rox .   (the one you're in; or rox <path>, or Roxaruu from the app menu)"
     ;;
 
 windows)
@@ -187,7 +187,7 @@ windows)
     else
         echo "Note: couldn't add a Start Menu shortcut; run $TARGET directly."
     fi
-    echo "Open a folder:  rox     (the one you're in; or rox <path>, or Roxaruu from the Start Menu)"
+    echo "Open a folder:  rox .   (the one you're in; or rox <path>, or Roxaruu from the Start Menu)"
     ;;
 
 mac)
@@ -309,6 +309,6 @@ CNF
         fi
     fi
     green "Installed $DEST"
-    echo "Open a folder:  rox     (the one you're in; or rox <path>, or Roxaruu from Spotlight)"
+    echo "Open a folder:  rox .   (the one you're in; or rox <path>, or Roxaruu from Spotlight)"
     ;;
 esac
