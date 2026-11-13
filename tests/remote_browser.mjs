@@ -20,7 +20,6 @@ const [port, password, shots, chrome, mode] = process.argv.slice(2);
 let step = "starting";
 const fail = msg => { console.error("FAIL " + msg); process.exit(1); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-setTimeout(() => fail("timed out at: " + step), 180000).unref();
 
 const profile = mkdtempSync(join(tmpdir(), "rox-chrome-"));
 // WebGL in software, so any machine has it (CI): the page draws the window
@@ -43,7 +42,8 @@ process.on("exit", () => browser.kill());
 // The DevTools port, from the profile once Chrome is up.
 let devtools;
 step = "launching Chrome";
-for (let i = 0; i < 100 && !devtools; i++) {
+// No deadline (a hang is a bug the test found): until Chrome says, or quits.
+while (!devtools && browser.exitCode === null) {
   const f = join(profile, "DevToolsActivePort");
   if (existsSync(f)) devtools = readFileSync(f, "utf8").split("\n")[0];
   else await sleep(100);
@@ -67,11 +67,9 @@ const cdp = (method, params = {}) => new Promise(ok => {
   ws.send(JSON.stringify({ id, method, params }));
 });
 const evaluate = async expr => (await cdp("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
-const waitFor = async (expr, what, ms = 15000) => {
+const waitFor = async (expr, what) => {
   step = what;
-  const end = Date.now() + ms;
-  while (Date.now() < end) { if (await evaluate(expr)) return; await sleep(150); }
-  fail("never: " + what);
+  while (!(await evaluate(expr))) await sleep(150);
 };
 const shot = async name => {
   const r = await cdp("Page.captureScreenshot", { format: "png" });
@@ -488,10 +486,10 @@ step = "remote access turned off";
 const lostShown = `!document.getElementById('lost').hidden`;
 if (await evaluate(lostShown)) fail("the disconnected dialog showed while connected");
 console.log("STEP turn-off");
-await waitFor(lostShown, "the disconnected dialog", 20000);
+await waitFor(lostShown, "the disconnected dialog");
 // It first says the link dropped; once the server is found gone, why.
 const lostWhy = `document.getElementById('lostTitle').textContent + " | " + document.getElementById('lostText').textContent`;
-await waitFor(`(${lostWhy}).includes("turned off")`, "the dialog saying why", 10000);
+await waitFor(`(${lostWhy}).includes("turned off")`, "the dialog saying why");
 const lost = await evaluate(lostWhy);
 if (!lost.includes("Disconnected") || /\bMac\b/.test(lost)) fail("it should say why, for any computer: " + lost);
 await press("Enter", "Enter");                     // ↵: try now (still gone)

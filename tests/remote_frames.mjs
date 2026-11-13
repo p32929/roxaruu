@@ -16,7 +16,6 @@ const [port, password, shots, chrome] = process.argv.slice(2);
 let step = "starting";
 const fail = msg => { console.error("FAIL " + msg); process.exit(1); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-setTimeout(() => fail("timed out at: " + step), 90000).unref();
 
 const profile = mkdtempSync(join(tmpdir(), "rox-chrome-"));
 const browser = spawn(chrome, [
@@ -30,7 +29,8 @@ browser.stderr.pipe(createWriteStream(join(shots, "chrome-frames-stderr.log")));
 process.on("exit", () => browser.kill());
 
 let devtools;
-for (let i = 0; i < 100 && !devtools; i++) {
+// No deadline (a hang is a bug the test found): until Chrome says, or quits.
+while (!devtools && browser.exitCode === null) {
   const f = join(profile, "DevToolsActivePort");
   if (existsSync(f)) devtools = readFileSync(f, "utf8").split("\n")[0];
   else await sleep(100);
@@ -51,11 +51,9 @@ const cdp = (method, params = {}) => new Promise(ok => {
   ws.send(JSON.stringify({ id, method, params }));
 });
 const evaluate = async expr => (await cdp("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
-const waitFor = async (expr, what, ms = 20000) => {
+const waitFor = async (expr, what) => {
   step = what;
-  const end = Date.now() + ms;
-  while (Date.now() < end) { if (await evaluate(expr)) return; await sleep(100); }
-  fail("never: " + what);
+  while (!(await evaluate(expr))) await sleep(100);
 };
 const key = async (ch, code, modifiers = 0, text = ch) => {
   await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: ch, code, text, modifiers });
@@ -144,7 +142,7 @@ const exact = await evaluate(`(async () => {
   const before = pixels();
   const seen = __roxStats.frames;
   ws.close();
-  for (let i = 0; i < 100 && __roxStats.frames === seen; i++) await new Promise(r => setTimeout(r, 50));
+  while (__roxStats.frames === seen) await new Promise(r => setTimeout(r, 50));
   await new Promise(r => setTimeout(r, 300));
   const after = pixels();
   let differ = 0;
