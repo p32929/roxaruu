@@ -1091,7 +1091,6 @@ dependencies = [
  "egui-winit",
  "egui_glow",
  "egui_system_font_provider",
- "glow",
  "glutin",
  "glutin-winit",
  "image",
@@ -2040,16 +2039,6 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
-]
-
-[[package]]
-name = "image-webp"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
-dependencies = [
- "byteorder-lite",
- "quick-error",
 ]
 
 [[package]]
@@ -3572,7 +3561,7 @@ dependencies = [
 
 [[package]]
 name = "roxaruu"
-version = "0.2.43"
+version = "0.2.44"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3587,7 +3576,6 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "image",
- "image-webp",
  "json5",
  "keepawake",
  "memchr",

@@ -20,7 +20,9 @@ setTimeout(() => fail("timed out at: " + step), 90000).unref();
 
 const profile = mkdtempSync(join(tmpdir(), "rox-chrome-"));
 const browser = spawn(chrome, [
-  "--headless=new", "--use-mock-keychain", "--password-store=basic", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+  // WebGL in software (the page draws with it): works with no GPU (CI).
+  "--headless=new", "--use-mock-keychain", "--password-store=basic", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
+  "--no-first-run", "--no-default-browser-check",
   "--ignore-certificate-errors", "--no-proxy-server", "--enable-logging=stderr",
   `--user-data-dir=${profile}`, "--remote-debugging-port=0", "--window-size=1200,800", "about:blank",
 ], { stdio: ["ignore", "ignore", "pipe"] });
@@ -131,18 +133,20 @@ await cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy });
 await window_("scrolling", async () => {
   for (let i = 0; i < 120; i++) { await cdp("Input.dispatchMouseEvent", { type: "mouseWheel", x: cx, y: cy, deltaX: 0, deltaY: 40 }); await sleep(16); }
 }, 300);
-// What the page built from copies and changes is exactly the picture: a
-// new link starts with the whole frame, which must match it (all but the
-// blinking caret).
+// What the page drew from frames of changes is exactly what a new link,
+// starting from every texture whole, draws (all but the blinking caret).
 step = "exactness";
 await sleep(800);
 const exact = await evaluate(`(async () => {
-  const c = document.getElementById('screen'), before = g.getImageData(0, 0, c.width, c.height).data.slice();
+  const c = document.getElementById('screen');
+  const pixels = () => { const t = document.createElement('canvas'); t.width = c.width; t.height = c.height;
+    const x = t.getContext('2d'); x.drawImage(c, 0, 0); return x.getImageData(0, 0, t.width, t.height).data; };
+  const before = pixels();
   const seen = __roxStats.frames;
   ws.close();
   for (let i = 0; i < 100 && __roxStats.frames === seen; i++) await new Promise(r => setTimeout(r, 50));
   await new Promise(r => setTimeout(r, 300));
-  const after = g.getImageData(0, 0, c.width, c.height).data;
+  const after = pixels();
   let differ = 0;
   for (let i = 0; i < after.length; i += 4) if (after[i] !== before[i] || after[i + 1] !== before[i + 1] || after[i + 2] !== before[i + 2]) differ++;
   return { pixels: after.length / 4, differ, reconnected: __roxStats.frames > seen };

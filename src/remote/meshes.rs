@@ -67,22 +67,6 @@ impl Textures {
     }
 }
 
-impl Textures {
-    /// Every texture, as changes that set each one whole (a renderer
-    /// starting afresh).
-    pub fn all(&self) -> TexturesDelta {
-        let mut delta = TexturesDelta::default();
-        for (tex, (options, image)) in &self.0 {
-            delta
-                .set
-                .entry(*tex)
-                .or_default()
-                .push(egui::epaint::ImageDelta::full(ImageData::Color(image.clone()), *options));
-        }
-        delta
-    }
-}
-
 fn id(out: &mut Vec<u8>, id: TextureId) {
     let (kind, n) = match id {
         TextureId::Managed(n) => (0u8, n),
@@ -204,6 +188,50 @@ pub fn compress(frame: &[u8]) -> Vec<u8> {
     let mut z = flate2::write::ZlibEncoder::new(vec![KIND], flate2::Compression::fast());
     let _ = z.write_all(frame);
     z.finish().unwrap_or_default()
+}
+
+/// What a test sees of a frame: its size in pixels, its textures set and
+/// its meshes (the page draws them; here they're only counted).
+#[cfg(test)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Seen {
+    pub width: u32,
+    pub height: u32,
+    pub textures: u32,
+    pub meshes: u32,
+}
+
+#[cfg(test)]
+pub fn read(msg: &[u8]) -> Option<Seen> {
+    use std::io::Read;
+    if msg.first() != Some(&KIND) {
+        return None;
+    }
+    let mut d = Vec::new();
+    flate2::read::ZlibDecoder::new(&msg[1..]).read_to_end(&mut d).ok()?;
+    let mut o = 0;
+    let mut take = |n: usize| -> Option<&[u8]> {
+        let s = d.get(o..o + n)?;
+        o += n;
+        Some(s)
+    };
+    let u16_ = |b: &[u8]| u32::from(u16::from_le_bytes([b[0], b[1]]));
+    let u32_ = |b: &[u8]| u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    let (width, height) = (u16_(take(2)?), u16_(take(2)?));
+    take(4)?;
+    let textures = u16_(take(2)?);
+    for _ in 0..textures {
+        take(9)?;
+        if take(1)?[0] == 1 {
+            take(8)?;
+        }
+        let (w, h) = (u32_(take(4)?), u32_(take(4)?));
+        take(3 + w as usize * h as usize * 4)?;
+    }
+    let freed = u16_(take(2)?);
+    take(freed as usize * 9)?;
+    let meshes = u32_(take(4)?);
+    Some(Seen { width, height, textures, meshes })
 }
 
 #[cfg(test)]

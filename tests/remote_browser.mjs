@@ -23,9 +23,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 setTimeout(() => fail("timed out at: " + step), 180000).unref();
 
 const profile = mkdtempSync(join(tmpdir(), "rox-chrome-"));
-// "gl": WebGL on (in software, so any machine has it): the page draws the
-// window itself from meshes (meshes.rs). Otherwise none: pictures.
-const gpu = mode === "gl" ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] : ["--disable-gpu"];
+// WebGL in software, so any machine has it (CI): the page draws the window
+// itself from what it's sent (meshes.rs).
+const gpu = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
 const browser = spawn(chrome, [
   "--headless=new", "--use-mock-keychain", "--password-store=basic", ...gpu, "--no-first-run", "--no-default-browser-check",
   "--ignore-certificate-errors", // the server's own self-signed certificate
@@ -430,18 +430,17 @@ const sizes = await evaluate(`(() => { const c = document.getElementById('screen
   return [c.width, c.height, Math.floor(a.width), Math.floor(a.height), devicePixelRatio]; })()`);
 const [cw, ch, aw, ah, dpr] = sizes;
 if (Math.abs(cw - aw * dpr) > 2 || Math.abs(ch - ah * dpr) > 2) fail(`frame ${cw}x${ch} doesn't fit the page area ${aw}x${ah}@${dpr}`);
-if (mode === "gl") {
-  // Drawn here from meshes, not sent as a picture: and not blank.
-  await waitFor(`window.__roxStats.meshes > 0`, "a frame drawn from meshes");
+{
+  // Drawn here: the window, not blank and not a smear.
   await sleep(500);
-  const lit = await evaluate(`(() => { const s = document.getElementById('gl'), c = document.createElement('canvas');
+  const lit = await evaluate(`(() => { const s = document.getElementById('screen'), c = document.createElement('canvas');
     c.width = s.width; c.height = s.height; const x = c.getContext('2d'); x.drawImage(s, 0, 0);
     const d = x.getImageData(0, 0, c.width, c.height).data; let n = 0;
     for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 360) n++;
-    return [n, c.width * c.height, window.__roxStats.frames - window.__roxStats.meshes]; })()`);
+    return [n, c.width * c.height]; })()`);
   // Text and icons are bright on the dark theme: some pixels, not all.
   if (lit[0] < lit[1] * 0.002 || lit[0] > lit[1] * 0.5) fail(`the drawn frame isn't the window: ${lit[0]} of ${lit[1]} pixels bright`);
-  console.log(`STEP meshes lit=${lit[0]}/${lit[1]} pictures=${lit[2]}`);
+  console.log(`STEP drawn lit=${lit[0]}/${lit[1]}`);
 }
 const listed = await evaluate(`[...document.querySelectorAll('.win b')].map(b => b.textContent).join(',')`);
 await shot("w1-remote-page.png");

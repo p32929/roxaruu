@@ -60,8 +60,8 @@ static DRAWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new
 const RENDERER_ENV: &str = "ROXARUU_RENDERER";
 
 /// This run draws the safe way, not through the GPU's driver: Windows' own
-/// software DirectX (WARP, in every Windows 10/11; OpenGL there may be 1.1),
-/// OpenGL elsewhere (Mesa draws it in software if it must).
+/// software DirectX (WARP, in every Windows 10/11), OpenGL elsewhere (Mesa
+/// draws it in software if it must). Both through wgpu, the one renderer.
 static SAFE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Already saying the window can't open (the watchdog mustn't say it twice).
@@ -206,8 +206,8 @@ fn main() -> eframe::Result {
             couldnt_start("The window didn't appear.");
         }
     });
-    let renderer = if safe && !cfg!(windows) { eframe::Renderer::Glow } else { eframe::Renderer::Wgpu };
-    tracing::info!(?renderer, safe, "opening the window");
+    let renderer = eframe::Renderer::Wgpu;
+    tracing::info!(safe, "opening the window");
     let result = eframe::run_native(
         "Roxaruu",
         eframe::NativeOptions {
@@ -576,6 +576,14 @@ impl Root {
 /// software DirectX (WARP), which needs no GPU driver at all.
 fn wgpu_options(safe: bool) -> egui_wgpu::WgpuConfiguration {
     let mut config = egui_wgpu::WgpuConfiguration::default();
+    // The safe way off Windows and macOS (Metal always works there): OpenGL,
+    // which Mesa draws in software if the GPU's own driver can't.
+    if safe
+        && cfg!(not(any(windows, target_os = "macos")))
+        && let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut config.wgpu_setup
+    {
+        setup.instance_descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::GL);
+    }
     if cfg!(windows)
         && let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut config.wgpu_setup
     {

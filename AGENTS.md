@@ -94,6 +94,10 @@ of "forgot to update X"):
   must check `remote_pass`, and so must anything about you at the Mac's
   window (whether it's focused, what you're looking at): a browser's copy
   always counts itself focused (`poll_attention`, `headless_agent_alerts`).
+- One way to draw it: the browser does, with WebGL, from what egui would
+  draw (`meshes.rs`); this computer only lays it out, so one without a GPU
+  serves as fast as one with. Keys are the browser's (`keymap::keys_like`:
+  a Mac's browser gets ⌘). "Browser only" minimizes the windows here.
 - Lifecycle (see `remote/mod.rs`): off at every launch, never a setting.
   Turning it on (`ToggleRemoteAccess`, or `rox --remote on --password …`,
   which starts a window — on a virtual screen via `xvfb-run` where there's
@@ -207,8 +211,9 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   app, which `claude` is in Roxaruu's terminals (`termbridge`).
 - One title bar, ours: off macOS the window has no system frame; its
   buttons and resizing edges are `ui::window_buttons` / `window_edges`.
-- The window must open: the GPU through wgpu (DirectX 12 on Windows), else
-  the safe way (`main::SAFE`: Windows' software DirectX, OpenGL elsewhere),
+- One renderer everywhere, wgpu (no glow). The window must open: the GPU
+  (DirectX 12 on Windows, Metal, Vulkan), else the safe way (`main::SAFE`:
+  Windows' software DirectX, wgpu's OpenGL elsewhere — Mesa in software),
   else a dialog saying why (`main::couldnt_start`). A start that died or hung
   before drawing is remembered, so the next one goes the safe way. CI
   rehearses a crashed GPU start.
@@ -273,7 +278,7 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 | `terminal.rs` / `terminalpane.rs` | terminal input / one PTY + screen, agent watching, what its program is doing (`Pulse`: printing, running, quiet) |
 | `termbridge.rs` | scripts' "open a Terminal" requests become tabs here |
 | `palette.rs`, `fuzzy.rs`, `search.rs`, `fstree.rs` | lists, matching, search in files, the tree |
-| `remote/` | remote access: lifecycle (`mod`), in-memory password + sessions (`auth`), HTTPS server for all windows, run by the window that turned it on (`hub`), a window's private link and its flow control (`endpoint`), browser input (`input`), off-screen drawing (`render`), what changed as lossless WebP regions, on its own thread (`frames`), waking the window at full rate even hidden (`clock`), the page (`page.html`: its window list is the name's button, or Switch Window's key; `login.html`) |
+| `remote/` | remote access: lifecycle (`mod`), in-memory password + sessions (`auth`), HTTPS server for all windows, run by the window that turned it on (`hub`), a window's private link and its flow control (`endpoint`), browser input (`input`), what to draw — egui's meshes and textures, drawn by the page with WebGL (`meshes`), compressed and sent on their own thread (`frames`), waking the window at full rate even hidden (`clock`), the page (`page.html`: its window list is the name's button, or Switch Window's key; `login.html`) |
 | `sys.rs` | all `unsafe` and OS calls, for macOS, Windows and Linux |
 | `packaging/`, `.github/workflows/build.yml` | what the release builds package; the build, test and release pipeline |
 | `headless.rs` | headless UI walkthroughs |

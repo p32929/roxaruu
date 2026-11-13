@@ -57,12 +57,8 @@ fn visible_keys_work(h: &mut Harness<'static, Root>, place: &str) {
 }
 
 /// Reads of a browser's link (30 ms each) with nothing new before its
-/// picture counts as settled. Drawing on the CPU (CI's Linux): past
-/// `remote::SETTLED`, when the sharp frame follows the quick ones (and no
-/// caret blinks there to keep frames coming).
-fn quiet_reads(h: &Harness<'static, Root>) -> u32 {
-    if h.state().1.software { (crate::remote::SETTLED.as_millis() / 30) as u32 + 10 } else { 10 }
-}
+/// frames count as settled.
+const QUIET_READS: u32 = 10;
 
 fn press(h: &mut Harness<'static, Root>, modifiers: Modifiers, key: Key) {
     h.key_press_modifiers(modifiers, key);
@@ -2163,12 +2159,20 @@ fn headless_agent_alerts() {
         "./claude -c 'for i in $(seq 1 8); do echo working $i; sleep 0.25; done; sleep 30; true'",
     );
     wait_for(&mut h, "the agent", screen_has("working 2"));
+    let agent = app(&h).terminals[0].pane.foreground_report();
     press(&mut h, ALT, Key::T);
-    wait_for(
-        &mut h,
-        "the quiet toast",
-        toast("finished, or waiting for you"),
-    );
+    // (What the system said of the program in front, for when it fails.)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !toast("finished, or waiting for you")(app(&h)) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no quiet toast; while working: {agent}; now: {} (shown as {:?})",
+            app(&h).terminals[0].pane.foreground_report(),
+            app(&h).terminals[0].pane.display_name()
+        );
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     let msg = app(&h).toasts.last().unwrap().msg.clone();
     assert!(msg.contains("claude"), "names the agent: {msg}");
     shot(&mut h, "a0-agent-toast");
@@ -3606,20 +3610,22 @@ fn headless_remote_access() {
         .unwrap();
     let send = |ws: &mut tungstenite::WebSocket<_>, json: &str| ws.send(Message::text(json)).unwrap();
     send(&mut ws, r#"{"t":"size","w":900,"h":560,"dpr":1}"#);
-    // Pump the window and the link, drawing (and acking, as the page does)
-    // every frame; the picture once they go quiet.
+    // Pump the window and the link, taking (and acking, as the page does)
+    // every frame; the last once they go quiet.
     let mut texts = Vec::new();
-    let mut screen = crate::remote::frames::Screen::default();
+    let mut screen = crate::remote::meshes::Seen::default();
     let mut next_frame = |h: &mut Harness<'static, Root>, ws: &mut tungstenite::WebSocket<_>, texts: &mut Vec<String>| {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut got = false;
         let mut quiet = 0;
-        while !got || quiet < quiet_reads(h) {
+        while !got || quiet < QUIET_READS {
             assert!(std::time::Instant::now() < deadline, "no frame came");
             h.step();
             match ws.read() {
                 Ok(Message::Binary(b)) => {
-                    assert!(screen.apply(&b), "a frame");
+                    // The last frame; textures counted over all of them.
+                    let seen = crate::remote::meshes::read(&b).expect("a frame of meshes");
+                    screen = crate::remote::meshes::Seen { textures: screen.textures + seen.textures, ..seen };
                     ws.send(Message::text(crate::remote::ACK)).unwrap();
                     got = true;
                     quiet = 0;
@@ -3628,13 +3634,11 @@ fn headless_remote_access() {
                 _ => quiet += 1,
             }
         }
-        screen.image()
+        screen
     };
     let frame = next_frame(&mut h, &mut ws, &mut texts);
-    assert_eq!((frame.width(), frame.height()), (900, 560), "laid out at the browser's size");
-    let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
-    std::fs::create_dir_all(&shots).unwrap();
-    frame.save(shots.join("r0-remote-frame.png")).unwrap();
+    assert_eq!((frame.width, frame.height), (900, 560), "laid out at the browser's size");
+    assert!(frame.textures >= 1 && frame.meshes >= 1, "every texture, then the window: {frame:?}");
 
     // One session: typing in the browser edits the window's file.
     send(&mut ws, r#"{"t":"text","s":"// from the browser\n"}"#);
@@ -3684,8 +3688,8 @@ fn headless_remote_access() {
         assert!(std::time::Instant::now() < deadline, "the shortcut never ran");
         h.step();
     }
-    let frame = next_frame(&mut h, &mut ws, &mut texts);
-    frame.save(shots.join("r1-remote-palette.png")).unwrap();
+    let palette = next_frame(&mut h, &mut ws, &mut texts);
+    assert!(palette.meshes > frame.meshes, "the palette drawn over the window: {palette:?}");
     send(&mut ws, r#"{"t":"key","k":"Escape","code":"Escape","down":true}"#);
     while app(&h).palette.is_some() {
         assert!(std::time::Instant::now() < deadline, "esc never closed the palette");
@@ -3839,7 +3843,15 @@ fn serve_remotely(password: &str, text: &str) -> (Harness<'static, Root>, u16) {
         .unwrap()
         .port();
     h.state_mut().1.port = port;
+    // Whatever an earlier test in this process left serving: off.
+    crate::instances::clear_remote_server(false);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     h.step();
+    while app(&h).remote.on {
+        assert!(std::time::Instant::now() < deadline, "remote access stayed on");
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let ctx = h.ctx.clone();
     h.state_mut().0.run(crate::keymap::Command::ToggleRemoteAccess, &ctx);
     h.step(); // the field takes the keyboard as the dialog appears
@@ -3866,16 +3878,9 @@ fn serve_remotely(password: &str, text: &str) -> (Harness<'static, Root>, u16) {
 #[test]
 #[ignore]
 fn headless_remote_in_chrome() {
-    remote_in_chrome("pictures");
-}
-
-/// The same, with WebGL in the page: it draws the window itself from the
-/// meshes it's sent (`remote/meshes.rs`), not a picture — and not blank.
-#[test]
-#[ignore]
-fn headless_remote_meshes_in_chrome() {
-    let out = remote_in_chrome("gl");
-    assert!(out.contains("STEP meshes"), "{out}");
+    let out = remote_in_chrome("");
+    // The page drew the window itself (WebGL) from what it was sent: not blank.
+    assert!(out.is_empty() || out.contains("STEP drawn"), "{out}");
 }
 
 /// The page in Chrome, `mode` as `tests/remote_browser.mjs` takes it; its output.
@@ -4214,25 +4219,21 @@ fn headless_remote_phone_layout() {
         assert!(std::time::Instant::now() < deadline, "⌘B never opened the phone's drawer");
         h.step();
     }
-    // What the phone sees: every frame drawn (and acked), once they go quiet.
-    let (mut screen, mut got, mut quiet) = (crate::remote::frames::Screen::default(), false, 0);
-    while !got || quiet < quiet_reads(&h) {
+    // What the phone gets: every frame (acked), once they go quiet.
+    let (mut screen, mut got, mut quiet) = (crate::remote::meshes::Seen::default(), false, 0);
+    while !got || quiet < QUIET_READS {
         assert!(std::time::Instant::now() < deadline, "no frame came");
         h.step();
         match ws.read() {
             Ok(Message::Binary(b)) => {
-                assert!(screen.apply(&b), "a frame");
+                screen = crate::remote::meshes::read(&b).expect("a frame of meshes");
                 ws.send(Message::text(crate::remote::ACK)).unwrap();
                 (got, quiet) = (true, 0);
             }
             _ => quiet += 1,
         }
     }
-    let frame = screen.image();
-    assert_eq!((frame.width(), frame.height()), (390, 844));
-    let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
-    std::fs::create_dir_all(&shots).unwrap();
-    frame.save(shots.join("s-remote-phone-drawer.png")).unwrap();
+    assert_eq!((screen.width, screen.height), (390, 844), "at the phone's size");
     shot(&mut h, "s-remote-mac-unchanged");
     let a = app(&h);
     assert!(!a.views[0].drawer && !a.views[0].compact);
@@ -4676,14 +4677,12 @@ fn headless_remote_frames_in_chrome() {
     };
     let out = std::fs::read_to_string(&out_path).unwrap_or_default();
     println!("{out}");
-    let (enc, remote) = (h.state().1.encode_stats(), &h.state().1);
+    let enc = h.state().1.encode_stats();
     println!(
-        "SERVER frames={} half-res={} kb/frame={:.1} encode ms/frame={:.2} render ms/frame={:.2}",
+        "SERVER frames={} kb/frame={:.1} compress ms/frame={:.2}",
         enc.frames,
-        enc.half,
         enc.bytes as f64 / enc.frames.max(1) as f64 / 1024.0,
         enc.encode_secs * 1000.0 / enc.frames.max(1) as f64,
-        remote.render_secs * 1000.0 / remote.renders.max(1) as f64,
     );
     assert!(status.success() && out.contains("\nOK"), "{out}");
     let metric = |name: &str| -> serde_json::Value {

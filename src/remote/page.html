@@ -20,10 +20,6 @@
   /* Pinching zooms the page (Safari, without pinch-zoom: nothing); one
      finger is the app's. */
   canvas { display:block; touch-action:none; touch-action:pinch-zoom; outline:none; -webkit-touch-callout:none; }
-  /* Where this device draws the window itself (meshes), under the picture
-     canvas, which stays on top (clear) for the pointer and keyboard. */
-  #gl { position:absolute; left:0; top:0; pointer-events:none; }
-  #screen { position:relative; }
   /* The window's name is the window list's button. */
   #win { display:flex; align-items:center; gap:8px; max-width:320px; margin-right:4px; padding:0 8px 0 10px;
          background:none; border-color:transparent; }
@@ -104,7 +100,7 @@
   <form method="post" action="/logout" style="margin:0"><button class="k" title="Sign out">Sign out</button></form>
 </div>
 <nav id="wins" hidden><div id="list"><div class="empty">Looking for windows…</div></div><div class="foot">↑ ↓ choose · ↵ switch · 1–9 · esc close</div></nav>
-<main id="area"><canvas id="gl"></canvas><canvas id="screen" tabindex="0"></canvas><div id="msg">Connecting…</div></main>
+<main id="area"><canvas id="screen" tabindex="0"></canvas><div id="msg">Connecting…</div></main>
 <div id="lost" hidden><div class="box" role="alertdialog" aria-labelledby="lostTitle" aria-describedby="lostText">
   <h3 id="lostTitle">Disconnected</h3><p id="lostText"></p>
   <div class="row"><span id="lostStatus"></span><button class="k" id="lostRetry">Try now<small>↵</small></button></div>
@@ -114,7 +110,7 @@
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const canvas = $("screen"), g = canvas.getContext("2d"), area = $("area"), kb = $("kb");
+const canvas = $("screen"), area = $("area"), kb = $("kb");
 const sticky = { meta: false, alt: false, ctrl: false, shift: false };
 // On a Mac, ⌘ is the command key; elsewhere Ctrl is.
 const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
@@ -246,11 +242,12 @@ function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
 function connect() {
   if (ws) { ws.onclose = null; ws.close(); }
   if (win == null) return;
+  if (!meshes) return show("This browser can't show Roxaruu: it needs WebGL 2 (any current Chrome, Safari, Firefox or Edge).");
   show("Connecting…"); live(false);
   const sock = new WebSocket(`wss://${location.host}/ws/${win}`);
   sock.binaryType = "arraybuffer";
   ws = sock;
-  sock.onopen = () => { live(true); sendSize(true); if (meshes) sock.send('{"t":"draws"}'); };
+  sock.onopen = () => { live(true); sendSize(true); };
   let drawing = Promise.resolve();
   sock.onmessage = e => {
     if (typeof e.data === "string") {
@@ -268,46 +265,22 @@ function connect() {
 }
 
 // ---- frames ------------------------------------------------------------
-// A frame is the regions that changed since the last (see frames.rs): u8 1,
-// u16 width, height, count, then per region u16 x, y, w, h, u32 length, a
-// lossless WebP (at half resolution while things move, scaled to fill).
-// All are decoded (in parallel, off this thread), then drawn together, then
-// acked: the server sends no further ahead than that, so a slow link shows
-// the newest picture, not a queue.
-const roxStats = window.__roxStats = { frames: 0, meshes: 0, bytes: 0, decodeMs: 0 };
-async function drawFrame(buf, sock) {
-  const t0 = performance.now();
-  const v = new DataView(buf);
-  if (v.getUint8(0) === 2 && meshes) return drawMeshes(buf, sock, t0);
-  if (v.getUint8(0) !== 1) return;
-  const w = v.getUint16(1, true), h = v.getUint16(3, true), n = v.getUint16(5, true), at = [], decoding = [];
-  for (let i = 0, o = 7; i < n; i++) {
-    const len = v.getUint32(o + 8, true);
-    at.push([0, 2, 4, 6].map(k => v.getUint16(o + k, true)));
-    decoding.push(createImageBitmap(new Blob([new Uint8Array(buf, o + 12, len)], { type: "image/webp" })));
-    o += 12 + len;
-  }
-  const bitmaps = await Promise.all(decoding);
-  if (ws !== sock) { bitmaps.forEach(b => b.close()); return; }
-  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-  // A region sent at half resolution (while things move) fills its place.
-  bitmaps.forEach((b, i) => { g.drawImage(b, ...at[i]); b.close(); });
-  drewMeshes = false; // pictures again (they come whole after meshes)
-  if (size) { canvas.style.width = size.w + "px"; canvas.style.height = size.h + "px"; }
-  show("");
-  if (sock.readyState === 1) sock.send('{"t":"ack"}');
-  roxStats.frames++; roxStats.bytes += buf.byteLength; roxStats.decodeMs += performance.now() - t0;
-  dispatchEvent(new Event("rox-frame"));
-}
-
-// ---- this device draws (meshes.rs) ---------------------------------------
-// A frame can be what to draw rather than a picture: egui's triangle meshes
+// A frame is what to draw, not a picture (meshes.rs): egui's triangle meshes
 // and the textures they use, drawn here with WebGL like egui's own OpenGL
 // renderer (premultiplied sRGB, blended as is), on this device's GPU — the
-// computer then only lays the window out. Without WebGL 2: pictures.
-const glCanvas = $("gl");
+// computer only lays the window out. Each is drawn in order, then acked:
+// the server sends no further ahead than that, so a slow link shows the
+// newest frame, not a queue.
+const roxStats = window.__roxStats = { frames: 0, bytes: 0, decodeMs: 0 };
+async function drawFrame(buf, sock) {
+  const t0 = performance.now();
+  if (new DataView(buf).getUint8(0) !== 2 || !meshes) return;
+  await drawMeshes(buf, sock, t0);
+}
+
+// ---- drawing -----------------------------------------------------------
 const meshes = (() => {
-  const gl = glCanvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true });
+  const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: true });
   if (!gl || typeof DecompressionStream === "undefined") return null;
   const shader = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
   const prog = gl.createProgram();
@@ -360,11 +333,8 @@ async function drawMeshes(buf, sock, t0) {
     }
   }
   for (let n = u16(); n > 0; n--) { const key = tex(); gl.deleteTexture(textures.get(key)); textures.delete(key); }
-  if (glCanvas.width !== w || glCanvas.height !== h) { glCanvas.width = w; glCanvas.height = h; }
-  // The picture canvas stays on top, clear, for the pointer and the keyboard.
-  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; } else if (!drewMeshes) g.clearRect(0, 0, w, h);
-  drewMeshes = true;
-  if (size) for (const c of [canvas, glCanvas]) { c.style.width = size.w + "px"; c.style.height = size.h + "px"; }
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  if (size) { canvas.style.width = size.w + "px"; canvas.style.height = size.h + "px"; }
   gl.viewport(0, 0, w, h);
   gl.disable(gl.SCISSOR_TEST);
   gl.clearColor(0, 0, 0, 1);
@@ -393,10 +363,9 @@ async function drawMeshes(buf, sock, t0) {
   }
   show("");
   if (sock.readyState === 1) sock.send('{"t":"ack"}');
-  roxStats.frames++; roxStats.meshes++; roxStats.bytes += buf.byteLength; roxStats.decodeMs += performance.now() - t0;
+  roxStats.frames++; roxStats.bytes += buf.byteLength; roxStats.decodeMs += performance.now() - t0;
   dispatchEvent(new Event("rox-frame"));
 }
-let drewMeshes = false;
 
 // ---- size --------------------------------------------------------------
 function sendSize(force) {

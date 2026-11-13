@@ -27,12 +27,11 @@
 pub mod auth;
 mod clock;
 mod endpoint;
-mod meshes;
+pub(crate) mod meshes;
 pub(crate) mod frames;
 mod http;
 mod hub;
 pub mod input;
-mod render;
 #[cfg(test)]
 pub(crate) mod testing;
 mod tls;
@@ -58,12 +57,6 @@ pub const PORT: u16 = 7878;
 /// Frames are at most this many pixels across (a big retina screen would
 /// otherwise send huge ones for little gain).
 const MAX_SIDE: f32 = 2560.0;
-/// Drawing on the CPU: passes this close together are things moving (typing,
-/// scrolling, a terminal printing), drawn at `MOVING_SCALE`; this long after
-/// the last, it's drawn again sharp.
-pub(crate) const SETTLED: Duration = Duration::from_millis(600);
-/// ¾ of each side: about half the pixels to draw.
-const MOVING_SCALE: f32 = 0.75;
 /// The browser's copy runs at most this often unless input arrives (~60 fps).
 const FRAME: Duration = Duration::from_millis(16);
 /// …and at least this often while a browser looks, in case something
@@ -79,6 +72,8 @@ pub struct Status {
     pub url: Option<String>,
     /// Browsers looking at this window.
     pub clients: usize,
+    /// Frames a second they got lately (their copy's status bar shows it).
+    pub fps: Option<f32>,
     /// Why it isn't working, if it isn't.
     pub problem: Option<String>,
     /// This window runs the server: closing it ends remote access.
@@ -160,7 +155,6 @@ pub struct Remote {
     /// The browser's copy of the window.
     ctx: egui::Context,
     started: Instant,
-    offscreen: Option<render::Offscreen>,
     fonts: Option<(String, String)>,
     /// The browser's room for the window: CSS width, height, pixel ratio.
     size: Option<(f32, f32, f32)>,
@@ -180,12 +174,6 @@ pub struct Remote {
     /// The next frame goes whole (a browser joined).
     key: bool,
     last_pass: Option<Instant>,
-    /// Pixels per point of the browser's copy.
-    ppp: f32,
-    /// Time spent drawing frames on the GPU and reading them back (tests
-    /// report it).
-    pub(crate) render_secs: f64,
-    pub(crate) renders: u64,
     /// What it did for its browsers since the last "remote timing" log line.
     timing: Timing,
     timing_from: Instant,
@@ -194,19 +182,15 @@ pub struct Remote {
     /// On a virtual screen (`--virtual-screen`): nobody sees the window
     /// itself, so it's treated as hidden (the clock wakes it for its browsers).
     pub(crate) virtual_screen: bool,
-    /// Drawing on the CPU (no GPU, e.g. a server: llvmpipe, WARP): every
-    /// pixel costs, so frames go with fewer while things move (see `serve`).
-    pub(crate) software: bool,
     /// Minimized for "browser only" (see `update`).
     minimized: bool,
-    /// This pass's share of the browser's pixels to draw (1: all).
-    scale: f32,
-    /// Every texture the browser's copy uses (for browsers that draw
-    /// themselves, joining later; and the picture renderer starting afresh).
+    /// The browsers' frame rate (`Status::fps`), counted since `fps_from`.
+    fps: Option<f32>,
+    fps_sent: u64,
+    fps_from: Instant,
+    /// Every texture the browser's copy uses (sent whole to one joining).
     textures: meshes::Textures,
-    /// Browsers draw the meshes themselves (`meshes.rs`), and the last
-    /// meshes sent (a hash: the same again isn't sent).
-    browser_draws: bool,
+    /// The last meshes sent (a hash: the same again isn't sent).
     sent_meshes: u64,
     cursor: Option<egui::CursorIcon>,
     /// What this window is listed as.
@@ -228,7 +212,6 @@ impl Default for Remote {
             awake: None,
             ctx: egui::Context::default(),
             started: Instant::now(),
-            offscreen: None,
             fonts: None,
             size: None,
             visible: true,
@@ -240,18 +223,15 @@ impl Default for Remote {
             unrendered: None,
             key: true,
             last_pass: None,
-            ppp: 1.0,
-            render_secs: 0.0,
-            renders: 0,
             timing: Timing::default(),
             timing_from: Instant::now(),
             encoded: (0, 0.0),
             virtual_screen: false,
-            software: false,
             minimized: false,
-            scale: 1.0,
+            fps: None,
+            fps_sent: 0,
+            fps_from: Instant::now(),
             textures: meshes::Textures::default(),
-            browser_draws: false,
             sent_meshes: 0,
             cursor: None,
             listed: None,
@@ -264,7 +244,7 @@ impl Default for Remote {
 }
 
 /// What a window did for its browsers over a few seconds, for the log: where
-/// a slow remote view spends its time (a machine with no GPU draws in software).
+/// a slow remote view spends its time.
 #[derive(Default)]
 struct Timing {
     /// Times the window ran (`update`), and the longest wait between two.
@@ -486,10 +466,17 @@ impl Remote {
             }
         };
         let url = ip.zip(server).map(|(ip, s)| format!("https://{ip}:{}", s.port));
+        // Frames sent each second: the browsers' own frame rate.
+        if self.fps_from.elapsed() >= Duration::from_secs(1) {
+            let sent = self.encode_stats().frames;
+            self.fps = Some(sent.saturating_sub(self.fps_sent) as f32 / self.fps_from.elapsed().as_secs_f32());
+            (self.fps_sent, self.fps_from) = (sent, Instant::now());
+        }
         app.remote = Status {
             on: server.is_some(),
             url,
             clients,
+            fps: self.fps.filter(|_| clients > 0),
             problem: self.problem.clone(),
             here: self.hub.is_some(),
         };
@@ -507,7 +494,7 @@ impl Remote {
             if let Some(last) = self.timing.last_wake.replace(now) {
                 self.timing.longest_gap = self.timing.longest_gap.max(now - last);
             }
-            self.serve(app, main, frame);
+            self.serve(app, main);
             self.log_timing(app, hidden);
         } else {
             self.size = None;
@@ -567,7 +554,7 @@ impl Remote {
     }
 
     /// Run the browser's copy of the window if it's due, and send the frame.
-    fn serve(&mut self, app: &mut App, main: &egui::Context, frame: &eframe::Frame) {
+    fn serve(&mut self, app: &mut App, main: &egui::Context) {
         let Some(ep) = &self.endpoint else { return };
         let joined = ep.take_joined();
         let mut events = Vec::new();
@@ -620,31 +607,19 @@ impl Remote {
             if let Some(c) = &self.clock {
                 c.at(now + (FRAME - since));
             }
-            self.present(frame);
+            self.present();
             return;
         }
         self.last_pass = Some(now);
-        // Without a GPU, a pass right after another is something moving:
-        // fewer pixels now, and a sharp frame once it settles.
-        self.scale = if self.software && since < SETTLED && !joined && !resized { MOVING_SCALE } else { 1.0 };
-        if self.scale < 1.0
-            && let Some(c) = &self.clock
-        {
-            c.at(now + SETTLED);
-        }
         // Lay out at the browser's size; keep big screens' frames sensible.
         let ppp = dpr.min(MAX_SIDE / w).min(MAX_SIDE / h).max(0.5);
-        self.ppp = ppp;
         let fonts = (app.config.settings.ui_font.clone(), app.config.settings.code_font.clone());
         if self.fonts.as_ref() != Some(&fonts) {
             crate::fonts::install(&self.ctx, &fonts.0, &fonts.1);
             self.fonts = Some(fonts);
         }
         self.ctx.set_theme(main.theme());
-        // Without a GPU each blink of the caret is a whole frame drawn on the CPU.
-        let mut style = (*main.global_style()).clone();
-        style.visuals.text_cursor.blink &= !self.software;
-        self.ctx.set_global_style(style);
+        self.ctx.set_global_style(main.global_style());
         let raw = |events: Vec<egui::Event>, time: f64| {
             let mut raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))),
@@ -728,13 +703,14 @@ impl Remote {
             c.at(now + delay);
         }
         self.unrendered = Some(output);
-        self.present(frame);
+        self.present();
     }
 
-    /// Draw the last pass and hand it to the encoder — unless a browser or
-    /// the encoder is behind: then it waits, and they wake the window when
-    /// they catch up (by then it may have been replaced by a newer pass).
-    fn present(&mut self, frame: &eframe::Frame) {
+    /// Send the last pass — what to draw (`meshes.rs`): the browsers draw
+    /// it — unless a browser or the encoder is behind: then it waits, and they
+    /// wake the window when they catch up (by then it may have been replaced
+    /// by a newer pass).
+    fn present(&mut self) {
         let (Some(ep), Some(encoder)) = (&self.endpoint, &self.encoder) else { return };
         if self.unrendered.is_none() {
             return;
@@ -754,57 +730,28 @@ impl Remote {
             return;
         }
         self.held.store(false, Ordering::SeqCst);
-        let Some(state) = frame.wgpu_render_state() else {
-            self.trouble("Remote access needs the GPU renderer");
-            return;
-        };
         let Some(mut output) = self.unrendered.take() else { return };
-        self.software = state.adapter.get_info().device_type == egui_wgpu::wgpu::DeviceType::Cpu;
         let started = Instant::now();
         self.textures.apply(&output.textures_delta);
-        if ep.draws() {
-            // The browsers draw: send what to draw, not a picture.
-            let key = std::mem::take(&mut self.key) || !self.browser_draws;
-            self.browser_draws = true;
-            let ppp = self.ctx.pixels_per_point();
-            let size = self.ctx.content_rect().size() * ppp;
-            let primitives = self.ctx.tessellate(std::mem::take(&mut output.shapes), ppp);
-            let meshes = meshes::meshes(&primitives);
-            let hash = {
-                use std::hash::{Hash, Hasher};
-                let mut h = std::hash::DefaultHasher::new();
-                meshes.hash(&mut h);
-                h.finish()
-            };
-            let textures_changed = !output.textures_delta.is_empty();
-            if key || textures_changed || hash != self.sent_meshes {
-                self.sent_meshes = hash;
-                let textures = meshes::textures(key.then_some(&self.textures), &output.textures_delta);
-                encoder.submit_meshes(meshes::frame(size, ppp, &textures, &meshes));
-            }
-            self.timing.drawn += 1;
-            self.timing.draw_secs += started.elapsed().as_secs_f64();
-            return;
-        }
-        if std::mem::take(&mut self.browser_draws) {
-            // Back to pictures: the renderer missed the textures meanwhile.
-            self.offscreen = None;
-            output.textures_delta = self.textures.all();
-            self.key = true;
-        }
-        let offscreen = self
-            .offscreen
-            .get_or_insert_with(|| render::Offscreen::new(&state.device, &state.queue));
-        let Some(image) = offscreen.render(&self.ctx, &output, self.scale) else {
-            self.timing.failed += 1;
-            return;
+        let key = std::mem::take(&mut self.key);
+        let ppp = self.ctx.pixels_per_point();
+        let size = self.ctx.content_rect().size() * ppp;
+        let primitives = self.ctx.tessellate(std::mem::take(&mut output.shapes), ppp);
+        let meshes = meshes::meshes(&primitives);
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::hash::DefaultHasher::new();
+            meshes.hash(&mut h);
+            h.finish()
         };
-        let secs = started.elapsed().as_secs_f64();
-        self.render_secs += secs;
-        self.renders += 1;
+        // The same again isn't sent (a pass that changed nothing on screen).
+        if key || !output.textures_delta.is_empty() || hash != self.sent_meshes {
+            self.sent_meshes = hash;
+            let textures = meshes::textures(key.then_some(&self.textures), &output.textures_delta);
+            encoder.submit(meshes::frame(size, ppp, &textures, &meshes));
+        }
         self.timing.drawn += 1;
-        self.timing.draw_secs += secs;
-        encoder.submit(image, std::mem::take(&mut self.key), self.ppp * self.scale >= 1.5);
+        self.timing.draw_secs += started.elapsed().as_secs_f64();
     }
 }
 

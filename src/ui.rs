@@ -2282,7 +2282,10 @@ impl App {
             self.mem_kb
                 .filter(|_| full)
                 .map(|kb| format!("{}  {:.0} MB", icon::CHIP, kb as f64 / 1024.0)),
-            self.fps.filter(|_| full).map(|f| format!("{}  {f:.1} fps", icon::PULSE)),
+            // A browser's copy: the frames it gets, not this window's own.
+            if self.remote_pass { self.remote.fps } else { self.fps }
+                .filter(|_| full)
+                .map(|f| format!("{}  {f:.1} fps", icon::PULSE)),
             lang,
         ];
         // Right to left, as many as fit. Only the position does something
