@@ -70,5 +70,8 @@ them by hand. Just the downloads, no tests (about 4 minutes):
 
 ## Releases
 
-Pushing a tag like `v0.3.0` builds and publishes the downloads above
-(`.github/workflows/build.yml`).
+`.githooks/release` publishes the version in `Cargo.toml`: it tags the
+commit as `v<version>` and pushes the tag; CI builds, tests and packages
+every system and, if it all passes, makes a GitHub release with the
+downloads above ([latest](https://github.com/p32929/roxaruu/releases/latest)).
+Bump the version for each one (a version is released once).

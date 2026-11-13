@@ -256,7 +256,9 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   `#[cfg_attr(not(unix), ignore = "needs a Unix shell")]` and gets a Windows
   counterpart where the feature matters there.
 - A tag `v*` publishes the downloads as a GitHub release (README says how
-  to install each).
+  to install each): `.githooks/release` tags `v<Cargo.toml's version>`,
+  pushes it and follows CI until it's published. Publishing is for the
+  owner to ask for.
 
 ## 5. Ground rules
 
