@@ -149,6 +149,7 @@ async function loadWindows() {
   }
 }
 function pick(id) {
+  following = null; // picked by hand: stop waiting for another window
   if (id === win && ws) return focusInput();
   win = id;
   const w = windows.find(w => w.id === id);
@@ -691,6 +692,16 @@ document.addEventListener("fullscreenchange", () => {
 });
 // What the app asks of the browser (besides frames, the clipboard and the
 // cursor): its Full Screen command, a link to open here, the keys to show.
+let following = null;
+async function follow(path) {
+  const want = following = path.replace(/\/+$/, "");
+  while (following === want) {
+    const w = windows.find(w => (w.path || "").replace(/\/+$/, "") === want);
+    if (w) { following = null; if (w.id !== win) pick(w.id); return; }
+    await new Promise(r => setTimeout(r, 300));
+    if (following === want) await loadWindows();
+  }
+}
 function control(m) {
   if (m.t === "full") fullScreen();
   else if (m.t === "keys") {
@@ -700,6 +711,9 @@ function control(m) {
     $("win").title = "Switch window" + (winKey ? "  " + winKey : "");
   }
   else if (m.t === "windows") winsOpen() ? closeWins() : openWins();
+  // A folder opened in another window (new, or already open there): show
+  // that one, once it's listed (a new one takes a moment to start).
+  else if (m.t === "follow") follow(m.path);
   else if (m.t === "open") {
     // Allowed while the click or key that asked is recent; else a link to tap.
     const w = window.open(m.url, "_blank");

@@ -683,6 +683,9 @@ impl Remote {
             if std::mem::take(&mut app.remote_windows) {
                 ep.broadcast(Out::Text(serde_json::json!({ "t": "windows" }).to_string()));
             }
+            if let Some(path) = app.remote_follow.take() {
+                ep.broadcast(Out::Text(serde_json::json!({ "t": "follow", "path": path }).to_string()));
+            }
             let cursor = output.platform_output.cursor_icon;
             if self.cursor != Some(cursor) {
                 self.cursor = Some(cursor);

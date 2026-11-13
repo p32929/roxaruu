@@ -193,6 +193,9 @@ pub struct App {
     pub(crate) remote_pass: bool,
     /// Switch Window was run in a browser's copy: its page shows the list.
     pub(crate) remote_windows: bool,
+    /// A browser opened a folder that's in another window: it goes there
+    /// (`remote` tells the page, which switches once the window is listed).
+    pub(crate) remote_follow: Option<String>,
     /// Picked from the editor's right-click menu, run once it's drawn.
     pub(crate) editor_pick: Option<Command>,
     /// Layout per view: `[the window, a browser's copy]` (see `View`).
@@ -274,6 +277,7 @@ impl App {
             remote_want: None,
             remote_pass: false,
             remote_windows: false,
+            remote_follow: None,
             editor_pick: None,
             views: Default::default(),
             main_ctx: ctx.clone(),
@@ -886,17 +890,28 @@ impl App {
 
     // ---- folders & files ------------------------------------------------
 
+    /// From a browser (its copy of this window): it should show the window
+    /// that has `dir`, as the computer would bring that window to the front.
+    fn follow_in_browser(&mut self, dir: &Path) {
+        if self.remote_pass {
+            self.remote_follow = Some(crate::ui::tilde(&dir.to_string_lossy()));
+        }
+    }
+
     /// Open `dir` here, or — if this window already has a project, or its
     /// terminals are in use (opened before any folder: they're yours, not
     /// the folder's) — in a new window, like Oxru: one project per window.
     pub fn open_folder(&mut self, dir: PathBuf, ctx: &egui::Context) {
+        // One spelling per folder: `~/code/` and `~/code` are the same one.
+        let dir: PathBuf = dir.components().collect();
         tracing::info!(dir = %dir.display(), "open folder");
         if self.project.as_ref().is_some_and(|p| p.root == dir) {
-            return;
+            return self.notify(format!("{} is already open in this window", display_name(&dir)));
         }
         if let Some(pid) = self.open_elsewhere(&dir) {
             // One window per folder: go to the one that has it.
             let shown = crate::sys::activate(pid);
+            self.follow_in_browser(&dir);
             return self.notify(format!(
                 "{} is already open in another window{}",
                 display_name(&dir),
@@ -906,7 +921,10 @@ impl App {
         if self.project.is_some() || !self.terminals.is_empty() {
             let why = if self.project.is_some() { "" } else { " (this one keeps its terminals)" };
             match files::spawn_window(&dir) {
-                Ok(_) => self.notify(format!("Opened {} in a new window{why}", display_name(&dir))),
+                Ok(_) => {
+                    self.follow_in_browser(&dir);
+                    self.notify(format!("Opened {} in a new window{why}", display_name(&dir)));
+                }
                 Err(e) => self.warn(format!("Couldn't open a new window: {e}")),
             }
             return;

@@ -2344,6 +2344,156 @@ fn headless_open_folder_list() {
     assert!(app(&h).palette.is_none(), "its key closes it again");
 }
 
+/// A process standing in for another Roxaruu window that has `folder` open:
+/// `sleep`, under a name with "roxaruu" in it (how windows are recognised),
+/// registered as that window's. Killed when dropped.
+struct OtherWindow(std::process::Child);
+
+impl OtherWindow {
+    fn with(folder: &std::path::Path, scratch: &std::path::Path) -> OtherWindow {
+        let exe = scratch.join("roxaruu-standin");
+        std::fs::copy("/bin/sleep", &exe).unwrap();
+        if cfg!(target_os = "macos") {
+            let signed = std::process::Command::new("codesign").args(["-s", "-", "-f"]).arg(&exe).output().unwrap();
+            assert!(signed.status.success());
+        }
+        let child = std::process::Command::new(&exe).arg("600").spawn().unwrap();
+        crate::instances::register_for(child.id(), folder);
+        OtherWindow(child)
+    }
+}
+
+impl Drop for OtherWindow {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Open `path` through Open Folder's list: ⌘O (if it isn't up), the path
+/// typed, ↵ — as a person would.
+fn open_through_list(h: &mut Harness<'static, Root>, path: &str) {
+    if app(h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders) {
+        press(h, CMD, Key::O);
+    }
+    let p = h.state_mut().0.palette.as_mut().unwrap();
+    p.query = path.to_string();
+    p.to_end = true;
+    h.state_mut().0.refresh_items();
+    h.step();
+    press(h, Modifiers::NONE, Key::Enter);
+}
+
+/// Open Folder, every way it can go: a window with no folder opens it
+/// there; the same folder again (typed, or as "Open This Folder" with its
+/// trailing slash) says it's already here; another folder opens in a new
+/// window (one folder per window); one already open in another window is
+/// switched to, not opened twice; names with spaces and accents, a link to
+/// a folder; a folder that can't be read lists nothing but still opens; a
+/// path that doesn't exist lists nothing and ↵ does nothing; a window with
+/// terminals but no folder opens it in a new one (keeping its terminals);
+/// Recent's last row opens the list.
+#[test]
+#[ignore]
+fn headless_open_folder_every_case() {
+    use crate::app::App;
+    use crate::palette::{Mode, Pick};
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    for d in ["one", "two", "with space é", "elsewhere", "locked/inside"] {
+        std::fs::create_dir_all(base.join(d)).unwrap();
+    }
+    std::os::unix::fs::symlink(base.join("two"), base.join("link")).unwrap();
+    let path = |name: &str| format!("{}{name}", crate::app::folder_text(&base));
+    let toast = |h: &Harness<'static, Root>, needle: &str| app(h).toasts.iter().any(|t| t.msg.contains(needle));
+    let new_window = |dir: &std::path::Path| vec![vec!["new window".to_string(), dir.to_string_lossy().into_owned()]];
+    App::take_launched();
+
+    // No folder yet: it opens here.
+    let mut h = harness(None);
+    open_through_list(&mut h, &path("one"));
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(base.join("one")), "opened here");
+    assert!(App::take_launched().is_empty(), "no new window for the first folder");
+
+    // The same folder again: said so, nothing opened — typed, or as "Open
+    // This Folder" (its path ends in a slash).
+    open_through_list(&mut h, &path("one"));
+    assert!(toast(&h, "one is already open in this window"), "{:?}", app(&h).toasts.iter().map(|t| t.msg.clone()).collect::<Vec<_>>());
+    press(&mut h, CMD, Key::O);
+    let p = h.state_mut().0.palette.as_mut().unwrap();
+    p.query = crate::app::folder_text(&base.join("one"));
+    h.state_mut().0.refresh_items();
+    assert!(matches!(app(&h).palette.as_ref().unwrap().items[0].pick, Pick::Folder(ref d) if d.ends_with("one/") || d.ends_with("one")));
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(App::take_launched().is_empty(), "the same folder, however spelt, isn't opened again");
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(base.join("one")));
+
+    // Another folder: a new window (one folder per window).
+    open_through_list(&mut h, &path("two"));
+    assert_eq!(App::take_launched(), new_window(&base.join("two")));
+    assert!(toast(&h, "Opened two in a new window"));
+
+    // Names with a space and an accent; a link to a folder.
+    open_through_list(&mut h, &path("with space é"));
+    assert_eq!(App::take_launched(), new_window(&base.join("with space é")));
+    open_through_list(&mut h, &path("link"));
+    assert_eq!(App::take_launched(), new_window(&base.join("link")));
+
+    // Already open in another window: switched to, not opened twice.
+    let other = OtherWindow::with(&base.join("elsewhere"), &base);
+    open_through_list(&mut h, &path("elsewhere"));
+    assert!(App::take_launched().is_empty(), "not a second window for it");
+    assert!(toast(&h, "elsewhere is already open in another window"), "{:?}", app(&h).toasts.iter().map(|t| t.msg.clone()).collect::<Vec<_>>());
+    drop(other);
+
+    // A folder that can't be read: listed with nothing in it (no error), and
+    // it still opens.
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(base.join("locked"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    press(&mut h, CMD, Key::O);
+    let p = h.state_mut().0.palette.as_mut().unwrap();
+    p.query = crate::app::folder_text(&base.join("locked"));
+    h.state_mut().0.refresh_items();
+    let labels: Vec<String> = app(&h).palette.as_ref().unwrap().items.iter().map(|i| i.label.clone()).collect();
+    assert_eq!(labels, ["Open This Folder"], "nothing to list in it, and no error");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(App::take_launched(), new_window(&base.join("locked")));
+    std::fs::set_permissions(base.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // A path that doesn't exist: nothing listed, ↵ does nothing.
+    press(&mut h, CMD, Key::O);
+    let p = h.state_mut().0.palette.as_mut().unwrap();
+    p.query = path("nowhere/at all/");
+    h.state_mut().0.refresh_items();
+    assert!(app(&h).palette.as_ref().unwrap().items.is_empty());
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(App::take_launched().is_empty());
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(base.join("one")), "still here");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(app(&h).palette.is_none(), "esc closes it");
+
+    // Recent's last row, "Open Another Folder…", opens the list.
+    press(&mut h, ALT, Key::O);
+    let last = app(&h).palette.as_ref().unwrap().items.len() - 1;
+    h.state_mut().0.palette.as_mut().unwrap().selected = last;
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(app(&h).palette.as_ref().map(|p| p.mode), Some(Mode::Folders));
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    drop(h);
+
+    // Terminals but no folder: the folder goes to a new window; this one
+    // keeps its terminals.
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%~ $ '\n").unwrap();
+    let mut h = harness(None);
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "the prompt", screen_has("$ "));
+    open_through_list(&mut h, &path("one"));
+    assert_eq!(App::take_launched(), new_window(&base.join("one")));
+    assert!(toast(&h, "this one keeps its terminals"), "{:?}", app(&h).toasts.iter().map(|t| t.msg.clone()).collect::<Vec<_>>());
+    assert!(app(&h).project.is_none() && app(&h).terminals.len() == 1);
+}
+
 /// Recent Folders, several at once: space / ⇥ tick one, ⇧↓ ticks a run,
 /// ⌘-click and ⇧-click too; ticks survive the search; ↵ opens them all,
 /// the first here, the rest each in a window of its own.
@@ -3702,6 +3852,66 @@ fn headless_remote_access() {
             texts.push(t.to_string());
         }
     }
+
+    // Another folder, opened from the browser: it opens in a new window (this
+    // one has a folder), and the browser is told to go there.
+    let shop = app(&h).project.as_ref().unwrap().root.clone();
+    let other = shop.parent().unwrap().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    crate::app::App::take_launched();
+    send(&mut ws, r#"{"t":"key","k":"o","code":"KeyO","down":true,"m":{"meta":true}}"#);
+    send(&mut ws, r#"{"t":"key","k":"o","code":"KeyO","down":false,"m":{"meta":true}}"#);
+    while app(&h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders) {
+        h.step();
+    }
+    send(&mut ws, r#"{"t":"text","s":"other"}"#);
+    while !app(&h).palette.as_ref().is_some_and(|p| p.query.ends_with("other")) {
+        h.step();
+    }
+    send(&mut ws, r#"{"t":"key","k":"Enter","code":"Enter","down":true}"#);
+    send(&mut ws, r#"{"t":"key","k":"Enter","code":"Enter","down":false}"#);
+    let follow = format!(r#""path":"{}""#, crate::ui::tilde(&other.to_string_lossy()));
+    while !texts.iter().any(|t| t.contains(r#""t":"follow""#) && t.contains(&follow)) {
+        h.step();
+        if let Ok(Message::Text(t)) = ws.read() {
+            texts.push(t.to_string());
+        }
+    }
+    assert_eq!(crate::app::App::take_launched(), [vec!["new window".to_string(), other.to_string_lossy().into_owned()]]);
+    // A folder already open in another window: the browser goes there too
+    // (as the computer would bring it to the front), with no new window.
+    let elsewhere = shop.parent().unwrap().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let _standin = OtherWindow::with(&elsewhere, shop.parent().unwrap());
+    let from_browser = |h: &mut Harness<'static, Root>, ws: &mut tungstenite::WebSocket<_>, name: &str| {
+        let key = |down: bool| format!(r#"{{"t":"key","k":"o","code":"KeyO","down":{down},"m":{{"meta":true}}}}"#);
+        ws.send(Message::text(key(true))).unwrap();
+        ws.send(Message::text(key(false))).unwrap();
+        while app(h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders) {
+            h.step();
+        }
+        ws.send(Message::text(format!(r#"{{"t":"text","s":"{name}"}}"#))).unwrap();
+        while !app(h).palette.as_ref().is_some_and(|p| p.query.ends_with(name)) {
+            h.step();
+        }
+        ws.send(Message::text(r#"{"t":"key","k":"Enter","code":"Enter","down":true}"#)).unwrap();
+        ws.send(Message::text(r#"{"t":"key","k":"Enter","code":"Enter","down":false}"#)).unwrap();
+    };
+    from_browser(&mut h, &mut ws, "elsewhere");
+    let follow = format!(r#""path":"{}""#, crate::ui::tilde(&elsewhere.to_string_lossy()));
+    while !texts.iter().any(|t| t.contains(r#""t":"follow""#) && t.contains(&follow)) {
+        h.step();
+        if let Ok(Message::Text(t)) = ws.read() {
+            texts.push(t.to_string());
+        }
+    }
+    assert!(crate::app::App::take_launched().is_empty(), "not opened a second time");
+    // This window's own folder: said so, and nowhere to go.
+    let follows = texts.iter().filter(|t| t.contains(r#""t":"follow""#)).count();
+    from_browser(&mut h, &mut ws, "shop");
+    wait_for(&mut h, "the note", |a| a.toasts.iter().any(|t| t.msg.contains("shop is already open in this window")));
+    assert!(crate::app::App::take_launched().is_empty());
+    assert_eq!(texts.iter().filter(|t| t.contains(r#""t":"follow""#)).count(), follows, "nowhere to go");
 
     // Where to open it, with a QR code for phones.
     let ctx = h.ctx.clone();

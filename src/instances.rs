@@ -71,6 +71,14 @@ pub fn register(folder: &Path) {
     }
 }
 
+/// Test-only: mark `pid` (another process) as the window with `folder`.
+#[cfg(test)]
+pub fn register_for(pid: u32, folder: &Path) {
+    if let Some(dir) = running_dir() {
+        register_in(&dir, pid, folder);
+    }
+}
+
 /// Remove this process's marker (called on a clean exit).
 pub fn unregister() {
     if let Some(dir) = running_dir() {

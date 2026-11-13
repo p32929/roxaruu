@@ -246,6 +246,11 @@ pub fn label_positions(full: &str, positions: &[usize]) -> Vec<usize> {
 /// that doesn't start at a root starts there too.
 pub fn folder_query(query: &str, home: &Path) -> (PathBuf, String) {
     let sep = |c: char| std::path::is_separator(c);
+    // Windows: `D:` alone is that drive (joined as it is, it'd be the folder
+    // last used on it).
+    if cfg!(windows) && query.len() == 2 && query.ends_with(':') && query.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return (PathBuf::from(format!("{query}\\")), String::new());
+    }
     let rest = match query.strip_prefix('~') {
         Some(rest) if rest.is_empty() || rest.starts_with(sep) => rest.trim_start_matches(sep),
         _ => query,
@@ -296,6 +301,15 @@ mod tests {
         assert_eq!(q("/"), s("/", ""));
         assert_eq!(q("/usr/lo"), s("/usr", "lo"));
         assert_eq!(q("~/code/."), s("/home/me/code", "."));
+        if cfg!(windows) {
+            let home = Path::new("C:\\Users\\me");
+            let q = |s: &str| folder_query(s, home);
+            assert_eq!(q("D:"), s("D:\\", ""), "a drive alone: its root");
+            assert_eq!(q("D:\\"), s("D:\\", ""));
+            assert_eq!(q("D:\\wo"), s("D:\\", "wo"));
+            assert_eq!(q("C:\\Users\\"), s("C:\\Users\\", ""));
+            assert_eq!(q("~\\code\\"), s("C:\\Users\\me\\code\\", ""));
+        }
     }
 
     #[test]
