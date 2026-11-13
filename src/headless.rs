@@ -3727,8 +3727,14 @@ fn headless_remote_access() {
     wait_port_closed(port, || h.step());
     h.step();
     assert!(!app(&h).remote.on && crate::instances::remote_server().is_none());
-    // (Other tests in this process may still list theirs.)
-    assert_eq!(crate::instances::remote_windows().len(), listed - 1, "this window no longer listed");
+    // No longer listed (it follows the marker within a second; other tests
+    // in this process may still list theirs).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while crate::instances::remote_windows().len() != listed - 1 {
+        assert!(std::time::Instant::now() < deadline, "this window is still listed");
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 
     // Turning on again asks for a password again (typed hidden).
     h.state_mut().0.run(crate::keymap::Command::ToggleRemoteAccess, &ctx);
