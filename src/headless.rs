@@ -3863,9 +3863,23 @@ fn serve_remotely(password: &str, text: &str) -> (Harness<'static, Root>, u16) {
 #[test]
 #[ignore]
 fn headless_remote_in_chrome() {
+    remote_in_chrome("pictures");
+}
+
+/// The same, with WebGL in the page: it draws the window itself from the
+/// meshes it's sent (`remote/meshes.rs`), not a picture — and not blank.
+#[test]
+#[ignore]
+fn headless_remote_meshes_in_chrome() {
+    let out = remote_in_chrome("gl");
+    assert!(out.contains("STEP meshes"), "{out}");
+}
+
+/// The page in Chrome, `mode` as `tests/remote_browser.mjs` takes it; its output.
+fn remote_in_chrome(mode: &str) -> String {
     let Some((node, chrome)) = node_and_chrome() else {
         eprintln!("skipped: needs Node and Google Chrome");
-        return;
+        return String::new();
     };
     let (mut h, port) = serve_remotely("open sesame", "fn main() {}\n");
     let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
@@ -3878,6 +3892,7 @@ fn headless_remote_in_chrome() {
         .arg("open sesame")
         .arg(&shots)
         .arg(chrome)
+        .arg(mode)
         .stdout(std::fs::File::create(&out_path).unwrap())
         .stderr(std::process::Stdio::inherit())
         .spawn()
@@ -3911,6 +3926,7 @@ fn headless_remote_in_chrome() {
     assert!(!text_of(&h).contains('†'), "{:?}", text_of(&h));
     let screen = app(&h).terminal().map(|t| t.pane.screen().contents()).unwrap_or_default();
     assert!(!screen.contains('†'), "{screen:?}");
+    out
 }
 
 /// Node and Google Chrome, for the tests that drive the real page.

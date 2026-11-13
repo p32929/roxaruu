@@ -27,6 +27,7 @@
 pub mod auth;
 mod clock;
 mod endpoint;
+mod meshes;
 pub(crate) mod frames;
 mod http;
 mod hub;
@@ -197,6 +198,13 @@ pub struct Remote {
     pub(crate) software: bool,
     /// This pass's share of the browser's pixels to draw (1: all).
     scale: f32,
+    /// Every texture the browser's copy uses (for browsers that draw
+    /// themselves, joining later; and the picture renderer starting afresh).
+    textures: meshes::Textures,
+    /// Browsers draw the meshes themselves (`meshes.rs`), and the last
+    /// meshes sent (a hash: the same again isn't sent).
+    browser_draws: bool,
+    sent_meshes: u64,
     cursor: Option<egui::CursorIcon>,
     /// What this window is listed as.
     listed: Option<(String, String)>,
@@ -238,6 +246,9 @@ impl Default for Remote {
             virtual_screen: false,
             software: false,
             scale: 1.0,
+            textures: meshes::Textures::default(),
+            browser_draws: false,
+            sent_meshes: 0,
             cursor: None,
             listed: None,
             problem: None,
@@ -710,9 +721,40 @@ impl Remote {
             self.trouble("Remote access needs the GPU renderer");
             return;
         };
-        let Some(output) = self.unrendered.take() else { return };
+        let Some(mut output) = self.unrendered.take() else { return };
         self.software = state.adapter.get_info().device_type == egui_wgpu::wgpu::DeviceType::Cpu;
         let started = Instant::now();
+        self.textures.apply(&output.textures_delta);
+        if ep.draws() {
+            // The browsers draw: send what to draw, not a picture.
+            let key = std::mem::take(&mut self.key) || !self.browser_draws;
+            self.browser_draws = true;
+            let ppp = self.ctx.pixels_per_point();
+            let size = self.ctx.content_rect().size() * ppp;
+            let primitives = self.ctx.tessellate(std::mem::take(&mut output.shapes), ppp);
+            let meshes = meshes::meshes(&primitives);
+            let hash = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::hash::DefaultHasher::new();
+                meshes.hash(&mut h);
+                h.finish()
+            };
+            let textures_changed = !output.textures_delta.is_empty();
+            if key || textures_changed || hash != self.sent_meshes {
+                self.sent_meshes = hash;
+                let textures = meshes::textures(key.then_some(&self.textures), &output.textures_delta);
+                encoder.submit_meshes(meshes::frame(size, ppp, &textures, &meshes));
+            }
+            self.timing.drawn += 1;
+            self.timing.draw_secs += started.elapsed().as_secs_f64();
+            return;
+        }
+        if std::mem::take(&mut self.browser_draws) {
+            // Back to pictures: the renderer missed the textures meanwhile.
+            self.offscreen = None;
+            output.textures_delta = self.textures.all();
+            self.key = true;
+        }
         let offscreen = self
             .offscreen
             .get_or_insert_with(|| render::Offscreen::new(&state.device, &state.queue));

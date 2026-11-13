@@ -194,7 +194,8 @@ pub struct Stats {
 }
 
 struct Job {
-    image: Image,
+    /// A picture, or a mesh frame (`meshes.rs`, not yet compressed).
+    image: Result<Image, Vec<u8>>,
     /// Send the whole frame (a browser joined).
     key: bool,
     /// Drawn at a retina density: big changes may go at half resolution.
@@ -231,8 +232,17 @@ impl Encoder {
 
     /// Hand over a drawn frame; false if the thread is gone or full.
     pub fn submit(&self, image: Image, key: bool, dense: bool) -> bool {
+        self.send(Job { image: Ok(image), key, dense })
+    }
+
+    /// Hand over a mesh frame, to compress and send.
+    pub fn submit_meshes(&self, frame: Vec<u8>) -> bool {
+        self.send(Job { image: Err(frame), key: false, dense: false })
+    }
+
+    fn send(&self, job: Job) -> bool {
         self.busy.store(true, Ordering::Release);
-        match self.slot.try_send(Job { image, key, dense }) {
+        match self.slot.try_send(job) {
             Ok(()) => true,
             Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
         }
@@ -271,6 +281,17 @@ fn run(jobs: &Receiver<Job>, busy: &AtomicBool, stats: &Mutex<Stats>, send: &dyn
             Err(RecvTimeoutError::Disconnected) => return,
         };
         let t = Instant::now();
+        let image = match image {
+            Ok(image) => image,
+            Err(frame) => {
+                out(super::meshes::compress(&frame), t, false);
+                // The page draws those elsewhere: pictures start whole again.
+                (last, soft) = (None, Vec::new());
+                busy.store(false, Ordering::Release);
+                done();
+                continue;
+            }
+        };
         let (w, h) = (image.width, image.height);
         // A browser joining, or a new size: the whole frame, sharp.
         let whole = key || last.as_ref().is_none_or(|l| (l.width, l.height) != (w, h));

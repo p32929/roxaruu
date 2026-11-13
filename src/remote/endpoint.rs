@@ -27,6 +27,8 @@ use super::input::ClientMsg;
 pub const TOKEN_HEADER: &str = "x-rox-token";
 /// The page's message once it has drawn a frame.
 pub const ACK: &str = r#"{"t":"ack"}"#;
+/// The page's message when it can draw meshes itself (WebGL): see `meshes.rs`.
+pub const DRAWS: &str = r#"{"t":"draws"}"#;
 /// Frames a browser may have unacked: two keeps the link busy while the
 /// page draws one, without letting a queue build.
 const IN_FLIGHT: u32 = 2;
@@ -48,6 +50,8 @@ struct Client {
     /// When it last acked (or joined).
     heard: Arc<Mutex<Instant>>,
     gone: Arc<AtomicBool>,
+    /// It draws meshes itself (said `DRAWS`).
+    draws: Arc<AtomicBool>,
 }
 
 impl Client {
@@ -142,6 +146,12 @@ impl Endpoint {
     }
 
     /// How many browsers are looking.
+    /// Every browser here draws meshes itself (none: false).
+    pub fn draws(&self) -> bool {
+        let clients = self.shared.clients.lock().unwrap_or_else(|e| e.into_inner());
+        !clients.is_empty() && clients.iter().all(|c| c.draws.load(Ordering::Acquire))
+    }
+
     pub fn clients(&self) -> usize {
         let mut c = self.shared.clients.lock().unwrap_or_else(|e| e.into_inner());
         c.retain(|c| !c.gone.load(Ordering::Acquire));
@@ -211,6 +221,7 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, stop: &AtomicBool, wak
     let gone = Arc::new(AtomicBool::new(false));
     let unacked = Arc::new(AtomicU32::new(0));
     let heard = Arc::new(Mutex::new(Instant::now()));
+    let draws = Arc::new(AtomicBool::new(false));
     {
         let gone = gone.clone();
         let spawned = std::thread::Builder::new().name("remote-client-out".into()).spawn(move || {
@@ -241,6 +252,7 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, stop: &AtomicBool, wak
         unacked: unacked.clone(),
         heard: heard.clone(),
         gone: gone.clone(),
+        draws: draws.clone(),
     });
     shared.joined.store(true, Ordering::Relaxed);
     wake();
@@ -259,6 +271,12 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, stop: &AtomicBool, wak
                 if shared.waiting.swap(false, Ordering::AcqRel) {
                     wake();
                 }
+            }
+            // From now on it gets meshes: a whole frame of them, now.
+            Ok(Message::Text(t)) if t.as_str() == DRAWS => {
+                draws.store(true, Ordering::Release);
+                shared.joined.store(true, Ordering::Relaxed);
+                wake();
             }
             Ok(Message::Text(t)) => {
                 if let Some(msg) = ClientMsg::parse(&t) {

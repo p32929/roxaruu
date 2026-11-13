@@ -1,6 +1,6 @@
 [package]
 name = "roxaruu"
-version = "0.2.41"
+version = "0.2.42"
 edition = "2024"
 
 [dependencies]
@@ -54,6 +54,7 @@ image-webp = "0.2.4"
 egui-wgpu = "0.37"
 wgpu = "30.0.1"
 qrcode = { version = "0.14.1", default-features = false }
+flate2 = "1" # mesh frames (remote/meshes.rs); already in through png
 
 # Native "Open Folder" panel, everywhere (on macOS a folder picked there is
 # granted by user intent, which sidesteps the Documents/Desktop prompt; on
