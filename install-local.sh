@@ -20,7 +20,7 @@
 # testing the script). The macOS app is signed with a key made on this Mac
 # (no Apple account), so macOS remembers what you allowed it across updates.
 #
-# `./run.sh --temp` runs the checkout without installing anything.
+# `cargo run --release -- <folder>` runs the checkout without installing anything.
 set -eu
 
 usage() {
@@ -45,7 +45,7 @@ What it installs:
            %LOCALAPPDATA%\Programs\Roxaruu, plus a Start Menu shortcut.
 
 Replacing the installed app closes its running windows on macOS; to try a
-change without that, use ./run.sh --temp.
+change without that, use cargo run --release -- <folder>.
 
 Settings (environment variables):
   BIN_DIR        where the commands go
