@@ -233,7 +233,7 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   run can pick one and skip the tests: `build_only`). Side by side, per
   system: one machine packages (macOS: one per chip, joined by the `macos`
   job), two run half the tests each (`test-all` `PART`/`PARTS`, built with
-  the faster `ci-test` profile); link-time optimisation (¾ of a build) only
+  the faster `fast` profile); link-time optimisation (¾ of a build) only
   for a release tag; a push of only `.md` files tests and builds nothing.
   The package machine installs each package and opens the app (it must still
   run with its window drawn; screenshots kept with the run) (`packaging/`: the macOS Info.plist and Linux menu entry

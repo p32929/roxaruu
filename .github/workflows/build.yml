@@ -9,7 +9,7 @@
 #
 # Everything runs side by side: per system, one machine builds the packages
 # (and opens the installed app; macOS: one per chip, joined after), two
-# others build the tests (the faster `ci-test` profile) and run half each.
+# others build the tests (the faster `fast` profile) and run half each.
 # Only a release gets link-time optimisation: it's ¾ of a build's time.
 name: build
 
@@ -115,7 +115,7 @@ jobs:
           # This machine's half, in a few processes, each with a scratch home
           # (as the pre-push hook runs them); each test's line as it finishes.
           SHOTS="$PWD/shots" SHELL="$(command -v zsh || echo "$SHELL")" \
-            PROFILE=ci-test PART=${{ matrix.part }} PARTS=2 .githooks/test-all
+            PART=${{ matrix.part }} PARTS=2 .githooks/test-all
       - name: Keep the tests' screenshots
         if: always() && runner.os != 'Windows'
         uses: actions/upload-artifact@v4
