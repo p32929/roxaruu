@@ -17,13 +17,5 @@ root=$(git rev-parse --show-toplevel)
 cd "$root"
 echo "pre-push: $platform tests, here (CI tests the other systems)"
 cargo clippy --release --all-targets -- -D warnings
-if [ "$platform" = Windows ]; then
-  cargo build --release # the tests use roxaruu-hook beside them
-  log=$(mktemp)
-  # Each test's line as it finishes; why any failed, after.
-  cargo test --release -- --test-threads=1 2>&1 | tee "$log" | "$(dirname "$0")/format-tests" ||
-    { sed -n '/^failures:/,/^test result/p' "$log"; exit 1; }
-else
-  "$(dirname "$0")/test-all" # every test, in a few processes, scratch homes
-fi
+"$(dirname "$0")/test-all" # every test, in a few processes, scratch homes
 echo "pre-push: $platform tests passed"

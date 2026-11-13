@@ -229,7 +229,11 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   builds, tests and packages only the other systems — every test: on
   macOS and Linux with `--include-ignored` (the UI walkthroughs,
   screenshots kept with the run), on Windows all that builds there. No
-  `Tested-on:` line, a release tag or a manual run: all three — then installs each package and opens the app (it must still
+  `Tested-on:` line, a release tag or a manual run: all three (a manual
+  run can pick one and skip the tests: `build_only`). Side by side, per
+  system: one machine packages, two run half the tests each (`test-all`
+  `PART`/`PARTS`, built with the faster `ci-test` profile). The package
+  machine installs each package and opens the app (it must still
   run with its window drawn; screenshots kept with the run) (`packaging/`: the macOS Info.plist and Linux menu entry
   `install-local.sh` uses too, the Windows installer). It must stay green
   on all three; a test that needs a Unix shell is marked

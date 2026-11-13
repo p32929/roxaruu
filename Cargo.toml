@@ -88,3 +88,10 @@ tempfile = "3.27.0"
 opt-level = 3
 lto = "thin"
 strip = true
+
+# Tests on CI: built faster than the release (no link-time optimisation,
+# less optimising); the app people get is still `release`.
+[profile.ci-test]
+inherits = "release"
+opt-level = 1
+lto = false

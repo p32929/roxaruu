@@ -62,6 +62,8 @@ stops if it fails), and CI tests the other two systems
 ([.githooks](.githooks), `.github/workflows/build.yml`). Each test shows as
 it finishes: `✓ passed  1.2s  name` or `✗ FAILED`. `.githooks/test-all` runs
 them by hand; `.githooks/ci-watch` follows the push's CI run in the terminal.
+Just the downloads, no tests (about 4 minutes):
+`gh workflow run build -f build_only=true -f system=Linux` (or `all`).
 
 ## Releases
 

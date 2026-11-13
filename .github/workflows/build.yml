@@ -3,7 +3,13 @@
 # hooks (.githooks) says "Tested-on: macOS" (or Windows, Linux), and its
 # pre-push ran that system's whole suite there, so CI runs the other two.
 # A commit without that line, a release tag `v*` (which also publishes the
-# downloads as a GitHub release) or a manual run gets all three.
+# downloads as a GitHub release) or a manual run gets all three; a manual run
+# can pick one system and skip the tests ("build only":
+# `gh workflow run build -f build_only=true -f system=Linux`).
+#
+# Everything runs side by side: per system, one machine builds the packages
+# (and opens the installed app), two others build the tests (the faster
+# `ci-test` profile) and run half each.
 name: build
 
 on:
@@ -12,35 +18,99 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      build_only:
+        description: "Only build the downloads (skip the tests)"
+        type: boolean
+        default: false
+      system:
+        description: "Which system"
+        type: choice
+        options: [all, Linux, Windows, macOS]
+        default: all
 
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Which systems to build here: all but the one the push was tested on.
+  # Which systems to build here (all but the one the push was tested on),
+  # and their tests in two parts each.
   plan:
     runs-on: ubuntu-latest
     outputs:
       systems: ${{ steps.pick.outputs.systems }}
+      tests: ${{ steps.pick.outputs.tests }}
     steps:
       - id: pick
         env:
           MESSAGE: ${{ github.event.head_commit.message }}
           REF: ${{ github.ref }}
           EVENT: ${{ github.event_name }}
+          SYSTEM: ${{ inputs.system }}
+          BUILD_ONLY: ${{ inputs.build_only }}
         run: |
           all='[{"name":"macOS","os":"macos-latest"},{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]'
           tested=$(printf '%s\n' "$MESSAGE" | sed -n 's/^Tested-on: *//p' | tail -1)
-          if [[ "$REF" == refs/tags/v* || "$EVENT" != push || -z "$tested" ]]; then
-            echo "systems=$all" >> "$GITHUB_OUTPUT"
-            echo "building every system"
+          if [[ "$EVENT" == workflow_dispatch && "$SYSTEM" != all ]]; then
+            systems=$(jq -c --arg s "$SYSTEM" 'map(select(.name == $s))' <<<"$all")
+          elif [[ "$REF" == refs/tags/v* || "$EVENT" != push || -z "$tested" ]]; then
+            systems=$all
           else
-            echo "systems=$(jq -c --arg t "$tested" 'map(select(.name != $t))' <<<"$all")" >> "$GITHUB_OUTPUT"
+            systems=$(jq -c --arg t "$tested" 'map(select(.name != $t))' <<<"$all")
             echo "tested on $tested before the push: building the others"
           fi
+          if [[ "$BUILD_ONLY" == true ]]; then
+            tests='[]'
+          else
+            tests=$(jq -c '[.[] as $s | range(0; 2) as $p | $s + {part: $p, label: "\($p + 1)/2"}]' <<<"$systems")
+          fi
+          echo "systems=$systems" >> "$GITHUB_OUTPUT"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+          echo "building $(jq -r 'map(.name) | join(", ")' <<<"$systems"); tests: $(jq length <<<"$tests") parts"
 
-  build:
+  # Every test, on every system: the unit tests, and on macOS and Linux the
+  # UI walkthroughs too (`headless.rs`: real shells, simulated keys and
+  # clicks, screenshots), as AGENTS.md runs them locally. Windows runs what's
+  # built for it (the walkthroughs need a Unix shell yet).
+  test:
+    name: ${{ matrix.name }} tests ${{ matrix.label }}
+    needs: plan
+    if: needs.plan.outputs.tests != '[]'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.tests) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxinerama-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev \
+            libgtk-3-dev libdbus-1-dev zsh mesa-vulkan-drivers
+      - name: Tests
+        run: |
+          # This machine's half, in a few processes, each with a scratch home
+          # (as the pre-push hook runs them); each test's line as it finishes.
+          SHOTS="$PWD/shots" SHELL="$(command -v zsh || echo "$SHELL")" \
+            PROFILE=ci-test PART=${{ matrix.part }} PARTS=2 .githooks/test-all
+      - name: Keep the tests' screenshots
+        if: always() && runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Test-screenshots-${{ matrix.name }}-${{ matrix.part }}
+          path: shots/*
+          if-no-files-found: ignore
+
+  package:
     name: ${{ matrix.name }}
     needs: plan
     runs-on: ${{ matrix.os }}
@@ -66,35 +136,9 @@ jobs:
             libgtk-3-dev libdbus-1-dev
       - name: Version
         run: echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_ENV"
-
       - name: Build
+        if: runner.os != 'macOS' # macOS builds for each chip below
         run: cargo build --release
-      # Every test, on every system: the unit tests, and on macOS and Linux
-      # the UI walkthroughs too (`headless.rs`: real shells, simulated keys
-      # and clicks, screenshots), as AGENTS.md runs them locally. Windows
-      # runs what's built for it (the walkthroughs need a Unix shell yet).
-      - name: Test libraries (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y zsh mesa-vulkan-drivers
-      - name: Tests
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            # One at a time, each test's line as it finishes (passed /
-            # FAILED, how long); the full output follows for any failure.
-            cargo test --release -- --test-threads=1 2>&1 | tee test.log | .githooks/format-tests ||
-              { sed -n '/^failures:/,/^test result/p' test.log; exit 1; }
-          else
-            # Every test, in a few processes, each with a scratch home (as
-            # the pre-push hook runs them).
-            SHOTS="$PWD/shots" SHELL="$(command -v zsh)" .githooks/test-all
-          fi
-      - name: Keep the tests' screenshots
-        if: always() && runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: Test-screenshots-${{ matrix.name }}
-          path: shots/*
-          if-no-files-found: ignore
 
       # ---- packages -------------------------------------------------------
       - name: Package (macOS, one app for Apple Silicon and Intel)
@@ -259,7 +303,7 @@ jobs:
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [package, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
