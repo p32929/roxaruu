@@ -40,14 +40,15 @@ impl Offscreen {
         }
     }
 
-    /// Draw `output` (from `ctx`'s last pass) and read it back.
-    pub fn render(&mut self, ctx: &egui::Context, output: &egui::FullOutput) -> Option<Image> {
+    /// Draw `output` (from `ctx`'s last pass) and read it back, at `scale`
+    /// of its pixels (below 1 to draw fewer: the browser scales it to fit).
+    pub fn render(&mut self, ctx: &egui::Context, output: &egui::FullOutput, scale: f32) -> Option<Image> {
         for (id, deltas) in &output.textures_delta.set {
             for delta in deltas {
                 self.renderer.update_texture(&self.device, &self.queue, *id, delta);
             }
         }
-        let ppp = ctx.pixels_per_point();
+        let ppp = ctx.pixels_per_point() * scale;
         let size = ctx.content_rect().size() * ppp;
         let (width, height) = (size.x.round().max(1.0) as u32, size.y.round().max(1.0) as u32);
         let screen = egui_wgpu::ScreenDescriptor {

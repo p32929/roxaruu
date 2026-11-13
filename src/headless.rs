@@ -56,6 +56,14 @@ fn visible_keys_work(h: &mut Harness<'static, Root>, place: &str) {
     assert!(dead.is_empty(), "shown in {place} but their keys do nothing there: {dead:?}");
 }
 
+/// Reads of a browser's link (30 ms each) with nothing new before its
+/// picture counts as settled. Drawing on the CPU (CI's Linux): past
+/// `remote::SETTLED`, when the sharp frame follows the quick ones (and no
+/// caret blinks there to keep frames coming).
+fn quiet_reads(h: &Harness<'static, Root>) -> u32 {
+    if h.state().1.software { (crate::remote::SETTLED.as_millis() / 30) as u32 + 10 } else { 10 }
+}
+
 fn press(h: &mut Harness<'static, Root>, modifiers: Modifiers, key: Key) {
     h.key_press_modifiers(modifiers, key);
     h.step();
@@ -3605,7 +3613,7 @@ fn headless_remote_access() {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut got = false;
         let mut quiet = 0;
-        while !got || quiet < 10 {
+        while !got || quiet < quiet_reads(h) {
             assert!(std::time::Instant::now() < deadline, "no frame came");
             h.step();
             match ws.read() {
@@ -4189,7 +4197,7 @@ fn headless_remote_phone_layout() {
     }
     // What the phone sees: every frame drawn (and acked), once they go quiet.
     let (mut screen, mut got, mut quiet) = (crate::remote::frames::Screen::default(), false, 0);
-    while !got || quiet < 10 {
+    while !got || quiet < quiet_reads(&h) {
         assert!(std::time::Instant::now() < deadline, "no frame came");
         h.step();
         match ws.read() {

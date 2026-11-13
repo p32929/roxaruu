@@ -57,6 +57,12 @@ pub const PORT: u16 = 7878;
 /// Frames are at most this many pixels across (a big retina screen would
 /// otherwise send huge ones for little gain).
 const MAX_SIDE: f32 = 2560.0;
+/// Drawing on the CPU: passes this close together are things moving (typing,
+/// scrolling, a terminal printing), drawn at `MOVING_SCALE`; this long after
+/// the last, it's drawn again sharp.
+pub(crate) const SETTLED: Duration = Duration::from_millis(600);
+/// ¾ of each side: about half the pixels to draw.
+const MOVING_SCALE: f32 = 0.75;
 /// The browser's copy runs at most this often unless input arrives (~60 fps).
 const FRAME: Duration = Duration::from_millis(16);
 /// …and at least this often while a browser looks, in case something
@@ -186,6 +192,11 @@ pub struct Remote {
     /// On a virtual screen (`--virtual-screen`): nobody sees the window
     /// itself, so it's treated as hidden (the clock wakes it for its browsers).
     pub(crate) virtual_screen: bool,
+    /// Drawing on the CPU (no GPU, e.g. a server: llvmpipe, WARP): every
+    /// pixel costs, so frames go with fewer while things move (see `serve`).
+    pub(crate) software: bool,
+    /// This pass's share of the browser's pixels to draw (1: all).
+    scale: f32,
     cursor: Option<egui::CursorIcon>,
     /// What this window is listed as.
     listed: Option<(String, String)>,
@@ -225,6 +236,8 @@ impl Default for Remote {
             timing_from: Instant::now(),
             encoded: (0, 0.0),
             virtual_screen: false,
+            software: false,
+            scale: 1.0,
             cursor: None,
             listed: None,
             problem: None,
@@ -565,6 +578,14 @@ impl Remote {
             return;
         }
         self.last_pass = Some(now);
+        // Without a GPU, a pass right after another is something moving:
+        // fewer pixels now, and a sharp frame once it settles.
+        self.scale = if self.software && since < SETTLED && !joined && !resized { MOVING_SCALE } else { 1.0 };
+        if self.scale < 1.0
+            && let Some(c) = &self.clock
+        {
+            c.at(now + SETTLED);
+        }
         // Lay out at the browser's size; keep big screens' frames sensible.
         let ppp = dpr.min(MAX_SIDE / w).min(MAX_SIDE / h).max(0.5);
         self.ppp = ppp;
@@ -574,7 +595,10 @@ impl Remote {
             self.fonts = Some(fonts);
         }
         self.ctx.set_theme(main.theme());
-        self.ctx.set_global_style(main.global_style());
+        // Without a GPU each blink of the caret is a whole frame drawn on the CPU.
+        let mut style = (*main.global_style()).clone();
+        style.visuals.text_cursor.blink &= !self.software;
+        self.ctx.set_global_style(style);
         let raw = |events: Vec<egui::Event>, time: f64| {
             let mut raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))),
@@ -687,11 +711,12 @@ impl Remote {
             return;
         };
         let Some(output) = self.unrendered.take() else { return };
+        self.software = state.adapter.get_info().device_type == egui_wgpu::wgpu::DeviceType::Cpu;
         let started = Instant::now();
         let offscreen = self
             .offscreen
             .get_or_insert_with(|| render::Offscreen::new(&state.device, &state.queue));
-        let Some(image) = offscreen.render(&self.ctx, &output) else {
+        let Some(image) = offscreen.render(&self.ctx, &output, self.scale) else {
             self.timing.failed += 1;
             return;
         };
@@ -700,7 +725,7 @@ impl Remote {
         self.renders += 1;
         self.timing.drawn += 1;
         self.timing.draw_secs += secs;
-        encoder.submit(image, std::mem::take(&mut self.key), self.ppp >= 1.5);
+        encoder.submit(image, std::mem::take(&mut self.key), self.ppp * self.scale >= 1.5);
     }
 }
 
