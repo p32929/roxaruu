@@ -2255,22 +2255,20 @@ mod tests {
         let mut cmd = CommandBuilder::new(&shell);
         cmd.cwd(std::env::temp_dir());
         let mut term = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
+        // (The output line, not the command echoing it.)
+        let printed = |t: &TerminalPane, m: &str| visible_text(t).lines().any(|l| l.trim_end() == m);
         term.send_input(b"echo FIRST-MARKER\n");
-        while !screen_contains(&term, "FIRST-MARKER") {
+        while !printed(&term, "FIRST-MARKER") {
             term.pump();
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(term.scroll_offset(), 0, "starts at the bottom");
 
         term.send_input(b"echo SECOND-MARKER\n");
-        while !screen_contains(&term, "SECOND-MARKER") {
+        while !printed(&term, "SECOND-MARKER") {
             term.pump();
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(
-            screen_contains(&term, "SECOND-MARKER"),
-            "following the bottom"
-        );
         assert_eq!(term.scroll_offset(), 0, "and still pinned there");
     }
 

@@ -399,6 +399,15 @@ fn screen_has(needle: &'static str) -> impl Fn(&App) -> bool {
     }
 }
 
+/// A whole line of the terminal is `line`: output, not the command that
+/// asked for it (which is on screen, with the same text in it, at once).
+fn screen_line(line: &'static str) -> impl Fn(&App) -> bool {
+    move |app| {
+        app.terminal()
+            .is_some_and(|t| t.pane.screen().contents().lines().any(|l| l.trim_end() == line))
+    }
+}
+
 fn run(h: &mut Harness<'static, Root>, cmd: &str) {
     type_text(h, cmd);
     press(h, Modifiers::NONE, Key::Enter);
@@ -439,7 +448,7 @@ fn headless_terminal_walkthrough() {
 
     // Scrollback by wheel.
     run(&mut h, "seq 1 300");
-    wait_for(&mut h, "seq output", screen_has("300"));
+    wait_for(&mut h, "seq output", screen_line("300"));
     // A full screen of output must still draw well inside a frame (CPU
     // time: the work, however busy the machine is).
     let t0 = crate::sys::thread_cpu();
@@ -518,7 +527,7 @@ fn headless_terminal_walkthrough() {
 
     // Mouse selection, copied with ⌘C.
     run(&mut h, "clear; echo select-me-please");
-    wait_for(&mut h, "text to select", screen_has("select-me-please"));
+    wait_for(&mut h, "text to select", screen_line("select-me-please"));
     shot(&mut h, "66-before-select");
     click(
         &mut h,
@@ -2133,7 +2142,7 @@ fn headless_agent_alerts() {
 
     // On screen: you saw it, nothing to raise.
     run(&mut h, "printf '\\033]9;seen it\\007'; echo printed");
-    wait_for(&mut h, "the printf", screen_has("printed"));
+    wait_for(&mut h, "the printf", screen_line("printed"));
     for _ in 0..30 {
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -3620,7 +3629,7 @@ fn headless_keyboard_for_everything() {
     press(&mut h, ALT, Key::T);
     wait_for(&mut h, "a prompt", screen_has("$ "));
     run(&mut h, "printf 'docs https://example.com/one and https://example.com/two\\n'");
-    wait_for(&mut h, "the links", screen_has("example.com/two"));
+    wait_for(&mut h, "the links", screen_line("docs https://example.com/one and https://example.com/two"));
     press(&mut h, CMD_SHIFT, Key::O);
     shot(&mut h, "k1-links");
     let labels: Vec<String> = app(&h).palette.as_ref().unwrap().items.iter().map(|i| i.label.clone()).collect();
