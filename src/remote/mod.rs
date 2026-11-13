@@ -184,6 +184,8 @@ pub struct Remote {
     pub(crate) virtual_screen: bool,
     /// Minimized for "browser only" (see `update`).
     minimized: bool,
+    /// Whose keys the page's labels were last sent as (a Mac's or not).
+    keys_for: Option<bool>,
     /// The browsers' frame rate (`Status::fps`), counted since `fps_from`.
     fps: Option<f32>,
     fps_sent: u64,
@@ -228,6 +230,7 @@ impl Default for Remote {
             encoded: (0, 0.0),
             virtual_screen: false,
             minimized: false,
+            keys_for: None,
             fps: None,
             fps_sent: 0,
             fps_from: Instant::now(),
@@ -586,7 +589,12 @@ impl Remote {
         }
         if joined {
             self.key = true; // the whole frame, even if unchanged
-            // The page shows the keys for its full-screen button and window list.
+        }
+        // The page shows the keys for its full-screen button and window list,
+        // as its own keyboard has them: again once it has said whether it's
+        // a Mac's (that comes after it joins).
+        if joined || self.keys_for != Some(self.input.mac) {
+            self.keys_for = Some(self.input.mac);
             let _keys = crate::keymap::keys_like(self.input.mac);
             let caps = |c| app.config.keymap.combo_for(c).map(|k| k.label()).unwrap_or_default();
             let (full, windows) = (caps(Command::FullScreen), caps(Command::SwitchWindow));

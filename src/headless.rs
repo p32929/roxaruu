@@ -3798,6 +3798,15 @@ fn headless_remote_access() {
     };
     let frame = next_frame(&mut h, &mut ws, &mut texts);
     assert_eq!((frame.width, frame.height), (900, 560), "laid out at the browser's size");
+    // Once the page says it's on a Mac (after joining), its key labels are a
+    // Mac's: the window list's key comes again, with ⌘.
+    send(&mut ws, r#"{"t":"size","w":900,"h":560,"dpr":1,"mac":true}"#);
+    while !texts.iter().any(|t| t.contains(r#""t":"keys""#) && t.contains('⌘')) {
+        h.step();
+        if let Ok(Message::Text(t)) = ws.read() {
+            texts.push(t.to_string());
+        }
+    }
     assert!(frame.textures >= 1 && frame.meshes >= 1, "every texture, then the window: {frame:?}");
 
     // One session: typing in the browser edits the window's file.
