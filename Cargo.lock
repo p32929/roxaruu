@@ -3578,6 +3578,7 @@ dependencies = [
  "image",
  "json5",
  "keepawake",
+ "libc",
  "memchr",
  "notify-rust",
  "objc2 0.6.5",

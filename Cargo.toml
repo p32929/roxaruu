@@ -96,6 +96,7 @@ flate2 = "1"
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 tempfile = "3.27.0"
+libc = "0.2" # a thread's CPU time, for the walkthroughs' speed checks (sys::thread_cpu)
 
 # Small: optimised for size (62 MB → 45 here), but at full speed where the
 # time goes (terminals, the text, highlighting, search). Branch builds on CI

@@ -402,6 +402,21 @@ pub fn alert(title: &str, body: &str) {
     }
 }
 
+/// The CPU time this thread has used: the work done, whatever else the
+/// machine is busy with (speed checks in tests don't trip on a loaded one).
+///
+/// Safety: `clock_gettime` only writes the local `timespec`.
+#[cfg(all(test, unix))]
+pub fn thread_cpu() -> std::time::Duration {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    #[allow(unsafe_code)]
+    let ok = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) } == 0;
+    if !ok {
+        return std::time::Duration::ZERO;
+    }
+    std::time::Duration::new(u64::try_from(ts.tv_sec).unwrap_or(0), u32::try_from(ts.tv_nsec).unwrap_or(0))
+}
+
 /// Tests record notifications instead of showing them.
 #[cfg(test)]
 pub static NOTIFIED: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());

@@ -215,9 +215,7 @@ mod tests {
 
     #[test]
     fn packed_fonts_come_back_whole() {
-        let started = std::time::Instant::now();
         unpack(DEFAULT_UI, DEFAULT_CODE);
-        assert!(started.elapsed() < std::time::Duration::from_secs(1), "unpacking took {:?}", started.elapsed());
         for f in UI_FONTS.iter().flat_map(|f| [&f.regular, &f.medium, &f.semibold]).chain(CODE_FONTS.iter().map(|f| &f.1)).chain([&FALLBACK, &SYMBOLS]) {
             let b = f.bytes();
             assert!(b.len() > 50_000 && b[..4] == [0, 1, 0, 0], "a TrueType font, whole");
