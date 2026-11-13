@@ -34,12 +34,10 @@ impl Entry {
     }
 }
 
-/// `<config_dir>/oxru/todos.md` — Oxru's file, so both apps share one list.
-/// Global, not per-project: it's a list of what *you* are doing, which rarely
+/// `<config dir>/roxaruu/todos.md`. Global, not per-project: it's a list of what *you* are doing, which rarely
 /// lines up with which repo happens to be open.
 pub fn todos_path() -> PathBuf {
-    dirs::config_dir()
-        .map(|d| d.join("oxru"))
+    crate::config::state_dir()
         .unwrap_or_else(crate::config::dir)
         .join("todos.md")
 }

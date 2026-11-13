@@ -419,7 +419,7 @@ Usage:
 `rox` is short for `roxaruu`; both work.
 
 Inside: F1 shows every keyboard shortcut for where you are, ⇧⌘P runs any
-command by name. Settings, keys and themes are JSON in ~/.config/oxru/.",
+command by name. Settings, keys and themes are JSON in ~/.config/roxaruu/.",
         VERSION
     )
 }

@@ -2567,7 +2567,7 @@ impl App {
         let wordmark = layout(title, pt.font(30.0, Weight::SemiBold), c.text);
         let tagline = layout(subtitle, pt.font(14.0, Weight::Regular), c.text_muted);
         let footer_text = format!(
-            "{}  themes, fonts and keys live in ~/.config/oxru   ·   v{}",
+            "{}  themes, fonts and keys live in ~/.config/roxaruu   ·   v{}",
             icon::GEAR,
             crate::VERSION
         );

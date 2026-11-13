@@ -566,7 +566,7 @@ fn headless_terminal_walkthrough() {
 fn headless_terminals_walkthrough() {
     let home = PathBuf::from(std::env::var("HOME").unwrap());
     std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
-    let cfg = home.join(".config/oxru");
+    let cfg = home.join(".config/roxaruu");
     std::fs::create_dir_all(&cfg).unwrap();
     std::fs::write(cfg.join("settings.json"), "{ terminalFps: 5 }").unwrap();
     let dir = tempfile::tempdir().unwrap();
@@ -983,7 +983,7 @@ fn headless_editor_features_walkthrough() {
     shot(&mut h, "97-wrapped");
     assert!(h.state().0.config.settings.word_wrap);
     let saved = std::fs::read_to_string(
-        PathBuf::from(std::env::var("HOME").unwrap()).join(".config/oxru/settings.json"),
+        PathBuf::from(std::env::var("HOME").unwrap()).join(".config/roxaruu/settings.json"),
     )
     .unwrap();
     assert!(saved.contains("\"wordWrap\": true"), "{saved}");
@@ -1291,12 +1291,12 @@ fn headless_extras_walkthrough() {
     let base = dir.path().canonicalize().unwrap();
     let root = base.join("proj");
     std::fs::create_dir_all(root.join(".git")).unwrap();
-    std::fs::create_dir_all(root.join(".oxru")).unwrap();
-    std::fs::write(root.join(".oxru/settings.json"), "{ wordWrap: true }\n").unwrap();
+    std::fs::create_dir_all(root.join(".roxaruu")).unwrap();
+    std::fs::write(root.join(".roxaruu/settings.json"), "{ wordWrap: true }\n").unwrap();
     std::fs::write(root.join("a.rs"), "alpha\nbeta\n").unwrap();
-    let cfg = home.join(".config/oxru");
-    // Shared with Oxru: the to-do list. The open-window markers are Roxaruu's own.
-    let state = dirs::config_dir().unwrap().join("oxru");
+    let cfg = home.join(".config/roxaruu");
+    // The to-do list and the open-window markers.
+    let state = dirs::config_dir().unwrap().join("roxaruu");
     let running = dirs::config_dir().unwrap().join("roxaruu/running");
     let read = |p: PathBuf| std::fs::read_to_string(p).unwrap_or_default();
     let _ = std::fs::remove_file(state.join("todos.md")); // start from an empty list
@@ -1389,7 +1389,7 @@ fn headless_extras_walkthrough() {
     type_text(&mut h, "word wrap");
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert!(!app(&h).config.settings.word_wrap);
-    assert!(read(root.join(".oxru/settings.json")).contains("\"wordWrap\": false"));
+    assert!(read(root.join(".roxaruu/settings.json")).contains("\"wordWrap\": false"));
     assert_eq!(global_wrap(), wrap_before, "the global file is untouched");
     press(&mut h, Modifiers::NONE, Key::Escape);
 

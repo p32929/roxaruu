@@ -5,13 +5,11 @@
 
 use std::path::{Path, PathBuf};
 
-/// `<config dir>/oxru/sessions/<root-hash>`: Oxru's own session store, same
-/// format, so both apps restore the same tabs.
+/// `<config dir>/roxaruu/sessions/<root-hash>`.
 fn session_path(root: &Path) -> Option<PathBuf> {
     let canon = dunce::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    dirs::config_dir().map(|d| {
-        d.join("oxru")
-            .join("sessions")
+    crate::config::state_dir().map(|d| {
+        d.join("sessions")
             .join(format!("{:016x}", hash(&canon)))
     })
 }
@@ -52,7 +50,7 @@ pub struct Place {
 const PLACES_KEPT: usize = 1000;
 
 fn places_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("oxru").join("places"))
+    crate::config::state_dir().map(|d| d.join("places"))
 }
 
 /// Note where you are in `places`' files (kept across windows and launches).

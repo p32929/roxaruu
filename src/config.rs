@@ -1,8 +1,8 @@
-//! User configuration, VS Code style, in `~/.config/oxru/`:
+//! User configuration, VS Code style, in `~/.config/roxaruu/`:
 //! `settings.json`, `keybindings.json` and `themes/*.json`. JSON5 is accepted,
 //! so comments and trailing commas are fine. Mistakes never stop the app:
 //! they're collected as messages and the defaults stand in. A project's own
-//! `.oxru/settings.json` overrides the global settings, key by key.
+//! `.roxaruu/settings.json` overrides the global settings, key by key.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -73,13 +73,58 @@ pub struct Config {
     pub keymap: Keymap,
     /// The user's parsed bindings, kept so a broken edit can fall back to them.
     bindings: Vec<UserBinding>,
-    /// Settings keys the open project's `.oxru/settings.json` sets.
+    /// Settings keys the open project's `.roxaruu/settings.json` sets.
     pub project_keys: Vec<String>,
     pub errors: Vec<String>,
 }
 
 pub fn dir() -> PathBuf {
-    expand_home("~/.config/oxru")
+    expand_home("~/.config/roxaruu")
+}
+
+/// Where the app keeps what it remembers (recent folders, sessions, places,
+/// to-dos): the system's config folder (`~/Library/Application Support` on
+/// macOS), apart from the settings you edit.
+pub fn state_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("roxaruu"))
+}
+
+/// Roxaruu grew out of Oxru and kept its folders (`oxru`) at first: copy
+/// them to Roxaruu's own once, the first time there's none. Copied, not
+/// moved, so Oxru keeps working; the scripts' bridge folder is left behind.
+pub fn adopt_oxru_folders() {
+    let pairs = [
+        (expand_home("~/.config/oxru"), dir()),
+        (
+            dirs::config_dir().map(|d| d.join("oxru")).unwrap_or_default(),
+            state_dir().unwrap_or_default(),
+        ),
+    ];
+    for (old, new) in pairs {
+        if old.as_os_str().is_empty() || new.as_os_str().is_empty() || new.exists() || !old.is_dir() {
+            continue;
+        }
+        match copy_dir(&old, &new) {
+            Ok(()) => tracing::info!(from = %old.display(), to = %new.display(), "copied Oxru's folder"),
+            Err(e) => tracing::warn!(from = %old.display(), "couldn't copy Oxru's folder: {e}"),
+        }
+    }
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)?.flatten() {
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        if entry.file_name() == "bridge" {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            copy_dir(&src, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn settings_path() -> PathBuf {
@@ -91,8 +136,12 @@ pub fn keybindings_path() -> PathBuf {
 }
 
 /// A project's own settings, layered over the global ones.
+/// `.roxaruu/settings.json`, or a project's older `.oxru/settings.json` while
+/// that's the only one.
 pub fn project_settings_path(root: &Path) -> PathBuf {
-    root.join(".oxru").join("settings.json")
+    let path = root.join(".roxaruu").join("settings.json");
+    let old = root.join(".oxru").join("settings.json");
+    if !path.exists() && old.exists() { old } else { path }
 }
 
 fn themes_dir() -> PathBuf {
@@ -163,7 +212,10 @@ fn load_in(base: &Path, prev: Option<&Config>, project: Option<&Path>) -> Config
             .unwrap_or_default();
         checked(
             &project_settings_path(root),
-            format!("{name}/.oxru/settings.json"),
+            format!(
+                "{name}/{}",
+                project_settings_path(root).strip_prefix(root).unwrap_or(Path::new("")).display()
+            ),
         )
     });
     let project_keys: Vec<String> = local
@@ -488,7 +540,7 @@ mod tests {
     fn home_paths_are_absolute() {
         let home = home().unwrap();
         assert!(home.is_absolute());
-        assert_eq!(expand_home("~/.config/oxru"), home.join(".config/oxru"));
+        assert_eq!(expand_home("~/.config/roxaruu"), home.join(".config/roxaruu"));
         assert!(dir().is_absolute());
     }
 
@@ -563,7 +615,7 @@ mod tests {
     fn project_settings_override_global_ones() {
         let home = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join(".oxru")).unwrap();
+        std::fs::create_dir_all(root.path().join(".roxaruu")).unwrap();
         std::fs::write(
             project_settings_path(root.path()),
             "{ wordWrap: true, codeFontSize: 18 }",
@@ -576,11 +628,32 @@ mod tests {
         std::fs::write(project_settings_path(root.path()), "{ wordWrp: true }").unwrap();
         let c = load_in(home.path(), None, Some(root.path()));
         assert!(
-            c.errors.iter().any(|e| e.contains(".oxru/settings.json")),
+            c.errors.iter().any(|e| e.contains(".roxaruu/settings.json")),
             "{:?}",
             c.errors
         );
         assert!(!c.settings.word_wrap);
+    }
+
+    #[test]
+    fn oxru_folders_carry_over() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join(".oxru");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("settings.json"), "{}").unwrap();
+        assert_eq!(project_settings_path(root.path()), old.join("settings.json"), "an older project file is still read");
+        std::fs::create_dir_all(root.path().join(".roxaruu")).unwrap();
+        std::fs::write(root.path().join(".roxaruu/settings.json"), "{}").unwrap();
+        assert_eq!(project_settings_path(root.path()), root.path().join(".roxaruu/settings.json"), "until there's a new one");
+
+        std::fs::create_dir_all(old.join("themes")).unwrap();
+        std::fs::write(old.join("themes/mine.json"), "{}").unwrap();
+        std::fs::create_dir_all(old.join("bridge")).unwrap();
+        let new = root.path().join("copy");
+        copy_dir(&old, &new).unwrap();
+        assert!(new.join("settings.json").exists() && new.join("themes/mine.json").exists());
+        assert!(!new.join("bridge").exists(), "the scripts' bridge stays behind");
+        assert!(old.join("settings.json").exists(), "copied, not moved");
     }
 
     #[test]

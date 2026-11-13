@@ -1,12 +1,11 @@
-//! Recently opened folders, newest first. Shares Oxru's own list (same file,
-//! same one-path-per-line format), so both apps remember the same projects.
+//! Recently opened folders, newest first, one path per line.
 
 use std::path::{Path, PathBuf};
 
 const MAX: usize = 20;
 
 fn file() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("oxru").join("recent"))
+    crate::config::state_dir().map(|d| d.join("recent"))
 }
 
 /// Move `folder` to the front of the list. Silent on I/O errors.

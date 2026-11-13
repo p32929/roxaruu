@@ -258,6 +258,7 @@ impl App {
     /// `target` is the command-line path: a folder to open, or a file to open
     /// along with its folder.
     pub fn new(ctx: &egui::Context, target: Option<PathBuf>) -> Self {
+        config::adopt_oxru_folders();
         config::ensure_files();
         let mut app = Self {
             config: config::load(None, None),

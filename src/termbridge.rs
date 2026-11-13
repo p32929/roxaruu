@@ -27,8 +27,7 @@ struct Bridge {
 
 static BRIDGE: OnceLock<Option<Bridge>> = OnceLock::new();
 
-/// Where bridge directories live: Oxru's own `<config dir>/oxru/bridge`, so
-/// either app reaps the other's leftovers. Tests use the build directory, so
+/// Where bridge directories live: `<config dir>/roxaruu/bridge`. Tests use the build directory, so
 /// a `cargo test` never writes into the real one (and, like the real one, it
 /// isn't under `$TMPDIR`, which macOS sweeps).
 fn bridge_root() -> Option<PathBuf> {
@@ -39,7 +38,7 @@ fn bridge_root() -> Option<PathBuf> {
                 .join("test-bridge"),
         );
     }
-    dirs::config_dir().map(|d| d.join("oxru").join("bridge"))
+    crate::config::state_dir().map(|d| d.join("bridge"))
 }
 
 /// The fake `osascript`. Routes terminal-opening AppleScript to Oxru, runs the

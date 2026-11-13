@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
-const ALWAYS_HIDDEN: &[&str] = &[".git", ".hg", ".svn", ".oxru", ".DS_Store"];
+const ALWAYS_HIDDEN: &[&str] = &[".git", ".hg", ".svn", ".roxaruu", ".oxru", ".DS_Store"];
 
 const SEARCH_PRUNE: &[&str] = &[
     ".idea",

@@ -7,7 +7,7 @@
 //! Anything unsupported or malformed falls back to plain text.
 //!
 //! A user can replace any language's highlighting rules, without a rebuild,
-//! with `~/.config/oxru/queries/<id>/highlights.scm` (read at start-up).
+//! with `~/.config/roxaruu/queries/<id>/highlights.scm` (read at start-up).
 //! Languages inside others — code in Markdown, CSS and JS in HTML — are
 //! highlighted by their own grammar.
 

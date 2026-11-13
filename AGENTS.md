@@ -2,7 +2,7 @@
 
 A keyboard-first editor with built-in terminals, on egui (Rust). Beautiful by
 default; every action is a named command with a remappable key; settings,
-keys and themes are JSON in `~/.config/oxru/`. Mouse works too, but the
+keys and themes are JSON in `~/.config/roxaruu/`. Mouse works too, but the
 keyboard comes first: wherever an action can happen, show its shortcut.
 Anything the mouse can do, a key can do: every button, menu item and
 click-only gesture is a named command (so it's in the palette, the F1
@@ -65,7 +65,7 @@ of "forgot to update X"):
 - Saving goes through `save_choice` / `save_choice_quietly`, so every open
   window picks it up (`watch_config` wakes them). Never keep a setting only
   in memory.
-- A project's `.oxru/settings.json` overrides the global file key by key.
+- A project's `.roxaruu/settings.json` overrides the global file key by key.
 
 **A new theme colour** (`theme.rs`)
 - The `colors!` list, `Colors::token` if it's a syntax colour, and a value
@@ -183,7 +183,7 @@ HOME=$SP/home SHOTS=$SP/shots PROJECT=<a file inside a git repo> BIG=<a big sour
 
   (On this machine prefix with `CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup`.)
   `HOME` must point at a scratch folder: tests write settings, and must
-  never touch the real `~/.config/oxru`. A test that changes shared files
+  never touch the real `~/.config/roxaruu`. A test that changes shared files
   restores them (see `headless_settings_reach_all_windows`).
 - **No fixed waits, in code or tests.** Wait for the thing itself (the
   window drew, the line arrived — `settle(term, last)`, the app looked at

@@ -523,7 +523,7 @@ impl App {
         }
     }
 
-    /// Create (if needed) and open this project's `.oxru/settings.json`.
+    /// Create (if needed) and open this project's `.roxaruu/settings.json`.
     pub fn open_project_settings(&mut self, ctx: &egui::Context) {
         let Some(root) = self.root().map(Path::to_path_buf) else {
             return;

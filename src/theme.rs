@@ -1,5 +1,5 @@
 //! Colour themes, as JSON. Built-ins ship in `assets/themes/`; users add their
-//! own in `~/.config/oxru/themes/*.json`. A theme only has to list the colours
+//! own in `~/.config/roxaruu/themes/*.json`. A theme only has to list the colours
 //! it changes — anything missing falls back to Oxide (dark) or Oxide Light,
 //! by the theme's `"type"`.
 
