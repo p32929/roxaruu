@@ -79,8 +79,11 @@ impl Terminal {
             Arc::new(move |urgent| {
                 if urgent {
                     ctx.request_repaint();
+                    crate::remote::soon(Duration::ZERO);
                 } else if visible.load(Ordering::Relaxed) {
-                    ctx.request_repaint_after(throttle.delay());
+                    let delay = throttle.delay();
+                    ctx.request_repaint_after(delay);
+                    crate::remote::soon(delay);
                 }
             })
         };
@@ -370,7 +373,7 @@ pub fn key_bytes(key: Key, m: Modifiers) -> Option<Vec<u8>> {
 /// while the terminal has focus: physical Ctrl chords are the shell's (^C,
 /// ^R, ^L…) — except Ctrl+Tab, which switches tabs. ⌘ chords stay the app's.
 pub fn belongs_to_shell(key: Key, m: Modifiers) -> bool {
-    let mac = cfg!(target_os = "macos");
+    let mac = crate::keymap::mac_keys();
     // Off macOS, Ctrl doubles as the command key: only unshifted Ctrl chords
     // go to the shell, so Ctrl+Shift+C/V can still copy and paste.
     m.ctrl && key != Key::Tab && (mac || !m.shift)

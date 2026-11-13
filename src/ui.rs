@@ -1482,6 +1482,22 @@ impl App {
                     None,
                 )
             }
+            Ask::RemoteHere { .. } => self.modal(
+                ctx,
+                icon::EYE,
+                "Use it only from the browser?",
+                "Browser only: Roxaruu's windows here minimize while remote access is on, so this \
+                 computer draws nothing (the browser's device does). They come back when it's \
+                 turned off. Or keep them open here too.",
+                &[
+                    CANCEL,
+                    Btn { label: "Keep Windows Here", hint: "K", keys: &[Key::K], primary: false },
+                    Btn { label: "Browser Only", hint: "↵", keys: &[Key::Enter, Key::B], primary: true },
+                ],
+                None,
+                None,
+                None,
+            ),
             Ask::RemoteAddress => {
                 let r = &self.remote;
                 let (title, body) = match (&r.url, &r.problem) {
@@ -1574,6 +1590,13 @@ impl App {
             Some(i) if matches!(self.ask, Some(crate::app::Ask::RemoteAddress)) => {
                 self.answer_ask(i == 0, ctx) // Copy Address
             }
+            // Keep Windows Here (Browser Only is "yes").
+            Some(1) if matches!(self.ask, Some(crate::app::Ask::RemoteHere { .. })) => {
+                if let Some(crate::app::Ask::RemoteHere { password }) = self.ask.take() {
+                    self.serve_remote(password, false);
+                }
+            }
+            Some(i) if matches!(self.ask, Some(crate::app::Ask::RemoteHere { .. })) => self.answer_ask(i == 2, ctx),
             Some(i) => self.answer_ask(i == 1, ctx),
             None => {}
         }
@@ -4344,7 +4367,7 @@ impl App {
         }
         // A link: faint underline, then (once the pointer rests) how to open
         // it; with ⌘ held, a bold one.
-        let link_mod_key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
+        let link_mod_key = if crate::keymap::mac_keys() { "⌘" } else { "Ctrl" };
         for ((r, col), held) in [(hover_link, true), (plain_link, false)]
             .into_iter()
             .filter_map(|(at, held)| Some((at?, held)))

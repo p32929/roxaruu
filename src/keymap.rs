@@ -259,6 +259,29 @@ pub fn is_modifier(key: Key) -> bool {
     )
 }
 
+thread_local! {
+    static MAC_KEYS: std::cell::Cell<bool> = const { std::cell::Cell::new(cfg!(target_os = "macos")) };
+}
+
+/// Whether keys are a Mac's (⌘ ⌥ ⇧, ⌘ chords the app's, Ctrl the shell's)
+/// or a PC's (Ctrl chords, Ctrl+Shift+P): this computer's own, but a
+/// browser's while its copy of the window runs (`remote`), so a Mac's
+/// browser gets ⌘ keys from a window on Linux.
+pub fn mac_keys() -> bool {
+    MAC_KEYS.with(|m| m.get())
+}
+
+/// Keys as a Mac's (or not) until the guard goes.
+pub fn keys_like(mac: bool) -> impl Drop {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            MAC_KEYS.with(|m| m.set(self.0));
+        }
+    }
+    Restore(MAC_KEYS.with(|m| m.replace(mac)))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Combo {
     ctrl: bool,
@@ -271,7 +294,7 @@ impl Combo {
     /// The key and modifiers this combo is pressed with here: `ctrl` is ⌘ on
     /// a Mac, Ctrl elsewhere.
     pub fn chord(&self) -> (Key, Modifiers) {
-        let mac = cfg!(target_os = "macos");
+        let mac = mac_keys();
         let m = Modifiers {
             alt: self.alt,
             shift: self.shift,
@@ -371,7 +394,7 @@ impl Combo {
     /// The combo as keycaps: `["⇧", "⌘", "P"]` on macOS (Apple's order:
     /// ⌥ ⇧ ⌘), `["Ctrl", "Shift", "P"]` elsewhere.
     pub fn caps(&self) -> Vec<String> {
-        let mac = cfg!(target_os = "macos");
+        let mac = mac_keys();
         let mods: [(bool, &str, &str); 3] = if mac {
             [
                 (self.alt, "⌥", ""),
@@ -412,7 +435,7 @@ impl Combo {
 
 /// Keycaps run into one: macOS's glyphs read on their own, words need a `+`.
 pub fn joined(caps: &[String]) -> String {
-    caps.join(if cfg!(target_os = "macos") { "" } else { "+" })
+    caps.join(if mac_keys() { "" } else { "+" })
 }
 
 /// One entry of `keybindings.json`.
@@ -546,6 +569,23 @@ pub fn template() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_browser_on_a_mac_sees_mac_keys_and_a_pc_ctrl() {
+        let c = Combo::parse("ctrl+shift+p").unwrap();
+        {
+            let _mac = keys_like(true);
+            assert_eq!(c.label(), "⇧⌘P");
+            let (_, m) = c.chord();
+            assert!(m.mac_cmd && !m.ctrl, "⌘ pressed, not Ctrl");
+            {
+                let _pc = keys_like(false);
+                assert_eq!(c.label(), "Ctrl+Shift+P");
+            }
+            assert!(mac_keys(), "the inner guard put the Mac's back");
+        }
+        assert_eq!(mac_keys(), cfg!(target_os = "macos"), "and then this computer's own");
+    }
 
     fn user(key: &str, command: &str) -> UserBinding {
         UserBinding {

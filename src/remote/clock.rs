@@ -54,6 +54,15 @@ impl Waker {
         self.0.state.lock().unwrap_or_else(|e| e.into_inner()).next = Some(Instant::now());
         self.0.cv.notify_one();
     }
+
+    /// Wake the window at `when` (the earliest asked wins).
+    pub fn at(&self, when: Instant) {
+        let mut st = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        if st.next.is_none_or(|t| when < t) {
+            st.next = Some(when);
+            self.0.cv.notify_one();
+        }
+    }
 }
 
 impl Clock {
@@ -75,11 +84,7 @@ impl Clock {
 
     /// Wake the window at `when` (the earliest asked wins).
     pub fn at(&self, when: Instant) {
-        let mut st = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        if st.next.is_none_or(|t| when < t) {
-            st.next = Some(when);
-            self.shared.cv.notify_one();
-        }
+        Waker(self.shared.clone()).at(when);
     }
 
     pub fn waker(&self) -> Waker {

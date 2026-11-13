@@ -163,16 +163,20 @@ pub fn remote_windows() -> Vec<RemoteWindow> {
 pub struct RemoteServer {
     pub pid: i32,
     pub port: u16,
+    /// Used only from browsers: every window here keeps minimized meanwhile
+    /// (so this computer draws nothing; the browsers' devices do).
+    #[serde(default)]
+    pub browser_only: bool,
 }
 
 const SERVER_FILE: &str = "remote-server.json";
 
 /// Note that this window now serves remote access on `port`; every other
 /// window watches for it (see [`remote_server`]).
-pub fn register_remote_server(port: u16) {
+pub fn register_remote_server(port: u16, browser_only: bool) {
     if let Some(dir) = running_dir() {
         let _ = std::fs::create_dir_all(&dir);
-        let server = RemoteServer { pid: std::process::id() as i32, port };
+        let server = RemoteServer { pid: std::process::id() as i32, port, browser_only };
         if let Ok(json) = serde_json::to_string(&server) {
             let _ = std::fs::write(dir.join(SERVER_FILE), json);
         }
@@ -326,7 +330,7 @@ mod tests {
         // A live one is the server; this window's own needs no process check.
         let me = std::process::id() as i32;
         std::fs::write(&marker, format!(r#"{{"pid":{me},"port":4321}}"#)).unwrap();
-        assert_eq!(remote_server_in(tmp.path(), 1), Some(RemoteServer { pid: me, port: 4321 }));
+        assert_eq!(remote_server_in(tmp.path(), 1), Some(RemoteServer { pid: me, port: 4321, browser_only: false }));
         assert_eq!(remote_server_in(tmp.path(), me).map(|s| s.port), Some(4321));
         // Garbage isn't a server.
         std::fs::write(&marker, "nonsense").unwrap();

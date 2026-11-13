@@ -3577,7 +3577,8 @@ fn headless_remote_access() {
     let (mut h, port) = serve_remotely("open sesame", "fn main() {}\n");
 
     // Nothing secret reached the disk: no password file, and the password
-    // in no file of ours (the marker holds only the pid and port).
+    // in no file of ours (the marker holds only the pid, the port and
+    // whether it's browser only).
     assert!(!crate::remote::old_secrets_path().exists());
     let running = dirs::config_dir().unwrap().join("roxaruu").join("running");
     for dir in [crate::config::dir(), running.clone()] {
@@ -3585,7 +3586,7 @@ fn headless_remote_access() {
         assert!(leaks.is_empty(), "the password is on disk: {leaks:?}");
     }
     let marker = std::fs::read_to_string(running.join("remote-server.json")).unwrap();
-    assert_eq!(marker, format!(r#"{{"pid":{},"port":{port}}}"#, std::process::id()));
+    assert_eq!(marker, format!(r#"{{"pid":{},"port":{port},"browser_only":false}}"#, std::process::id()));
 
     // Sign in; this window is listed.
     assert!(sign_in(port, "wrong").is_none());
@@ -3845,6 +3846,8 @@ fn serve_remotely(password: &str, text: &str) -> (Harness<'static, Root>, u16) {
     assert!(matches!(&app(&h).ask, Some(crate::app::Ask::RemotePassword { password }) if password.is_empty()));
     type_text(&mut h, password);
     press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(matches!(app(&h).ask, Some(crate::app::Ask::RemoteHere { .. })), "then: only from the browser?");
+    press(&mut h, Modifiers::NONE, Key::K); // keep the window here
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
         assert!(std::time::Instant::now() < deadline, "the server never started");

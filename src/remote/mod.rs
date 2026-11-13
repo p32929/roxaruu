@@ -39,7 +39,7 @@ mod tls;
 
 use std::net::{IpAddr, UdpSocket};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -89,8 +89,9 @@ pub struct Status {
 /// next `Remote::update`).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Want {
-    /// Serve with this password (unless a server already runs elsewhere).
-    On(String),
+    /// Serve with this password (unless a server already runs elsewhere);
+    /// whether it's to be used only from browsers (windows here minimize).
+    On(String, bool),
     /// Stop the server, wherever it runs.
     Off,
 }
@@ -196,6 +197,8 @@ pub struct Remote {
     /// Drawing on the CPU (no GPU, e.g. a server: llvmpipe, WARP): every
     /// pixel costs, so frames go with fewer while things move (see `serve`).
     pub(crate) software: bool,
+    /// Minimized for "browser only" (see `update`).
+    minimized: bool,
     /// This pass's share of the browser's pixels to draw (1: all).
     scale: f32,
     /// Every texture the browser's copy uses (for browsers that draw
@@ -245,6 +248,7 @@ impl Default for Remote {
             encoded: (0, 0.0),
             virtual_screen: false,
             software: false,
+            minimized: false,
             scale: 1.0,
             textures: meshes::Textures::default(),
             browser_draws: false,
@@ -263,8 +267,10 @@ impl Default for Remote {
 /// a slow remote view spends its time (a machine with no GPU draws in software).
 #[derive(Default)]
 struct Timing {
-    /// Times the window ran (`update`).
+    /// Times the window ran (`update`), and the longest wait between two.
     wakes: u32,
+    longest_gap: Duration,
+    last_wake: Option<Instant>,
     /// Passes of the browser's copy, and the time they took (laying out).
     passes: u32,
     pass_secs: f64,
@@ -276,6 +282,19 @@ struct Timing {
     held_busy: u32,
     /// Drawing a frame failed (the GPU didn't answer in time).
     failed: u32,
+}
+
+/// While browsers may look: wakes this window's copy for them directly,
+/// whatever pace the window itself keeps (eframe's, which on a virtual
+/// screen is slow).
+static WAKE: Mutex<Option<clock::Waker>> = Mutex::new(None);
+
+/// Something the browsers' copy shows changed (a terminal's output): draw it
+/// for them within `delay`.
+pub fn soon(delay: Duration) {
+    if let Some(w) = WAKE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        w.at(Instant::now() + delay);
+    }
 }
 
 /// Closing the window (or quitting) drops it: the server, if it runs here,
@@ -308,6 +327,7 @@ impl Remote {
         self.size = None;
         self.encoder = None;
         self.clock = None;
+        *WAKE.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.unrendered = None;
     }
 
@@ -335,6 +355,7 @@ impl Remote {
             .map(|w| Box::new(move || w.request_redraw()) as Box<dyn Fn() + Send>);
         let clock = clock::Clock::start(redraw, main.clone());
         let waker = clock.waker();
+        *WAKE.lock().unwrap_or_else(|e| e.into_inner()) = Some(clock.waker());
         match Endpoint::start(auth::random_token(), move || waker.wake()) {
             Ok(ep) => {
                 let (sender, waker, held) = (ep.sender(), clock.waker(), self.held.clone());
@@ -355,7 +376,7 @@ impl Remote {
 
     /// Serve here with `password`, unless a server already runs (here or in
     /// another window): then there's nothing to do but show its address.
-    fn turn_on(&mut self, password: &str) {
+    fn turn_on(&mut self, password: &str, browser_only: bool) {
         self.problem = None;
         if self.serving() || instances::remote_server().is_some() {
             return;
@@ -385,7 +406,7 @@ impl Remote {
             }
         }
         tracing::info!(port = self.port, "remote access on");
-        instances::register_remote_server(self.port);
+        instances::register_remote_server(self.port, browser_only);
         // A sleeping computer drops off the Wi-Fi: stay awake while serving
         // (the display may still sleep). Ends with this window.
         self.awake = Some(crate::sys::stay_awake());
@@ -420,7 +441,7 @@ impl Remote {
         let fresh = |t: Instant, secs: u64| now.duration_since(t) < Duration::from_secs(secs);
         let asked = app.remote_want.take();
         match &asked {
-            Some(Want::On(password)) => self.turn_on(password),
+            Some(Want::On(password, browser_only)) => self.turn_on(password, *browser_only),
             Some(Want::Off) => self.turn_off(),
             None => {}
         }
@@ -432,6 +453,15 @@ impl Remote {
                 server
             }
         };
+        // Used only from browsers: minimized meanwhile, so this computer draws
+        // nothing (the window showing the address waits until it's read).
+        let hide = !self.virtual_screen
+            && server.is_some_and(|s| s.browser_only)
+            && !matches!(app.ask, Some(crate::app::Ask::RemoteAddress));
+        if hide != self.minimized {
+            self.minimized = hide;
+            main.send_viewport_cmd(egui::ViewportCommand::Minimized(hide));
+        }
         // Serving here, but the marker is gone or someone else's: turned off
         // from another window.
         let me = std::process::id() as i32;
@@ -474,6 +504,9 @@ impl Remote {
         }
         if clients > 0 {
             self.timing.wakes += 1;
+            if let Some(last) = self.timing.last_wake.replace(now) {
+                self.timing.longest_gap = self.timing.longest_gap.max(now - last);
+            }
             self.serve(app, main, frame);
             self.log_timing(app, hidden);
         } else {
@@ -519,6 +552,7 @@ impl Remote {
             sent_fps = format!("{:.1}", sent as f64 / secs),
             window_fps = format!("{:.1}", app.fps.unwrap_or(0.0)),
             wakes_per_s = format!("{:.1}", f64::from(t.wakes) / secs),
+            longest_gap_ms = t.longest_gap.as_millis(),
             passes = t.passes,
             pass_ms = ms(t.pass_secs, t.passes.into()),
             drawn = t.drawn,
@@ -566,6 +600,7 @@ impl Remote {
         if joined {
             self.key = true; // the whole frame, even if unchanged
             // The page shows the keys for its full-screen button and window list.
+            let _keys = crate::keymap::keys_like(self.input.mac);
             let caps = |c| app.config.keymap.combo_for(c).map(|k| k.label()).unwrap_or_default();
             let (full, windows) = (caps(Command::FullScreen), caps(Command::SwitchWindow));
             ep.broadcast(Out::Text(
@@ -630,6 +665,8 @@ impl Remote {
         };
         let time = self.input.time();
         app.remote_pass = true;
+        // The browser's keys: a Mac's ⌘ from a window on Linux, and so on.
+        let _keys = crate::keymap::keys_like(self.input.mac);
         // A swipe from the edge: out comes this view's drawer, as ⌘B would.
         if drawer && app.view().compact && !app.sidebar_shown() {
             app.focus_sidebar();

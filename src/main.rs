@@ -232,7 +232,7 @@ fn main() -> eframe::Result {
             root.2 = virtual_screen.then_some(false);
             root.1.virtual_screen = virtual_screen;
             if let Some(password) = password {
-                root.0.remote_want = Some(remote::Want::On(password));
+                root.0.remote_want = Some(remote::Want::On(password, false));
             }
             Ok(Box::new(root))
         }),

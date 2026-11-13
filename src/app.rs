@@ -1061,14 +1061,21 @@ impl App {
         }
     }
 
-    /// Serve remote access with `password`; then show where to open it.
+    /// Remote access with `password`: then whether to use it only from
+    /// browsers (`Ask::RemoteHere`).
     pub fn start_remote(&mut self, password: &str) -> Result<(), String> {
         if password.is_empty() {
             return Err("The password can't be empty".into());
         }
-        self.remote_want = Some(crate::remote::Want::On(password.to_string()));
-        self.ask = Some(Ask::RemoteAddress);
+        self.ask = Some(Ask::RemoteHere { password: password.to_string() });
         Ok(())
+    }
+
+    /// Serve remote access; `browser_only` minimizes the windows here
+    /// meanwhile. Then show where to open it.
+    pub fn serve_remote(&mut self, password: String, browser_only: bool) {
+        self.remote_want = Some(crate::remote::Want::On(password, browser_only));
+        self.ask = Some(Ask::RemoteAddress);
     }
 
     /// Text size: one step bigger / smaller (`Some(±1)`), or back to the
@@ -1298,9 +1305,9 @@ impl App {
         };
         let m = egui::Modifiers {
             alt: true,
-            mac_cmd: cfg!(target_os = "macos"),
+            mac_cmd: crate::keymap::mac_keys(),
             command: true,
-            ctrl: !cfg!(target_os = "macos"),
+            ctrl: !crate::keymap::mac_keys(),
             ..Default::default()
         };
         let (case, word) = ctx.input_mut(|inp| {

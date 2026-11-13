@@ -21,6 +21,8 @@ pub enum Ask {
     OpenUrl(String),
     /// The password for turning remote access on (typed hidden).
     RemotePassword { password: String },
+    /// Remote access: keep the windows here, or use it only from browsers?
+    RemoteHere { password: String },
     /// Where to open the windows from a browser.
     RemoteAddress,
     /// ⌘Q or the close button: close this window? (What's running stops.)
@@ -154,6 +156,11 @@ impl App {
                 Ok(())
             }
             Ask::RemotePassword { password } => self.start_remote(&password),
+            // ↵ is "browser only"; "keep windows here" answers apart (`ui`).
+            Ask::RemoteHere { password } => {
+                self.serve_remote(password, true);
+                Ok(())
+            }
             Ask::Quit => {
                 // Then "save changes?" for each unsaved file, then close.
                 self.begin_close(self.tab_paths(), crate::app::After::Quit, ctx);
