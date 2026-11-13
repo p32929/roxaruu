@@ -85,7 +85,7 @@ fn main() -> eframe::Result {
     );
     on_crash();
     let from_shell = std::io::stdin().is_terminal();
-    let launch = Launch::parse(std::env::args_os().skip(1), from_shell);
+    let launch = Launch::parse(std::env::args_os().skip(1));
     match &launch.info {
         Some(Info::Help) => {
             println!("{}", help());
@@ -133,7 +133,9 @@ fn main() -> eframe::Result {
     }
     // Started from a shell: hand the window to a copy that isn't tied to it
     // and give the prompt back, so closing that terminal leaves the window.
-    if from_shell && !launch.foreground {
+    // With no screen at all (a server, from a script or `ssh host rox …`
+    // too): to a copy on a virtual one.
+    if (from_shell || no_screen()) && !launch.foreground {
         if no_screen() && which::which("xvfb-run").is_err() {
             eprintln!("roxaruu: there's no screen here to open a window on; on a server, install Xvfb (sudo apt install xvfb)");
             std::process::exit(1);
@@ -225,6 +227,7 @@ fn main() -> eframe::Result {
             }
             let mut root = Root::new(app::App::new(&cc.egui_ctx, target));
             root.2 = virtual_screen.then_some(false);
+            root.1.virtual_screen = virtual_screen;
             if let Some(password) = password {
                 root.0.remote_want = Some(remote::Want::On(password));
             }
@@ -384,7 +387,7 @@ fn help() -> String {
         "Roxaruu {} — a keyboard-first editor with terminals.
 
 Usage:
-  rox                  Open the folder you're in (same as `rox .`).
+  rox                  Open Roxaruu; pick a folder in it (`rox .`: the one you're in).
   rox <folder>         Open a folder; if it's already open, go to its window.
   rox <file>           Open the file, in its project (the git repo it's in).
   rox --foreground ... Stay attached to this terminal (logs show here).
@@ -435,14 +438,14 @@ struct Launch {
     remote: Option<RemoteArg>,
     /// `--virtual-screen`: started on Xvfb by `detach` (no real screen).
     virtual_screen: bool,
-    /// `roxaruu [folder | file]`. Bare `roxaruu` (or `rox`) in a terminal
-    /// opens the folder you're in, same as `roxaruu .`; from the Dock or
-    /// Finder there's no terminal, and it opens empty.
+    /// `roxaruu [folder | file]`. Bare `roxaruu` (or `rox`) opens nothing,
+    /// wherever it's started: you pick the folder (`rox .` for the one
+    /// you're in).
     target: Option<std::path::PathBuf>,
 }
 
 impl Launch {
-    fn parse(args: impl Iterator<Item = std::ffi::OsString>, from_shell: bool) -> Launch {
+    fn parse(args: impl Iterator<Item = std::ffi::OsString>) -> Launch {
         let (mut info, mut foreground, mut remote, mut password, mut target) = (None, false, None, None, None);
         let mut virtual_screen = false;
         let mut args = args.peekable();
@@ -463,10 +466,8 @@ impl Launch {
                 _ => {}
             }
         }
-        let target = target
-            .or_else(|| from_shell.then(std::env::current_dir).and_then(Result::ok))
-            // Absolute, so the copy opens the same thing wherever it starts.
-            .map(|t| std::path::absolute(&t).unwrap_or(t));
+        // Absolute, so the copy opens the same thing wherever it starts.
+        let target = target.map(|t| std::path::absolute(&t).unwrap_or(t));
         let remote = remote.map(|on| if on { RemoteArg::On(password) } else { RemoteArg::Off });
         Launch { info, foreground, remote, virtual_screen, target }
     }
@@ -649,32 +650,31 @@ mod tests {
         assert_eq!(next_renderer("safe:42", dead), Start::NeitherDraws);
     }
 
-    fn parse(args: &[&str], from_shell: bool) -> Launch {
-        Launch::parse(args.iter().map(OsString::from), from_shell)
+    fn parse(args: &[&str]) -> Launch {
+        Launch::parse(args.iter().map(OsString::from))
     }
 
     #[test]
-    fn bare_rox_in_a_terminal_opens_the_folder_youre_in() {
+    fn bare_rox_opens_nothing_and_a_path_opens_it() {
         let here = std::env::current_dir().unwrap();
-        assert_eq!(parse(&[], true).target, Some(here.clone()));
-        assert_eq!(parse(&["."], true).target.map(|t| t.canonicalize().unwrap()), Some(here.canonicalize().unwrap()));
-        assert_eq!(parse(&[], false).target, None, "from the Dock: empty");
+        assert_eq!(parse(&[]).target, None, "you pick the folder");
+        assert_eq!(parse(&["."]).target.map(|t| t.canonicalize().unwrap()), Some(here.canonicalize().unwrap()));
         // An absolute path here (a drive and backslashes on Windows) stays as it is.
         let file = std::env::temp_dir().join("x").join("y.rs");
         let f = file.to_string_lossy().into_owned();
-        assert_eq!(parse(&[&f], false).target, Some(file.clone()));
-        assert!(parse(&["src"], true).target.unwrap().is_absolute());
+        assert_eq!(parse(&[&f]).target, Some(file.clone()));
+        assert!(parse(&["src"]).target.unwrap().is_absolute());
     }
 
     #[test]
     fn help_version_and_unknown_options_open_no_window() {
-        assert_eq!(parse(&["-h"], true).info, Some(Info::Help));
-        assert_eq!(parse(&["--help"], true).info, Some(Info::Help));
-        assert_eq!(parse(&["--version"], true).info, Some(Info::Version));
-        assert_eq!(parse(&["-V"], true).info, Some(Info::Version));
-        assert_eq!(parse(&["--nope"], true).info, Some(Info::Unknown("--nope".into())));
-        assert_eq!(parse(&["src"], true).info, None);
-        assert_eq!(parse(&["--foreground"], true).info, None);
+        assert_eq!(parse(&["-h"]).info, Some(Info::Help));
+        assert_eq!(parse(&["--help"]).info, Some(Info::Help));
+        assert_eq!(parse(&["--version"]).info, Some(Info::Version));
+        assert_eq!(parse(&["-V"]).info, Some(Info::Version));
+        assert_eq!(parse(&["--nope"]).info, Some(Info::Unknown("--nope".into())));
+        assert_eq!(parse(&["src"]).info, None);
+        assert_eq!(parse(&["--foreground"]).info, None);
         let h = help();
         for flag in ["--help", "--version", "--foreground", "rox <folder>"] {
             assert!(h.contains(flag), "{flag}");
@@ -683,21 +683,21 @@ mod tests {
 
     #[test]
     fn remote_on_and_off_from_the_command_line() {
-        let l = parse(&["--remote", "on", "--password", "0000"], true);
+        let l = parse(&["--remote", "on", "--password", "0000"]);
         assert_eq!((l.info, l.remote), (None, Some(RemoteArg::On(Some("0000".into())))));
         // Any order, with a folder.
         let dir = std::env::temp_dir().join("x");
         let d = dir.to_string_lossy().into_owned();
-        let l = parse(&["--password", "pw", &d, "--remote", "on"], false);
+        let l = parse(&["--password", "pw", &d, "--remote", "on"]);
         assert_eq!((l.remote, l.target), (Some(RemoteArg::On(Some("pw".into()))), Some(dir)));
         // The detached copy: the password comes on stdin.
-        assert_eq!(parse(&["--foreground", "--remote", "on"], false).remote, Some(RemoteArg::On(None)));
-        assert_eq!(parse(&["--remote", "off"], true).remote, Some(RemoteArg::Off));
-        assert!(matches!(parse(&["--remote", "maybe"], true).info, Some(Info::Unknown(_))));
-        assert!(matches!(parse(&["--remote"], true).info, Some(Info::Unknown(_))));
+        assert_eq!(parse(&["--foreground", "--remote", "on"]).remote, Some(RemoteArg::On(None)));
+        assert_eq!(parse(&["--remote", "off"]).remote, Some(RemoteArg::Off));
+        assert!(matches!(parse(&["--remote", "maybe"]).info, Some(Info::Unknown(_))));
+        assert!(matches!(parse(&["--remote"]).info, Some(Info::Unknown(_))));
         assert!(help().contains("--remote on --password"));
-        assert!(parse(&["--foreground", "--virtual-screen", "--remote", "on"], false).virtual_screen);
-        assert!(!parse(&["--remote", "on"], false).virtual_screen);
+        assert!(parse(&["--foreground", "--virtual-screen", "--remote", "on"]).virtual_screen);
+        assert!(!parse(&["--remote", "on"]).virtual_screen);
     }
 
     #[test]
@@ -711,10 +711,10 @@ mod tests {
     fn foreground_flag_comes_first_and_keeps_the_target() {
         let dir = std::env::temp_dir().join("x");
         let d = dir.to_string_lossy().into_owned();
-        let l = parse(&["--foreground", &d], true);
+        let l = parse(&["--foreground", &d]);
         assert!(l.foreground);
         assert_eq!(l.target, Some(dir));
-        assert!(!parse(&[&d], true).foreground);
+        assert!(!parse(&[&d]).foreground);
     }
 
     /// The detached copy gets `--foreground`, its own process group, and no

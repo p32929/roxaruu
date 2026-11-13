@@ -501,8 +501,11 @@ pub fn spawn_window(dir: &Path) -> std::io::Result<()> {
     #[cfg(not(test))]
     {
         tracing::info!(dir = %dir.display(), "new window");
+        // On a virtual screen, so is the new one: seen only through a browser.
+        let virtual_screen = std::env::args().any(|a| a == "--virtual-screen");
         std::process::Command::new(std::env::current_exe()?)
             .arg(dir)
+            .args(virtual_screen.then_some("--virtual-screen"))
             .spawn()
             .map(|_| ())
     }

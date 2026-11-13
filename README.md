@@ -40,8 +40,8 @@ terminals use WSL by themselves.
 
 ## Use
 
-Open a folder from the app, or from a terminal: `rox` (the folder you're in)
-or `rox <path>`. Press **F1** for every shortcut, **⇧⌘P** / **Ctrl+Shift+P**
+Open a folder from the app (Ctrl+O / ⌘O), or from a terminal: `rox <path>`
+(`rox .` for the one you're in; plain `rox` opens nothing). Press **F1** for every shortcut, **⇧⌘P** / **Ctrl+Shift+P**
 for every command.
 
 Use it from a browser (another computer, a phone):

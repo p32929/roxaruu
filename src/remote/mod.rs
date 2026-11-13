@@ -178,6 +178,14 @@ pub struct Remote {
     /// report it).
     pub(crate) render_secs: f64,
     pub(crate) renders: u64,
+    /// What it did for its browsers since the last "remote timing" log line.
+    timing: Timing,
+    timing_from: Instant,
+    /// The encoder's totals at that line.
+    encoded: (u64, f64),
+    /// On a virtual screen (`--virtual-screen`): nobody sees the window
+    /// itself, so it's treated as hidden (the clock wakes it for its browsers).
+    pub(crate) virtual_screen: bool,
     cursor: Option<egui::CursorIcon>,
     /// What this window is listed as.
     listed: Option<(String, String)>,
@@ -213,6 +221,10 @@ impl Default for Remote {
             ppp: 1.0,
             render_secs: 0.0,
             renders: 0,
+            timing: Timing::default(),
+            timing_from: Instant::now(),
+            encoded: (0, 0.0),
+            virtual_screen: false,
             cursor: None,
             listed: None,
             problem: None,
@@ -221,6 +233,25 @@ impl Default for Remote {
             ip_checked: None,
         }
     }
+}
+
+/// What a window did for its browsers over a few seconds, for the log: where
+/// a slow remote view spends its time (a machine with no GPU draws in software).
+#[derive(Default)]
+struct Timing {
+    /// Times the window ran (`update`).
+    wakes: u32,
+    /// Passes of the browser's copy, and the time they took (laying out).
+    passes: u32,
+    pass_secs: f64,
+    /// Frames drawn off-screen and read back, and the time that took.
+    drawn: u32,
+    draw_secs: f64,
+    /// A frame held back: a browser hadn't acked, or the encoder was busy.
+    held_browser: u32,
+    held_busy: u32,
+    /// Drawing a frame failed (the GPU didn't answer in time).
+    failed: u32,
 }
 
 /// Closing the window (or quitting) drops it: the server, if it runs here,
@@ -257,7 +288,6 @@ impl Remote {
     }
 
     /// What encoding frames has cost so far.
-    #[cfg(test)]
     pub(crate) fn encode_stats(&self) -> frames::Stats {
         self.encoder
             .as_ref()
@@ -411,14 +441,17 @@ impl Remote {
         };
         // Hidden (minimized, covered, the screen locked): the window's own
         // repaint requests are delayed by eframe, so the clock takes them.
-        let hidden = main.input(|i| i.raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.visible()))
-            == Some(false)
+        let hidden = self.virtual_screen
+            || main.input(|i| i.raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.visible()))
+                == Some(false)
             || frame.winit_window().is_some_and(|w| w.is_visible() == Some(false));
         if let Some(clock) = &self.clock {
             clock.set_hidden(hidden && clients > 0);
         }
         if clients > 0 {
+            self.timing.wakes += 1;
             self.serve(app, main, frame);
+            self.log_timing(app, hidden);
         } else {
             self.size = None;
             self.unrendered = None;
@@ -442,6 +475,37 @@ impl Remote {
             });
             self.listed = Some((name, path));
         }
+    }
+
+    /// Every 5 s while browsers look: how fast frames go out and where the
+    /// time went, so a slow remote view can be read from the log.
+    fn log_timing(&mut self, app: &App, hidden: bool) {
+        let secs = self.timing_from.elapsed().as_secs_f64();
+        if secs < 5.0 {
+            return;
+        }
+        let t = std::mem::take(&mut self.timing);
+        let enc = self.encode_stats();
+        // (A new encoder, for a new browser, starts its totals again.)
+        let (sent, enc_secs) = (enc.frames.saturating_sub(self.encoded.0), (enc.encode_secs - self.encoded.1).max(0.0));
+        self.encoded = (enc.frames, enc.encode_secs);
+        self.timing_from = Instant::now();
+        let ms = |s: f64, n: u64| format!("{:.0}", if n == 0 { 0.0 } else { s * 1000.0 / n as f64 });
+        tracing::debug!(
+            sent_fps = format!("{:.1}", sent as f64 / secs),
+            window_fps = format!("{:.1}", app.fps.unwrap_or(0.0)),
+            wakes_per_s = format!("{:.1}", f64::from(t.wakes) / secs),
+            passes = t.passes,
+            pass_ms = ms(t.pass_secs, t.passes.into()),
+            drawn = t.drawn,
+            draw_ms = ms(t.draw_secs, t.drawn.into()),
+            encode_ms = ms(enc_secs, sent),
+            held_browser = t.held_browser,
+            held_busy = t.held_busy,
+            failed = t.failed,
+            hidden,
+            "remote timing"
+        );
     }
 
     /// Run the browser's copy of the window if it's due, and send the frame.
@@ -538,8 +602,11 @@ impl Remote {
         // A new size (or a new browser): lay out once first, so panels know
         // their sizes, then draw for real — keeping the first pass's
         // textures (the font atlas), which the renderer still needs.
+        let started = Instant::now();
         let first = (resized || joined).then(|| self.ctx.run_ui(raw(Vec::new(), time), |ui| app.frame(ui)));
         let mut output = self.ctx.run_ui(raw(events, time), |ui| app.frame(ui));
+        self.timing.passes += 1;
+        self.timing.pass_secs += started.elapsed().as_secs_f64();
         app.remote_pass = false;
         // Texture changes of passes not drawn yet come first.
         let mut textures = self.unrendered.take().map(|o| o.textures_delta).unwrap_or_default();
@@ -601,6 +668,7 @@ impl Remote {
             return;
         }
         if !ep.ready() {
+            self.timing.held_browser += 1;
             // An ack wakes the window; a browser that never acks gets
             // frames anyway after a while.
             if let Some(c) = &self.clock {
@@ -610,6 +678,7 @@ impl Remote {
         }
         self.held.store(true, Ordering::SeqCst);
         if encoder.busy() {
+            self.timing.held_busy += 1;
             return;
         }
         self.held.store(false, Ordering::SeqCst);
@@ -623,10 +692,14 @@ impl Remote {
             .offscreen
             .get_or_insert_with(|| render::Offscreen::new(&state.device, &state.queue));
         let Some(image) = offscreen.render(&self.ctx, &output) else {
+            self.timing.failed += 1;
             return;
         };
-        self.render_secs += started.elapsed().as_secs_f64();
+        let secs = started.elapsed().as_secs_f64();
+        self.render_secs += secs;
         self.renders += 1;
+        self.timing.drawn += 1;
+        self.timing.draw_secs += secs;
         encoder.submit(image, std::mem::take(&mut self.key), self.ppp >= 1.5);
     }
 }
