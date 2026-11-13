@@ -172,7 +172,7 @@ same list twice, make one table and read it from both places.
   the tests fast (every test, in a few processes side by side,
   each with its own scratch HOME; pre-push and CI use it; each test's
   line as it finishes, `✓ passed 1.2s name` / `✗ FAILED`, via
-  `format-tests`). `.githooks/ci-watch` follows a push's CI run here. By hand:
+  `format-tests`). `.githooks/ci-watch --run` starts CI for the pushed branch and follows it here. By hand:
 
 ```sh
 cargo clippy --release --all-targets          # must be clean
@@ -232,20 +232,23 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 - Off macOS, Roxaruu's keys are Ctrl chords, which a terminal's shell wants
   too: only `terminal::passes_the_shell` get past it, and hints in a
   terminal never show one that doesn't (`key_reaches`).
-- Tests run where you work, CI runs the rest, by itself: with
+- Tests run where you work, CI runs the rest when asked: with
   `git config core.hooksPath .githooks` (once per clone), each commit says
   which system it was made on (`Tested-on: macOS`, `prepare-commit-msg`),
   `pre-push` runs that system's whole suite (above) there and stops the
-  push on a failure, and `.github/workflows/build.yml` (its `plan` job)
-  builds, tests and packages only the other systems — every test: on
+  push on a failure. A push starts no CI (each run costs; batch changes,
+  and ask before starting one): `.github/workflows/build.yml` runs for a
+  pull request into master, a release tag, or a manual run
+  (`.githooks/ci-watch --run`), whose `plan` job builds, tests and packages
+  only the systems the commit wasn't tested on — every test: on
   macOS and Linux with `--include-ignored` (the UI walkthroughs,
-  screenshots kept with the run), on Windows all that builds there. No
-  `Tested-on:` line, a release tag or a manual run: all three (a manual
-  run can pick one and skip the tests: `build_only`). Side by side, per
+  screenshots kept with the run), on Windows all that builds there. A
+  release tag or a pull request: all three (a manual run can pick one, or
+  `all`, and skip the tests: `build_only`). Side by side, per
   system: one machine packages (macOS: one per chip, joined by the `macos`
   job), two run half the tests each (`test-all` `PART`/`PARTS`, built with
   the faster `fast` profile); link-time optimisation (¾ of a build) only
-  for a release tag; a push of only `.md` files tests and builds nothing.
+  for a release tag.
   The package machine installs each package and opens the app (it must still
   run with its window drawn; screenshots kept with the run) (`packaging/`: the macOS Info.plist and Linux menu entry
   `install-local.sh` uses too, the Windows installer). It must stay green

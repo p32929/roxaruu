@@ -20,7 +20,7 @@ done
 platform=$("$(dirname "$0")/platform")
 root=$(git rev-parse --show-toplevel)
 cd "$root"
-echo "pre-push: $platform tests, here (CI tests the other systems)"
+echo "pre-push: $platform tests, here (the others: .githooks/ci-watch --run)"
 cargo clippy --release --all-targets -- -D warnings
 "$(dirname "$0")/test-all" # every test, in a few processes, scratch homes
 echo "pre-push: $platform tests passed"

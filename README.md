@@ -60,12 +60,13 @@ libdbus-1-dev`.
 
 Working on it: run `git config core.hooksPath .githooks` once. Then every
 `git push` first runs your system's whole test suite on your machine (and
-stops if it fails), and CI tests the other two systems
+stops if it fails). A push starts no CI: it runs for pull requests into
+`master`, release tags, and when asked — `.githooks/ci-watch --run` tests
+and packages the other two systems and follows it in the terminal
 ([.githooks](.githooks), `.github/workflows/build.yml`). Each test shows as
 it finishes: `✓ passed  1.2s  name` or `✗ FAILED`. `.githooks/test-all` runs
-them by hand; `.githooks/ci-watch` follows the push's CI run in the terminal.
-Just the downloads, no tests (about 4 minutes):
-`gh workflow run build -f build_only=true -f system=Linux` (or `all`).
+them by hand. Just the downloads, no tests (about 4 minutes):
+`.githooks/ci-watch --run -f build_only=true -f system=Linux` (or `all`).
 
 ## Releases
 

@@ -1,11 +1,11 @@
-# Builds, tests and packages Roxaruu (kept as this run's artifacts) for the
-# systems a push wasn't already tested on: a commit made with this repo's
-# hooks (.githooks) says "Tested-on: macOS" (or Windows, Linux), and its
-# pre-push ran that system's whole suite there, so CI runs the other two.
-# A commit without that line, a release tag `v*` (which also publishes the
-# downloads as a GitHub release) or a manual run gets all three; a manual run
-# can pick one system and skip the tests ("build only":
-# `gh workflow run build -f build_only=true -f system=Linux`).
+# Builds, tests and packages Roxaruu (kept as this run's artifacts). Runs only
+# when asked, never on a plain push (each push is tested on its own system
+# by the pre-push hook): a pull request into master, a release tag `v*`
+# (which also publishes the downloads as a GitHub release), or a manual run —
+# `.githooks/ci-watch --run` (or GitHub's "Run workflow"). A manual run
+# builds the systems the commit wasn't tested on (it says "Tested-on: macOS"
+# when made with this repo's hooks), or the one picked, and can skip the
+# tests (`-f build_only=true`).
 #
 # Everything runs side by side: per system, one machine builds the packages
 # (and opens the installed app; macOS: one per chip, joined after), two
@@ -16,10 +16,9 @@ name: build
 
 on:
   push:
-    branches: ["**"]
-    tags: ["v*"]
-    paths-ignore: ["**.md"] # docs alone build nothing (tags always build)
+    tags: ["v*"] # a release; a branch push runs nothing
   pull_request:
+    branches: [master]
     paths-ignore: ["**.md"]
   workflow_dispatch:
     inputs:
@@ -28,10 +27,10 @@ on:
         type: boolean
         default: false
       system:
-        description: "Which system"
+        description: "Which system (others: those the commit wasn't tested on)"
         type: choice
-        options: [all, Linux, Windows, macOS]
-        default: all
+        options: [others, all, Linux, Windows, macOS]
+        default: others
 
 concurrency:
   group: build-${{ github.ref }}
@@ -54,21 +53,21 @@ jobs:
     steps:
       - id: pick
         env:
-          MESSAGE: ${{ github.event.head_commit.message }}
-          REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           SYSTEM: ${{ inputs.system }}
           BUILD_ONLY: ${{ inputs.build_only }}
         run: |
           all='[{"name":"macOS","os":"macos-latest"},{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]'
-          tested=$(printf '%s\n' "$MESSAGE" | sed -n 's/^Tested-on: *//p' | tail -1)
-          if [[ "$EVENT" == workflow_dispatch && "$SYSTEM" != all ]]; then
-            systems=$(jq -c --arg s "$SYSTEM" 'map(select(.name == $s))' <<<"$all")
-          elif [[ "$REF" == refs/tags/v* || "$EVENT" != push || -z "$tested" ]]; then
-            systems=$all
-          else
+          if [[ "$EVENT" != workflow_dispatch || "$SYSTEM" == all ]]; then
+            systems=$all # a release, a pull request, or asked for all
+          elif [[ "$SYSTEM" == others ]]; then
+            message=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" -q .commit.message || true)
+            tested=$(printf '%s\n' "$message" | sed -n 's/^Tested-on: *//p' | tail -1)
             systems=$(jq -c --arg t "$tested" 'map(select(.name != $t))' <<<"$all")
-            echo "tested on $tested before the push: building the others"
+            echo "tested on ${tested:-nothing} already: building the others"
+          else
+            systems=$(jq -c --arg s "$SYSTEM" 'map(select(.name == $s))' <<<"$all")
           fi
           if [[ "$BUILD_ONLY" == true ]]; then
             tests='[]'
