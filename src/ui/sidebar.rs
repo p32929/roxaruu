@@ -632,14 +632,17 @@ impl App {
                 });
             }
         });
+        // At the top of the list, under the search box (it was placed under
+        // the header, from before there was one, and sat on top of it).
         if entries.is_empty() {
-            ui.painter().text(
-                head.center_bottom() + vec2(0.0, 24.0 * s),
-                Align2::CENTER_CENTER,
-                "This folder is empty",
-                pt.font(12.5, Weight::Regular),
-                c.text_subtle,
+            let at = Rect::from_min_size(
+                pos2(out.inner_rect.left(), out.inner_rect.top() + 10.0 * s),
+                vec2(out.inner_rect.width(), 20.0 * s),
             );
+            let note = egui::RichText::new("This folder is empty")
+                .font(pt.font(12.5, Weight::Regular))
+                .color(c.text_subtle);
+            ui.put(at, egui::Label::new(note).selectable(false));
         }
         self.sidebar.offset = out.state.clamped_offset().y;
         self.sidebar.view = out.inner_rect.height();
