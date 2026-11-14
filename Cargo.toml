@@ -1,6 +1,6 @@
 [package]
 name = "roxaruu"
-version = "0.2.49"
+version = "0.2.50"
 edition = "2024"
 description = "A keyboard-first code editor with terminals built in, for macOS, Windows, Linux and any browser"
 repository = "https://github.com/p32929/roxaruu"
