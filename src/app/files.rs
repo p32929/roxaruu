@@ -29,6 +29,8 @@ pub enum Ask {
     Quit,
     /// A terminal on Windows without Git Bash or WSL: install Git.
     NeedShell,
+    /// What this is: name, version, where it lives, who made it.
+    About,
 }
 
 /// Where Git for Windows (and its Git Bash) comes from.
@@ -153,6 +155,11 @@ impl App {
             }
             Ask::NeedShell => {
                 self.open_url(GIT_FOR_WINDOWS.into(), ctx);
+                Ok(())
+            }
+            // ↵ is "GitHub"; "Portfolio" answers apart (`ui`).
+            Ask::About => {
+                self.open_url(crate::REPO.into(), ctx);
                 Ok(())
             }
             Ask::RemotePassword { password } => self.start_remote(&password),

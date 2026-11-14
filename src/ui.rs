@@ -91,6 +91,7 @@ pub mod icon {
     pub const TASKS: &str = "\u{eb67}";
     pub const CLIPBOARD: &str = "\u{eac0}";
     pub const QUESTION: &str = "\u{eb32}";
+    pub const INFO: &str = "\u{ea74}";
 
     /// A file's type icon and its colour (Seti's, as VS Code shows them).
     /// `None`: no known type, the plain page in the caller's colour.
@@ -294,6 +295,7 @@ pub mod icon {
             | Command::OpenConfigFolder => GEAR,
             Command::Keybindings | Command::OpenKeybindings => KEYBOARD,
             Command::Help => QUESTION,
+            Command::About => INFO,
             Command::Todos => TASKS,
             Command::ClipboardHistory => CLIPBOARD,
             Command::Save => SAVE,
@@ -468,7 +470,13 @@ pub(crate) fn drawn_keys() -> Vec<String> {
 /// Where the last pass drew the clickable key for `c`, for tests.
 #[cfg(test)]
 pub(crate) fn drawn_hint(c: Command) -> Option<Rect> {
-    DRAWN.with(|d| d.borrow().clickable.iter().find(|(_, k)| *k == c).map(|(r, _)| *r))
+    drawn_hints(c).first().copied()
+}
+
+/// Every place the last pass drew something that runs `c` on click.
+#[cfg(test)]
+pub(crate) fn drawn_hints(c: Command) -> Vec<Rect> {
+    DRAWN.with(|d| d.borrow().clickable.iter().filter(|(_, k)| *k == c).map(|(r, _)| *r).collect())
 }
 
 /// Rows shown at once in a compact palette (pickers, Go to Line).
@@ -1577,6 +1585,29 @@ impl App {
                 None,
                 None,
             ),
+            Ask::About => {
+                let body = format!(
+                    "Version {}\n\nA keyboard-first code editor with terminals built in.\n\n\
+                     GitHub: {}\nMade by p32929: {}",
+                    crate::VERSION,
+                    crate::REPO,
+                    crate::PORTFOLIO
+                );
+                self.modal(
+                    ctx,
+                    icon::INFO,
+                    "Roxaruu",
+                    &body,
+                    &[
+                        Btn { label: "Close", hint: "esc", keys: &[Key::Escape], primary: false },
+                        Btn { label: "Portfolio", hint: "P", keys: &[Key::P], primary: false },
+                        Btn { label: "GitHub", hint: "↵", keys: &[Key::Enter, Key::G], primary: true },
+                    ],
+                    None,
+                    None,
+                    None,
+                )
+            }
             Ask::OpenUrl(url) => {
                 let body = url.clone();
                 self.modal(
@@ -1604,6 +1635,12 @@ impl App {
                 }
             }
             Some(i) if matches!(self.ask, Some(crate::app::Ask::RemoteHere { .. })) => self.answer_ask(i == 2, ctx),
+            // Portfolio (GitHub is "yes").
+            Some(1) if matches!(self.ask, Some(crate::app::Ask::About)) => {
+                self.ask = None;
+                self.open_url(crate::PORTFOLIO.into(), ctx);
+            }
+            Some(i) if matches!(self.ask, Some(crate::app::Ask::About)) => self.answer_ask(i == 2, ctx),
             Some(i) => self.answer_ask(i == 1, ctx),
             None => {}
         }
@@ -2296,15 +2333,35 @@ impl App {
                 .map(|f| format!("{}  {f:.1} fps", icon::PULSE)),
             lang,
         ];
-        // Right to left, as many as fit. Only the position does something
-        // on click, so only it looks like a button.
+        // Right to left, as many as fit. The version (the first) is About
+        // Roxaruu on click, and the position Go to Line: only they look like
+        // buttons.
         let mut x = rect.right() - 12.0 * s;
-        for text in stats.into_iter().flatten() {
+        for (i, text) in stats.into_iter().enumerate() {
+            let Some(text) = text else { continue };
             let g = ui.fonts_mut(|f| f.layout_no_wrap(text, font.clone(), c.text_subtle));
             if x - g.size().x < rect.left() + 12.0 * s {
                 break;
             }
             x -= g.size().x;
+            if i == 0 {
+                let r = Rect::from_min_size(
+                    pos2(x - 6.0 * s, rect.top() + 3.0 * s),
+                    vec2(g.size().x + 12.0 * s, rect.height() - 6.0 * s),
+                );
+                let about = ui.interact(r, egui::Id::unique("status-version"), Sense::click());
+                #[cfg(test)]
+                drawn(ui, [], Some((r, Command::About)));
+                let mut keys = String::new();
+                if about.hovered() {
+                    keys = self.shortcut(Command::About).map(|k| format!("  {k}")).unwrap_or_default();
+                    p.rect_filled(r, 4.0 * s, c.hover);
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+                if about.on_hover_text(format!("About Roxaruu{keys}")).clicked() {
+                    picked = Some(Command::About);
+                }
+            }
             p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, c.text_subtle);
             x -= 20.0 * s;
         }
@@ -2566,11 +2623,10 @@ impl App {
         };
         let wordmark = layout(title, pt.font(30.0, Weight::SemiBold), c.text);
         let tagline = layout(subtitle, pt.font(14.0, Weight::Regular), c.text_muted);
-        let footer_text = format!(
-            "{}  themes, fonts and keys live in ~/.config/roxaruu   ·   v{}",
-            icon::GEAR,
-            crate::VERSION
-        );
+        let config_part = format!("{}  themes, fonts and keys live in ~/.config/roxaruu   ·   ", icon::GEAR);
+        // Where the version starts: from there a click is About Roxaruu.
+        let version_at = config_part.chars().count();
+        let footer_text = format!("{config_part}v{}", crate::VERSION);
         // Wraps (centred) where it's too long for the window, as on a phone.
         let mut job = LayoutJob::simple(
             footer_text,
@@ -2684,11 +2740,26 @@ impl App {
             ui.scope_id().with("welcome-footer"),
             Sense::click(),
         );
+        #[cfg(test)]
+        {
+            let v = footer.pos_from_cursor(egui::text::CCursor::new(version_at)).translate(footer_at.to_vec2());
+            drawn(ui, [], Some((Rect::from_min_size(v.min, vec2(8.0 * s, v.height())), Command::About)));
+        }
+        // The version opens About Roxaruu; the rest, the config folder.
+        let on_version = resp
+            .hover_pos()
+            .is_some_and(|at| footer.cursor_from_pos(at - footer_at).index >= egui::text::CharIndex(version_at));
+        let (command, tip) = if on_version {
+            (Command::About, "About Roxaruu")
+        } else {
+            (Command::OpenConfigFolder, "Open Config Folder")
+        };
         if resp.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
-        if resp.clicked() {
-            chosen = Some(Command::OpenConfigFolder);
+        let keys = self.shortcut(command).map(|k| format!("  {k}")).unwrap_or_default();
+        if resp.clone().on_hover_text(format!("{tip}{keys}")).clicked() {
+            chosen = Some(command);
         }
         p.galley(
             footer_at,
@@ -3821,7 +3892,7 @@ impl App {
                 .combo_for(*command)
                 .map(|k| format!("  ({})", k.label()))
                 .unwrap_or_default();
-            if resp.on_hover_text(format!("{tip}{keys}")).clicked() {
+            if resp.clone().on_hover_text(format!("{tip}{keys}")).clicked() {
                 run = Some(*command);
             }
         }

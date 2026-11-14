@@ -14,6 +14,7 @@ use serde::Deserialize;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Command {
     Palette,
+    About,
     GoToFile,
     OpenFolder,
     RecentFolders,
@@ -138,6 +139,7 @@ macro_rules! commands {
 commands! {
     Palette, "app.commandPalette", "Command Palette", ["ctrl+shift+p"];
     Help, "app.help", "Help: Keyboard Shortcuts", ["f1"];
+    About, "app.about", "About Roxaruu", ["ctrl+alt+shift+i"];
     GoToFile, "file.goTo", "Go to File", ["alt+f", "ctrl+p"];
     OpenFolder, "folder.open", "Open Folder", ["ctrl+o"];
     RecentFolders, "folder.recent", "Recent Folders", ["alt+o"];

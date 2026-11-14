@@ -1680,6 +1680,52 @@ fn headless_status_hint_click_opens_palette() {
     assert!(app(&h).palette.is_none());
 }
 
+/// About Roxaruu: the version's click (the start screen's line and the
+/// status bar's) or its key; name, version, repo and portfolio; ↵ (or G)
+/// opens the repo, P the portfolio, esc just closes.
+#[test]
+#[ignore]
+fn headless_about() {
+    use crate::app::{App, Ask};
+    use crate::keymap::Command;
+    let about = |h: &Harness<'static, Root>| matches!(app(h).ask, Some(Ask::About));
+    App::take_launched();
+    let mut h = harness(None);
+    h.run();
+    // The start screen shows it twice: under the actions, and on the status bar.
+    let versions = crate::ui::drawn_hints(Command::About);
+    assert_eq!(versions.len(), 2, "{versions:?}");
+    for (i, v) in versions.into_iter().enumerate() {
+        click_at(&mut h, v.center(), egui::PointerButton::Primary);
+        assert!(about(&h), "clicking version {i} opens About");
+        if i == 0 {
+            shot(&mut h, "about");
+            press(&mut h, Modifiers::NONE, Key::P);
+            assert_eq!(App::take_launched(), vec![vec![crate::PORTFOLIO.to_string()]]);
+        } else {
+            press(&mut h, Modifiers::NONE, Key::Enter);
+            assert_eq!(App::take_launched(), vec![vec![crate::REPO.to_string()]]);
+        }
+        assert!(!about(&h));
+    }
+    // The rest of the start screen's line is still the config folder.
+    let line = crate::ui::drawn_hints(Command::About).into_iter().min_by(|a, b| a.top().total_cmp(&b.top())).unwrap();
+    click_at(&mut h, line.left_center() - egui::vec2(60.0, 0.0), egui::PointerButton::Primary);
+    assert!(!about(&h) && App::take_launched().len() == 1, "the config folder opened");
+
+    // Its key, anywhere; esc closes it and opens nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = harness(Some(dir.path().canonicalize().unwrap()));
+    h.run();
+    press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::I);
+    assert!(about(&h));
+    for want in ["Roxaruu", crate::VERSION, crate::REPO, crate::PORTFOLIO] {
+        assert!(h.query_all_by_label_contains(want).next().is_some(), "About shows {want}");
+    }
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(!about(&h) && App::take_launched().is_empty());
+}
+
 #[test]
 #[ignore]
 fn headless_idle_and_startup() {
@@ -4943,7 +4989,7 @@ fn headless_every_key_that_applies_shows() {
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
         OpenProjectSettings, OpenConfigFolder, Todos, ClipboardHistory, ZoomIn, ZoomOut, ResetZoom, FullScreen,
         MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
-        ToggleTerminal, Palette, SearchInFiles, SwitchFocus,
+        ToggleTerminal, Palette, SearchInFiles, SwitchFocus, About,
         // A tab's or the tree's right-click menu.
         RenameFile, RevealInFinder, OpenInTerminal, CopyPath, CopyRelativePath,
         // On each tab's tooltip (⌘1–8); ⌘9 is "the last".

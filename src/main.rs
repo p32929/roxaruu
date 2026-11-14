@@ -48,6 +48,9 @@ use eframe::egui;
 /// This build's version (Cargo.toml), shown in the status bar, on the
 /// welcome screen and by `--version`, so an update is easy to confirm.
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Where Roxaruu lives, and who made it: About Roxaruu.
+pub(crate) const REPO: &str = "https://github.com/p32929/roxaruu";
+pub(crate) const PORTFOLIO: &str = "https://p32929.github.io/";
 
 /// The app icon (`assets/icon.svg`, rendered): the window and Dock icon, and
 /// the mark on the welcome screen.

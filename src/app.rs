@@ -787,6 +787,7 @@ impl App {
             Command::Todos => self.open_todos(ctx),
             Command::ClipboardHistory => self.open_palette(Mode::Clipboard, ctx),
             Command::Help => self.help = !self.help,
+            Command::About => self.ask = Some(Ask::About),
             Command::OpenProjectSettings => self.open_project_settings(ctx),
             // The config files open right here; saving applies them.
             Command::OpenSettings | Command::OpenKeybindings => {
