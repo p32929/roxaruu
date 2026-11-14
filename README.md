@@ -111,7 +111,7 @@ Needs [Rust](https://rustup.rs). `./install-local.sh` builds and installs it on 
 
 Working on it: run `git config core.hooksPath .githooks` once. Then every `git push` first runs your system's whole test suite on your machine, and stops if it fails. `.githooks/test-all` runs the tests by hand; each one shows as it finishes (`✓ passed  1.2s  name` or `✗ FAILED`).
 
-**Releases.** `.githooks/release` (or "Run workflow" on GitHub's Actions page, which asks nothing) builds, tests and packages Windows, macOS and Linux and, if every test passes, publishes release `v<version>` from `Cargo.toml` with all the downloads above. CI never runs by itself.
+**Releases.** `.githooks/release` (or "Run workflow" on GitHub's Actions page, which asks nothing) builds, tests and packages Windows, macOS and Linux, then publishes release `v<version>` from `Cargo.toml` with all the downloads above. A failed test doesn't hold the release back; its notes say which system failed. CI never runs by itself.
 
 ## Contributing
 

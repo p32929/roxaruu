@@ -1,7 +1,8 @@
 # Publishes a release: builds, tests and packages Roxaruu for Windows, macOS
-# and Linux, and — if every test passes on every system — publishes GitHub
-# release v<version> (Cargo.toml's) with all the downloads, replacing that
-# version's release if it was published before. It runs only when started
+# and Linux, and — once every package is built — publishes GitHub release
+# v<version> (Cargo.toml's) with all the downloads, replacing that version's
+# release if it was published before. A failed test doesn't hold it back
+# (the app may well still work); the release's notes say which system failed. It runs only when started
 # by hand ("Run workflow" on GitHub, or `.githooks/release`), and asks
 # nothing: never on a push, a tag or a pull request.
 #
@@ -315,16 +316,21 @@ jobs:
           path: smoke/*
           if-no-files-found: ignore
 
-  # v<version> (Cargo.toml's), with every download, once everything passed;
-  # a version released before is replaced (its tag moves here too).
+  # v<version> (Cargo.toml's), with every download, once every package is
+  # built, whatever the tests said; a version released before is replaced
+  # (its tag moves here too).
   release:
     name: Release
     needs: [package, macos, test]
+    if: always() && needs.package.result == 'success' && needs.macos.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read # which test jobs failed, for the notes
     env:
       GH_TOKEN: ${{ github.token }}
+      TESTS: ${{ needs.test.result }}
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -340,5 +346,13 @@ jobs:
             echo "$tag was released before: replacing it"
             gh release delete "$tag" --yes --cleanup-tag
           fi
-          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Roxaruu $tag" --generate-notes
+          notes=""
+          if [ "$TESTS" != success ]; then
+            failed=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.conclusion == "failure" and (.name | test(" tests "))) | .name] | join(", ")')
+            notes="> [!WARNING]
+          > Some tests failed in this build (${failed:-see the run}). It should still work; [the run]($RUN) shows what failed.
+          "
+          fi
+          gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Roxaruu $tag" --notes "$notes" --generate-notes
           echo "published: $(gh release view "$tag" --json url -q .url)"

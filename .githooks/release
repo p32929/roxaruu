@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Publish this version for anyone to download: starts the build workflow
 # (it runs only when started) for the branch you're on, which builds, tests
-# and packages Windows, macOS and Linux and, if every test passes, publishes
-# GitHub release v<version> (Cargo.toml's) with the downloads — replacing
-# that version's release if it was published before. Followed here.
+# and packages Windows, macOS and Linux, then publishes GitHub release
+# v<version> (Cargo.toml's) with the downloads — replacing that version's
+# release if it was published before; a failed test is noted in the release,
+# not a reason to hold it back. Followed here.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)

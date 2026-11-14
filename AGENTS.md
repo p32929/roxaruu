@@ -240,8 +240,9 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   `.githooks/release`) builds, tests and packages all three systems — every
   test: on macOS and Linux with `--include-ignored` (the UI walkthroughs,
   screenshots kept with the run), on Windows all that builds there — and,
-  if all pass, publishes GitHub release `v<Cargo.toml's version>` (the same
-  version again replaces it). Each run costs: start one only when the owner
+  once every package is built, publishes GitHub release `v<Cargo.toml's
+  version>` (the same version again replaces it; a failed test is named in
+  its notes, not a reason to hold it back: the owner's call). Each run costs: start one only when the owner
   asks. Side by side, per system: one machine packages (macOS: one per
   chip, a disk image each), two run half the tests each (`test-all`
   `PART`/`PARTS`, built with the faster `fast` profile). The package
