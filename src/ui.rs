@@ -92,6 +92,8 @@ pub mod icon {
     pub const CLIPBOARD: &str = "\u{eac0}";
     pub const QUESTION: &str = "\u{eb32}";
     pub const INFO: &str = "\u{ea74}";
+    pub const GITHUB: &str = "\u{ea84}";
+    pub const GLOBE: &str = "\u{eb01}";
 
     /// A file's type icon and its colour (Seti's, as VS Code shows them).
     /// `None`: no known type, the plain page in the caller's colour.
@@ -495,6 +497,88 @@ struct Paint {
 }
 
 impl Paint {
+    /// About Roxaruu: the icon, name, version and what it is; then where it
+    /// lives and who made it, as rows that open them (`clicked`: 2 GitHub,
+    /// 1 the portfolio, as `ask_ui` numbers them); then their keys.
+    fn about(&self, ui: &mut egui::Ui, app_icon: Option<egui::TextureId>, clicked: &std::cell::Cell<Option<usize>>) {
+        let (c, s) = (&self.c, self.s);
+        ui.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0 * s;
+            let mark = 64.0 * s;
+            let (tile, _) = ui.allocate_exact_size(vec2(mark, mark), Sense::hover());
+            match app_icon {
+                // The art fills 824 of the image's 1024 pixels.
+                Some(id) => {
+                    ui.painter().image(
+                        id,
+                        Rect::from_center_size(tile.center(), tile.size() * (1024.0 / 824.0)),
+                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
+                None => {
+                    ui.painter().rect_filled(tile, 14.0 * s, c.accent);
+                }
+            }
+            ui.add_space(10.0 * s);
+            ui.label(egui::RichText::new("Roxaruu").font(self.font(22.0, Weight::SemiBold)).color(c.text));
+            ui.label(
+                egui::RichText::new(format!("Version {}", crate::VERSION))
+                    .font(self.font(12.0, Weight::Regular))
+                    .color(c.text_subtle),
+            );
+            ui.add_space(8.0 * s);
+            ui.label(
+                egui::RichText::new("A keyboard-first code editor with terminals built in.")
+                    .font(self.font(13.0, Weight::Regular))
+                    .color(c.text_muted),
+            );
+        });
+        ui.add_space(16.0 * s);
+        let links = [
+            (2, icon::GITHUB, "Source code on GitHub", crate::REPO),
+            (1, icon::GLOBE, "Made by p32929", crate::PORTFOLIO),
+        ];
+        for (i, glyph, title, url) in links {
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 50.0 * s), Sense::click());
+            // Named, for screen readers (and tests).
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, title));
+            let p = ui.painter();
+            let hover = resp.hovered();
+            p.rect(
+                r,
+                10.0 * s,
+                if hover { c.hover } else { c.surface },
+                Stroke::new(1.0, if hover { c.accent.gamma_multiply(0.6) } else { c.border }),
+                StrokeKind::Inside,
+            );
+            p.text(pos2(r.left() + 18.0 * s, r.center().y), Align2::LEFT_CENTER, glyph, self.font(18.0, Weight::Regular), c.accent);
+            p.text(pos2(r.left() + 48.0 * s, r.center().y - 8.0 * s), Align2::LEFT_CENTER, title, self.font(13.0, Weight::Medium), c.text);
+            let shown = url.trim_start_matches("https://").trim_end_matches('/');
+            p.text(pos2(r.left() + 48.0 * s, r.center().y + 9.0 * s), Align2::LEFT_CENTER, shown, self.font(12.0, Weight::Regular), c.text_subtle);
+            p.text(
+                pos2(r.right() - 16.0 * s, r.center().y),
+                Align2::RIGHT_CENTER,
+                icon::LINK,
+                self.font(14.0, Weight::Regular),
+                if hover { c.text } else { c.text_subtle },
+            );
+            if hover {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                clicked.set(Some(i));
+            }
+            ui.add_space(4.0 * s);
+        }
+        // Their keys, once: one row, centred.
+        ui.add_space(10.0 * s);
+        let hints: [Hint; 3] = [(vec!["G".into()], "GitHub"), (vec!["P".into()], "portfolio"), (vec!["esc".into()], "close")];
+        let w = self.key_hints(ui, None, &hints, 11.0, Pos2::ZERO);
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0 * s), Sense::hover());
+        self.key_hints(ui, Some(ui.painter()), &hints, 11.0, pos2(row.center().x - w / 2.0, row.center().y));
+    }
+
     fn font(&self, size: f32, weight: Weight) -> FontId {
         fonts::ui(size * self.s, weight)
     }
@@ -1399,6 +1483,7 @@ impl App {
         let Some(mut ask) = self.ask.take() else {
             return;
         };
+        let app_icon = matches!(ask, Ask::About).then(|| self.app_icon_texture(ctx)).flatten();
         let rel = |dir: &std::path::Path| match &self.project {
             Some(p) => match dir.strip_prefix(&p.root) {
                 Ok(r) if r.as_os_str().is_empty() => format!("{}/", p.name),
@@ -1586,27 +1671,17 @@ impl App {
                 None,
             ),
             Ask::About => {
-                let body = format!(
-                    "Version {}\n\nA keyboard-first code editor with terminals built in.\n\n\
-                     GitHub: {}\nMade by p32929: {}",
-                    crate::VERSION,
-                    crate::REPO,
-                    crate::PORTFOLIO
-                );
-                self.modal(
-                    ctx,
-                    icon::INFO,
-                    "Roxaruu",
-                    &body,
-                    &[
-                        Btn { label: "Close", hint: "esc", keys: &[Key::Escape], primary: false },
-                        Btn { label: "Portfolio", hint: "P", keys: &[Key::P], primary: false },
-                        Btn { label: "GitHub", hint: "↵", keys: &[Key::Enter, Key::G], primary: true },
-                    ],
-                    None,
-                    None,
-                    None,
-                )
+                // Keys only (the links below are what's clicked): close,
+                // the portfolio, GitHub, numbered as the answer reads them.
+                const KEYS: &[Btn] = &[
+                    Btn { label: "", hint: "", keys: &[Key::Escape], primary: false },
+                    Btn { label: "", hint: "", keys: &[Key::P], primary: false },
+                    Btn { label: "", hint: "", keys: &[Key::Enter, Key::G], primary: true },
+                ];
+                let pt = self.paint();
+                let clicked = std::cell::Cell::new(None);
+                let draw = |ui: &mut egui::Ui| pt.about(ui, app_icon, &clicked);
+                self.modal(ctx, "", "", "", KEYS, None, None, Some(&draw)).or(clicked.get())
             }
             Ask::OpenUrl(url) => {
                 let body = url.clone();
@@ -1706,9 +1781,13 @@ impl App {
             screen.center().x - width / 2.0,
             screen.top() + (140.0 * s).min(screen.height() * 0.15),
         );
+        // A button with no label is only a key: the content draws what it
+        // picks (About's links). With none drawn, there's no button row.
+        let drawn_buttons = buttons.iter().any(|b| !b.label.is_empty());
         // The buttons don't fit side by side (a phone): one under another.
         let row_w: f32 = buttons
             .iter()
+            .filter(|b| !b.label.is_empty())
             .map(|b| {
                 let t = format!("{}  {}", b.label, b.hint);
                 let g = ctx.fonts_mut(|f| f.layout_no_wrap(t, pt.font(13.0, Weight::Medium), c.text));
@@ -1742,7 +1821,8 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_width(width - 40.0 * s);
                         ui.spacing_mut().item_spacing = vec2(8.0 * s, 6.0 * s);
-                        ui.horizontal_top(|ui| {
+                        // No title: the content is the whole dialog (About).
+                        if !title.is_empty() { ui.horizontal_top(|ui| {
                             ui.label(
                                 egui::RichText::new(glyph)
                                     .font(pt.font(18.0, Weight::Regular))
@@ -1757,7 +1837,7 @@ impl App {
                                 )
                                 .wrap(),
                             );
-                        });
+                        }); }
                         if !body.is_empty() {
                             egui::ScrollArea::vertical()
                                 .max_height(body_max)
@@ -1822,10 +1902,13 @@ impl App {
                                 .min_size(vec2(0.0, 32.0 * s));
                             ui.add(widget).clicked()
                         };
-                        ui.add_space(12.0 * s);
+                        if drawn_buttons {
+                            ui.add_space(12.0 * s);
+                        }
                         // Too narrow for the row (a phone): one under another,
                         // the main choice first.
-                        if stacked {
+                        if !drawn_buttons {
+                        } else if stacked {
                             let order = (1..buttons.len()).rev().chain(buttons.first().map(|_| 0));
                             for i in order {
                                 let Some(b) = buttons.get(i) else { continue };
