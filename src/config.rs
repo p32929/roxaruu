@@ -212,9 +212,16 @@ fn load_in(base: &Path, prev: Option<&Config>, project: Option<&Path>) -> Config
             .unwrap_or_default();
         checked(
             &project_settings_path(root),
+            // `/` on every system, as people write it (not Windows' `\`).
             format!(
                 "{name}/{}",
-                project_settings_path(root).strip_prefix(root).unwrap_or(Path::new("")).display()
+                project_settings_path(root)
+                    .strip_prefix(root)
+                    .unwrap_or(Path::new(""))
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/")
             ),
         )
     });

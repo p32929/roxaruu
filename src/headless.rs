@@ -2497,6 +2497,10 @@ fn headless_open_folder_every_case() {
     let mut h = harness(None);
     press(&mut h, ALT, Key::T);
     wait_for(&mut h, "the prompt", screen_has("$ "));
+    // Out of the terminal first (⌃J): off a Mac, ⌘O is Ctrl+O, the shell's
+    // while a terminal has the keyboard.
+    press(&mut h, Modifiers::CTRL, Key::J);
+    assert!(!app(&h).terminal_focused(), "⌃J leaves the terminal");
     open_through_list(&mut h, &path("one"));
     assert_eq!(App::take_launched(), new_window(&base.join("one")));
     assert!(toast(&h, "this one keeps its terminals"), "{:?}", app(&h).toasts.iter().map(|t| t.msg.clone()).collect::<Vec<_>>());
