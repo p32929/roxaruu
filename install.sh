@@ -115,3 +115,4 @@ case ":$PATH:" in
     *) say "Add $bin to your PATH to use rox from a terminal." ;;
 esac
 say "Open a folder: rox     (the one you're in; or rox <path>, or Roxaruu from your apps)"
+say "To remove it later: curl -fsSL https://raw.githubusercontent.com/p32929/roxaruu/master/uninstall.sh | sh"

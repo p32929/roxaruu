@@ -73,6 +73,16 @@ Terminals on Windows run **Git Bash** (or WSL), so install [Git for Windows](htt
 - Anything else: unpack `roxaruu_v<version>_linux_x64.tar.xz`; the program is `bin/roxaruu` (copy `share/` into `~/.local/share/` for the app-menu entry).
 - On a server with no screen, install Xvfb as well (`sudo apt install xvfb`) to use it through remote access.
 
+### Uninstall
+
+One line removes Roxaruu and everything it wrote (settings, keys, themes, open tabs, recent folders, logs), however it was installed. It lists what it found and asks first:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/p32929/roxaruu/master/uninstall.sh | sh
+```
+
+To keep your settings, keys and themes for later: `curl -fsSL https://raw.githubusercontent.com/p32929/roxaruu/master/uninstall.sh | sh -s -- --keep-settings`. On Windows, removing it from Settings › Apps works too, but leaves your settings behind.
+
 ## Getting started
 
 - Open a folder with **Ctrl+O** (**⌘O** on a Mac), or from a terminal: `rox` for the one you're in, or `rox <folder>`. Opened from the app list (Dock, Start Menu, Spotlight), it starts with no folder.
