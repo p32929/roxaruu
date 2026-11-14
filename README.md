@@ -107,7 +107,7 @@ No, except Git Bash (or WSL) on Windows for the terminals, and Xvfb on a Linux s
 
 ## Build from source
 
-Needs [Rust](https://rustup.rs). `./install-local.sh` builds and installs it on macOS and Linux (and on Windows from Git Bash); `cargo run --release` runs it from the checkout. Linux also needs: `libxkbcommon-dev libwayland-dev libdbus-1-dev`.
+Needs [Rust](https://rustup.rs). `./install-local.sh` builds and installs it on macOS and Linux (and on Windows from Git Bash); add `--force-close` to close every running Roxaruu first (unsaved changes in them are lost); `cargo run --release` runs it from the checkout. Linux also needs: `libxkbcommon-dev libwayland-dev libdbus-1-dev`.
 
 Working on it: run `git config core.hooksPath .githooks` once. Then every `git push` first runs your system's whole test suite on your machine, and stops if it fails. `.githooks/test-all` runs the tests by hand; each one shows as it finishes (`✓ passed  1.2s  name` or `✗ FAILED`). `.githooks/ci-tests` runs every system's tests on GitHub (macOS, Linux and Windows side by side, nothing released) and follows them in your terminal.
 

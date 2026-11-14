@@ -263,7 +263,8 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 ## 5. Ground rules
 
 - Don't run `install-local.sh` unless asked: replacing the installed app
-  closes the user's running windows. Build and test only (`cargo run
+  closes the user's running windows. `--force-close` closes them all on
+  purpose (after a good build; unsaved work is lost): only when asked for. Build and test only (`cargo run
   --release -- <folder>` runs this checkout without installing).
 - Commit and push only when asked. Bump the version when asked: `./install-local.sh --vup [patch|minor|major]` (patch by default) bumps `Cargo.toml` and installs; the version shows in the status bar.
 - Comments explain why, briefly; match the surrounding style. A deliberate

@@ -10,7 +10,8 @@
 #            %LOCALAPPDATA%\Programs\Roxaruu, plus a Start Menu shortcut.
 #
 #     ./install-local.sh            (--vup [patch|minor|major] bumps the
-#                                    version first; --help for the rest)
+#                                    version first; --force-close closes
+#                                    running Roxaruu first; --help for the rest)
 #
 # Re-run it to update. `rox` opens the folder you're in (`rox path` another
 # one). It never touches Oxru: different command, app and bundle id.
@@ -32,6 +33,10 @@ Usage:
   ./install-local.sh --vup [part]     Bump the version first, then build and install.
                                       part: patch (default), minor or major
                                       e.g. 0.2.0 -> 0.2.1 / 0.3.0 / 1.0.0
+  ./install-local.sh --force-close    Close every running Roxaruu window once the
+                                      build succeeds, then install. Unsaved changes
+                                      in them are lost, and what runs in their
+                                      terminals stops. Without it, nothing is closed.
   ./install-local.sh -h | --help      Show this help.
 
 The version shows in the app's status bar and in `rox --version`, so you can
@@ -44,8 +49,9 @@ What it installs:
   Windows  (Git Bash) roxaruu.exe and rox.cmd in
            %LOCALAPPDATA%\Programs\Roxaruu, plus a Start Menu shortcut.
 
-Replacing the installed app closes its running windows on macOS; to try a
-change without that, use cargo run --release -- <folder>.
+Without --force-close, nothing is closed on purpose, though replacing the
+installed app can still close its running windows on macOS; to try a change
+without that, use cargo run --release -- <folder>.
 
 Settings (environment variables):
   BIN_DIR        where the commands go
@@ -56,9 +62,11 @@ HELP
 }
 
 VUP=
+FORCE_CLOSE=
 while [ $# -gt 0 ]; do
     case "$1" in
         -h | --help) usage; exit 0 ;;
+        --force-close) FORCE_CLOSE=1 ;;
         --vup=*) VUP="${1#--vup=}" ;;
         --vup)
             VUP=patch
@@ -127,6 +135,27 @@ EXE=roxaruu
 [ "$OS" = windows ] && EXE=roxaruu.exe
 BIN="target/release/$EXE"
 VERSION="$(current_version)"
+
+# ---- --force-close: every running Roxaruu, now the build is good -------------
+# The exact process name (`roxaruu`), so Claude Code's roxaruu-hook, test runs
+# (roxaruu-<hash>) and Oxru are left alone. Waits until they're gone.
+if [ -n "$FORCE_CLOSE" ]; then
+    if [ "$OS" = windows ]; then
+        running() { tasklist //FI "IMAGENAME eq $EXE" //NH 2>/dev/null | grep -qi "^$EXE"; }
+        close_all() { taskkill //F //IM "$EXE" >/dev/null 2>&1 || true; }
+    else
+        running() { pgrep -x roxaruu >/dev/null 2>&1; }
+        close_all() { pkill -x roxaruu 2>/dev/null || true; }
+    fi
+    if running; then
+        blue "Closing every running Roxaruu (--force-close)…"
+        close_all
+        while running; do sleep 0.2; done
+        green "Closed"
+    else
+        echo "No Roxaruu running: nothing to close"
+    fi
+fi
 
 # ---- 1. the commands ---------------------------------------------------------
 if [ "$OS" = windows ]; then
