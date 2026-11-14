@@ -109,7 +109,7 @@ No, except Git Bash (or WSL) on Windows for the terminals, and Xvfb on a Linux s
 
 Needs [Rust](https://rustup.rs). `./install-local.sh` builds and installs it on macOS and Linux (and on Windows from Git Bash); `cargo run --release` runs it from the checkout. Linux also needs: `libxkbcommon-dev libwayland-dev libdbus-1-dev`.
 
-Working on it: run `git config core.hooksPath .githooks` once. Then every `git push` first runs your system's whole test suite on your machine, and stops if it fails. `.githooks/test-all` runs the tests by hand; each one shows as it finishes (`✓ passed  1.2s  name` or `✗ FAILED`).
+Working on it: run `git config core.hooksPath .githooks` once. Then every `git push` first runs your system's whole test suite on your machine, and stops if it fails. `.githooks/test-all` runs the tests by hand; each one shows as it finishes (`✓ passed  1.2s  name` or `✗ FAILED`). `.githooks/ci-tests` runs every system's tests on GitHub (macOS, Linux and Windows side by side, nothing released) and follows them in your terminal.
 
 **Releases.** `.githooks/release` (or "Run workflow" on GitHub's Actions page, which asks nothing) builds, tests and packages Windows, macOS and Linux, then publishes release `v<version>` from `Cargo.toml` with all the downloads above. A failed test doesn't hold the release back; its notes say which system failed. CI never runs by itself.
 

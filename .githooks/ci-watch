@@ -7,8 +7,10 @@
 #
 # CI runs only when started: `ci-watch --run` starts it for the branch
 # you're on (pushed first) and follows it — every system, then the release
-# (`.githooks/release` says so first).
+# (`.githooks/release` says so first); `WORKFLOW=tests ci-watch --run`, just
+# every system's tests (`.githooks/ci-tests`).
 set -uo pipefail
+workflow=${WORKFLOW:-build}
 run=${1:-}
 sha=$(git rev-parse HEAD)
 if [ "$run" = --run ]; then
@@ -16,9 +18,9 @@ if [ "$run" = --run ]; then
   branch=$(git branch --show-current)
   [ "$(git rev-parse "@{u}" 2>/dev/null)" = "$sha" ] || { echo "ci-watch: push $branch first (CI builds what's on GitHub)"; exit 1; }
   since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  gh workflow run build --ref "$branch" "$@" || exit 1
-  echo "ci-watch: started for $branch (${sha:0:7}); waiting for it to show…"
-  until run=$(gh run list --workflow build --branch "$branch" --event workflow_dispatch -L5 --json databaseId,createdAt \
+  gh workflow run "$workflow" --ref "$branch" "$@" || exit 1
+  echo "ci-watch: $workflow started for $branch (${sha:0:7}); waiting for it to show…"
+  until run=$(gh run list --workflow "$workflow" --branch "$branch" --event workflow_dispatch -L5 --json databaseId,createdAt \
       -q "[.[] | select(.createdAt >= \"$since\")][0].databaseId" 2>/dev/null) && [ -n "$run" ]; do
     sleep 3
   done

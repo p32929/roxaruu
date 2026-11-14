@@ -8,7 +8,8 @@
 #
 # Everything runs side by side: per system, one machine builds the packages
 # (and opens the installed app; macOS: one per chip, joined after), two
-# others build the tests (the faster `fast` profile) and run half each.
+# others build the tests (the faster `fast` profile) and run half each
+# (tests.yml, which also runs alone as "Tests").
 name: build
 
 on:
@@ -19,72 +20,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Every system, and its tests in two parts.
+  # Every system (and macOS's two chips).
   plan:
     runs-on: ubuntu-latest
     outputs:
-      systems: ${{ steps.pick.outputs.systems }}
       builds: ${{ steps.pick.outputs.builds }}
       mac: ${{ steps.pick.outputs.mac }}
-      tests: ${{ steps.pick.outputs.tests }}
     steps:
       - id: pick
         run: |
           systems='[{"name":"macOS","os":"macos-latest"},{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-22.04"}]'
-          tests=$(jq -c '[.[] as $s | range(0; 2) as $p | $s + {part: $p, label: "\($p + 1)/2"}]' <<<"$systems")
           # macOS builds on two machines, one per chip, a disk image each.
           builds=$(jq -c '[.[] | if .name == "macOS" then
             (. + {name: "macOS Apple Silicon", target: "aarch64-apple-darwin"}),
             (. + {name: "macOS Intel", target: "x86_64-apple-darwin"}) else . end]' <<<"$systems")
-          echo "systems=$systems" >> "$GITHUB_OUTPUT"
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
           echo "mac=true" >> "$GITHUB_OUTPUT"
-          echo "tests=$tests" >> "$GITHUB_OUTPUT"
 
-  # Every test, on every system: the unit tests, and on macOS and Linux the
-  # UI walkthroughs too (`headless.rs`: real shells, simulated keys and
-  # clicks, screenshots), as AGENTS.md runs them locally. Windows runs what's
-  # built for it (the walkthroughs need a Unix shell yet).
+  # Every test on every system: tests.yml, the same jobs "Tests" runs alone.
   test:
-    name: ${{ matrix.name }} tests ${{ matrix.label }}
-    needs: plan
-    if: needs.plan.outputs.tests != '[]'
-    runs-on: ${{ matrix.os }}
-    # Tests wait for what they expect however long it takes (no step has a
-    # time limit to trip on a slow machine): this only ends a job that a
-    # genuine bug left waiting forever. A run takes about 8 minutes.
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.tests) }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Linux libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libxrandr-dev \
-            libxi-dev libxcursor-dev libxinerama-dev libx11-xcb-dev libxcb1-dev libgl1-mesa-dev \
-            libdbus-1-dev zsh mesa-vulkan-drivers
-      - name: Tests
-        run: |
-          # This machine's half, in a few processes, each with a scratch home
-          # (as the pre-push hook runs them); each test's line as it finishes.
-          SHOTS="$PWD/shots" SHELL="$(command -v zsh || echo "$SHELL")" \
-            PART=${{ matrix.part }} PARTS=2 .githooks/test-all
-      - name: Keep the tests' screenshots
-        if: always() && runner.os != 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: Test-screenshots-${{ matrix.name }}-${{ matrix.part }}
-          path: shots/*
-          if-no-files-found: ignore
+    uses: ./.github/workflows/tests.yml
 
   package:
     name: ${{ matrix.name }}

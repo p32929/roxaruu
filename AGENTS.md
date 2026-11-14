@@ -235,8 +235,12 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 - Tests run where you work; CI runs only when started by hand, and then it
   releases: with `git config core.hooksPath .githooks` (once per clone),
   `pre-push` runs this system's whole suite (above) here and stops the push
-  on a failure. `.github/workflows/build.yml` has no automatic trigger
-  (not a push, a tag or a pull request): "Run workflow" (or
+  on a failure. The other two systems' tests run on GitHub:
+  `.githooks/ci-tests` (`tests.yml`, "Tests": every system's tests, nothing
+  built to download, nothing released; about 5 minutes) — before merging to
+  master, once the owner says yes (pushed to `cross-platform` first: CI
+  tests what's on GitHub). Neither workflow has an automatic trigger
+  (not a push, a tag or a pull request). `build.yml`: "Run workflow" (or
   `.githooks/release`) builds, tests and packages all three systems — every
   test: on macOS and Linux with `--include-ignored` (the UI walkthroughs,
   screenshots kept with the run), on Windows all that builds there — and,
@@ -244,8 +248,8 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   version>` (the same version again replaces it; a failed test is named in
   its notes, not a reason to hold it back: the owner's call). Each run costs: start one only when the owner
   asks. Side by side, per system: one machine packages (macOS: one per
-  chip, a disk image each), two run half the tests each (`test-all`
-  `PART`/`PARTS`, built with the faster `fast` profile). The package
+  chip, a disk image each), two run half the tests each (`tests.yml`'s
+  jobs: `test-all` `PART`/`PARTS`, built with the faster `fast` profile). The package
   machine installs each package and opens the app (it must still run with
   its window drawn; screenshots kept with the run) (`packaging/`: the macOS
   Info.plist and Linux menu entry `install-local.sh` uses too, the Windows
@@ -293,5 +297,5 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 | `palette.rs`, `fuzzy.rs`, `search.rs`, `fstree.rs` | lists, matching, search in files, the tree |
 | `remote/` | remote access: lifecycle (`mod`), in-memory password + sessions (`auth`), HTTPS server for all windows, run by the window that turned it on (`hub`), a window's private link and its flow control (`endpoint`), browser input (`input`), what to draw — egui's meshes and textures, drawn by the page with WebGL (`meshes`), compressed and sent on their own thread (`frames`), waking the window at full rate even hidden (`clock`), the page (`page.html`: its window list is the name's button, or Switch Window's key; `login.html`) |
 | `sys.rs` | all `unsafe` and OS calls, for macOS, Windows and Linux |
-| `packaging/`, `.github/workflows/build.yml` | what the release builds package; the build, test and release pipeline |
+| `packaging/`, `.github/workflows/` | what the release builds package; `build.yml`: build, test and release; `tests.yml`: every system's tests (alone, and in `build.yml`) |
 | `headless.rs` | headless UI walkthroughs |

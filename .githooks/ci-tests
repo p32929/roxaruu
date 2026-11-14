@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Every system's tests on GitHub (what this machine can't run: Linux's and
+# Windows' too), for the branch you're on, pushed first, and followed here:
+# each job's tests as it finishes, why any failed. Builds nothing to
+# download and releases nothing (`.githooks/release` does). Exits 0 if all
+# passed.
+set -euo pipefail
+WORKFLOW=tests exec "$(dirname "$0")/ci-watch" --run "$@"
