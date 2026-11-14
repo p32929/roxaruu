@@ -1680,6 +1680,19 @@ fn headless_status_hint_click_opens_palette() {
     assert!(app(&h).palette.is_none());
 }
 
+/// An empty folder's tree says so under its search box, not on top of it.
+#[test]
+#[ignore]
+fn headless_empty_folder_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = harness(Some(dir.path().canonicalize().unwrap()));
+    h.run();
+    let note = h.get_by_label("This folder is empty").rect();
+    let search = h.get_by_role(egui::accesskit::Role::TextInput).rect();
+    shot(&mut h, "empty-folder");
+    assert!(note.min.y >= search.max.y, "the note {note:?} sits below the search box {search:?}");
+}
+
 /// About Roxaruu: the version's click (the start screen's line and the
 /// status bar's) or its key; name, version, repo and portfolio; ↵ (or G)
 /// opens the repo, P the portfolio, esc just closes.
@@ -1708,6 +1721,15 @@ fn headless_about() {
         }
         assert!(!about(&h));
     }
+    // Its links, clicked: the portfolio, then GitHub.
+    for (row, url) in [("Made by p32929", crate::PORTFOLIO), ("Source code on GitHub", crate::REPO)] {
+        click_at(&mut h, crate::ui::drawn_hints(Command::About)[0].center(), egui::PointerButton::Primary);
+        assert!(about(&h));
+        h.get_by_label(row).click();
+        h.step();
+        assert_eq!(App::take_launched(), vec![vec![url.to_string()]], "{row}");
+        assert!(!about(&h), "a link closes it");
+    }
     // The rest of the start screen's line is still the config folder.
     let line = crate::ui::drawn_hints(Command::About).into_iter().min_by(|a, b| a.top().total_cmp(&b.top())).unwrap();
     click_at(&mut h, line.left_center() - egui::vec2(60.0, 0.0), egui::PointerButton::Primary);
@@ -1719,9 +1741,10 @@ fn headless_about() {
     h.run();
     press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::I);
     assert!(about(&h));
-    for want in ["Roxaruu", crate::VERSION, crate::REPO, crate::PORTFOLIO] {
+    for want in ["Roxaruu", crate::VERSION, "Source code on GitHub", "Made by p32929"] {
         assert!(h.query_all_by_label_contains(want).next().is_some(), "About shows {want}");
     }
+    shot(&mut h, "about-in-a-folder");
     press(&mut h, Modifiers::NONE, Key::Escape);
     assert!(!about(&h) && App::take_launched().is_empty());
 }
@@ -4294,17 +4317,32 @@ fn headless_remote_input_in_chrome() {
         seen.push(step.to_string());
         // The page asks what only this window can see; it goes on when told.
         let ready = |h: &Harness<'static, Root>| match step {
-            // The command and what it printed: the link is on the screen.
+            // What `echo` printed, a line of its own (the command itself may
+            // wrap: a long prompt put "…/ro" and "x" on two rows).
             "link-printed" => app(h)
                 .terminal()
-                .is_some_and(|t| t.pane.screen().contents().matches("https://example.com/rox").count() >= 2),
+                .is_some_and(|t| t.pane.screen().contents().lines().any(|l| l.trim_end() == "https://example.com/rox")),
             "links-listed" => app(h).palette.as_ref().is_some_and(|p| !p.items.is_empty()),
             _ => true,
         };
         if matches!(step, "link-printed" | "links-listed") {
+            // What it's waiting on, every few seconds, in a file (a waiting
+            // test's output is held back): a wait that never ends says why.
+            let note = shots.join("input-waiting.log");
+            let mut said = std::time::Instant::now();
             while !ready(&h) {
                 h.step();
                 std::thread::sleep(std::time::Duration::from_millis(15));
+                if said.elapsed() > std::time::Duration::from_secs(5) {
+                    said = std::time::Instant::now();
+                    let a = app(&h);
+                    let screen = a.terminal().map(|t| t.pane.screen().contents()).unwrap_or_default();
+                    let palette = a.palette.as_ref().map(|p| (p.mode, p.items.len()));
+                    let _ = std::fs::write(
+                        &note,
+                        format!("waiting for {step}\nfocus {:?}\npalette {palette:?}\nterminal:\n{screen}\n", a.focus),
+                    );
+                }
             }
             use std::io::Write as _;
             writeln!(to_page, "go").unwrap();
