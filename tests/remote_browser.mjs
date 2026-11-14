@@ -113,6 +113,20 @@ async function type(text) {
   }
 }
 const mark = async name => { await sleep(350); console.log("STEP " + name); await sleep(350); };
+// What only the window can see (a terminal's text, a list being up): the
+// test says when, with a line on our stdin, after a STEP asks.
+let inbox = null;
+async function goAhead(name) {
+  if (!inbox) {
+    inbox = { lines: [], wake: null };
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", d => { inbox.lines.push(...d.split("\n").filter(Boolean)); inbox.wake?.(); });
+  }
+  step = "waiting for the window: " + name;
+  console.log("STEP " + name);
+  while (!inbox.lines.length) await new Promise(r => { inbox.wake = r; });
+  inbox.lines.shift();
+}
 const mouse = (type, x, y, extra = {}) => cdp("Input.dispatchMouseEvent", { type, x, y, ...extra });
 async function click(x, y, { button = "left", clickCount = 1, modifiers = 0 } = {}) {
   const buttons = { left: 1, right: 2, middle: 4 }[button];
@@ -246,11 +260,11 @@ async function inputScenario() {
   await evaluate(`window.open = u => { window.__opened = u; return {}; }`);
   await type("echo https://example.com/rox");
   await press("Enter", "Enter", 0, "\r");
-  await sleep(500);
+  await goAhead("link-printed");
   await chord(["meta", "shift"], "o", "KeyO");       // ⇧⌘O: the terminal's links
-  await sleep(300);
+  await goAhead("links-listed");
   await press("Enter", "Enter", 0, "\r");            // the link: opened
-  await sleep(800);
+  await waitFor(`window.__opened !== undefined`, "the link opening in this browser");
   console.log("OPENED " + JSON.stringify(await evaluate(`window.__opened`)));
   await mark("link-opened");
   await chord(["meta"], "j", "KeyJ");                // ⌘J: back to the editor
@@ -326,7 +340,9 @@ async function inputScenario() {
   await touches("touchStart", [[fx, fy + 120]]);
   for (let i = 1; i <= 6; i++) { await touches("touchMove", [[fx, fy + 120 - i * 40]]); await sleep(8); }
   await touches("touchEnd", []);
-  await sleep(2000);
+  // Until it stops coasting (the page's own animation: slow motion on a
+  // loaded machine, so a fixed wait tapped mid-coast and stopped it short).
+  await waitFor(`coast === 0`, "the flick to stop coasting");
   await tapType("F");
   await mark("flicked");
   await shot("w6a-flicked.png");

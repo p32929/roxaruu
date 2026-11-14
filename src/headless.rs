@@ -4256,11 +4256,13 @@ fn headless_remote_input_in_chrome() {
         std::process::Command::new(node)
             .args([script.as_os_str(), port.to_string().as_ref(), "open sesame".as_ref(), shots.as_os_str()])
             .args([chrome, "input"])
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit()),
     );
     let (tx, rx) = std::sync::mpsc::channel();
     let stdout = child.0.stdout.take().unwrap();
+    let mut to_page = child.0.stdin.take().unwrap();
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
             let _ = tx.send(line);
@@ -4290,6 +4292,24 @@ fn headless_remote_input_in_chrome() {
             h.step();
         }
         seen.push(step.to_string());
+        // The page asks what only this window can see; it goes on when told.
+        let ready = |h: &Harness<'static, Root>| match step {
+            // The command and what it printed: the link is on the screen.
+            "link-printed" => app(h)
+                .terminal()
+                .is_some_and(|t| t.pane.screen().contents().matches("https://example.com/rox").count() >= 2),
+            "links-listed" => app(h).palette.as_ref().is_some_and(|p| !p.items.is_empty()),
+            _ => true,
+        };
+        if matches!(step, "link-printed" | "links-listed") {
+            while !ready(&h) {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            use std::io::Write as _;
+            writeln!(to_page, "go").unwrap();
+            continue;
+        }
         let a = app(&h);
         let screen = a.terminal().map(|t| t.pane.screen().contents()).unwrap_or_default();
         let first = lines(&h).first().cloned().unwrap_or_default();
