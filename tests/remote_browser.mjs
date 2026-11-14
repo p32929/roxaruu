@@ -120,7 +120,17 @@ async function click(x, y, { button = "left", clickCount = 1, modifiers = 0 } = 
   await mouse("mousePressed", x, y, { button, buttons, clickCount, modifiers });
   await mouse("mouseReleased", x, y, { button, buttons: 0, clickCount, modifiers });
 }
-const touches = (type, points) => cdp("Input.dispatchTouchEvent", { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+// A gesture starts on a live link: moves sent while it's down are lost, so
+// a drag or flick goes short (it happened on a loaded CI machine). A drop
+// still shows, as a LINK line; reconnecting has its own test (remote_frames).
+const touches = async (type, points) => {
+  const live = `document.getElementById('dot').classList.contains('live')`;
+  if (type === "touchStart" && !(await evaluate(live))) {
+    console.log(`LINK down before a touch at: ${step}`);
+    await waitFor(live, "the link back before a touch");
+  }
+  return cdp("Input.dispatchTouchEvent", { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+};
 const clipboard = () => evaluate(`navigator.clipboard.readText()`);
 
 async function inputScenario() {

@@ -304,7 +304,7 @@ jobs:
           notes=""
           if [ "$TESTS" != success ]; then
             failed=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
-              --jq '[.jobs[] | select(.conclusion == "failure" and (.name | test(" tests "))) | .name] | join(", ")')
+              --jq '[.jobs[] | select((.conclusion // "unfinished") != "success" and (.name | test(" tests "))) | .name] | join(", ")')
             notes="> [!WARNING]
           > Some tests failed in this build (${failed:-see the run}). It should still work; [the run]($RUN) shows what failed.
           "

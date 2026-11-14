@@ -2356,25 +2356,42 @@ fn headless_open_folder_list() {
 /// A process standing in for another Roxaruu window that has `folder` open:
 /// `sleep`, under a name with "roxaruu" in it (how windows are recognised),
 /// registered as that window's. Killed when dropped.
-struct OtherWindow(std::process::Child);
+struct OtherWindow;
 
 impl OtherWindow {
-    fn with(folder: &std::path::Path, scratch: &std::path::Path) -> OtherWindow {
+    fn with(folder: &std::path::Path, scratch: &std::path::Path) -> Reaped {
         let exe = scratch.join("roxaruu-standin");
         std::fs::copy("/bin/sleep", &exe).unwrap();
         if cfg!(target_os = "macos") {
             let signed = std::process::Command::new("codesign").args(["-s", "-", "-f"]).arg(&exe).output().unwrap();
             assert!(signed.status.success());
         }
-        let child = std::process::Command::new(&exe).arg("600").spawn().unwrap();
-        crate::instances::register_for(child.id(), folder);
-        OtherWindow(child)
+        let child = Reaped::spawn(std::process::Command::new(&exe).arg("600"));
+        crate::instances::register_for(child.0.id(), folder);
+        child
     }
 }
 
-impl Drop for OtherWindow {
+/// A process the test started, stopped with everything it started (its
+/// process group: node's Chrome too) when the test ends, passed or failed.
+/// A failed assertion that left them running kept the test's output open,
+/// and the test runner waiting for it to end, forever.
+struct Reaped(std::process::Child);
+
+impl Reaped {
+    fn spawn(cmd: &mut std::process::Command) -> Reaped {
+        use std::os::unix::process::CommandExt;
+        Reaped(cmd.process_group(0).spawn().unwrap())
+    }
+}
+
+impl Drop for Reaped {
     fn drop(&mut self) {
-        let _ = self.0.kill();
+        // `-<pid>`: the group this child leads (already gone after a pass).
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", self.0.id())])
+            .stderr(std::process::Stdio::null())
+            .status();
         let _ = self.0.wait();
     }
 }
@@ -4112,17 +4129,17 @@ fn remote_in_chrome(mode: &str) -> String {
     std::fs::create_dir_all(&shots).unwrap();
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/remote_browser.mjs");
     let out_path = shots.join("chrome-run.log");
-    let mut child = std::process::Command::new(node)
-        .arg(&script)
-        .arg(port.to_string())
-        .arg("open sesame")
-        .arg(&shots)
-        .arg(chrome)
-        .arg(mode)
-        .stdout(std::fs::File::create(&out_path).unwrap())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .unwrap();
+    let mut child = Reaped::spawn(
+        std::process::Command::new(node)
+            .arg(&script)
+            .arg(port.to_string())
+            .arg("open sesame")
+            .arg(&shots)
+            .arg(chrome)
+            .arg(mode)
+            .stdout(std::fs::File::create(&out_path).unwrap())
+            .stderr(std::process::Stdio::inherit()),
+    );
     // Keep the window running while Chrome drives the page; turn remote
     // access off when it asks (to see the page say it's disconnected).
     let mut off = false;
@@ -4134,7 +4151,7 @@ fn remote_in_chrome(mode: &str) -> String {
             let ctx = h.ctx.clone();
             h.state_mut().0.run(crate::keymap::Command::ToggleRemoteAccess, &ctx);
         }
-        if let Some(status) = child.try_wait().unwrap() {
+        if let Some(status) = child.0.try_wait().unwrap() {
             break status;
         }
     };
@@ -4189,15 +4206,15 @@ fn headless_remote_input_in_chrome() {
     let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
     std::fs::create_dir_all(&shots).unwrap();
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/remote_browser.mjs");
-    let mut child = std::process::Command::new(node)
-        .args([script.as_os_str(), port.to_string().as_ref(), "open sesame".as_ref(), shots.as_os_str()])
-        .args([chrome, "input"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .unwrap();
+    let mut child = Reaped::spawn(
+        std::process::Command::new(node)
+            .args([script.as_os_str(), port.to_string().as_ref(), "open sesame".as_ref(), shots.as_os_str()])
+            .args([chrome, "input"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit()),
+    );
     let (tx, rx) = std::sync::mpsc::channel();
-    let stdout = child.stdout.take().unwrap();
+    let stdout = child.0.stdout.take().unwrap();
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
             let _ = tx.send(line);
@@ -4216,7 +4233,7 @@ fn headless_remote_input_in_chrome() {
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(15));
         let Ok(line) = rx.try_recv() else {
-            match child.try_wait().unwrap() {
+            match child.0.try_wait().unwrap() {
                 Some(status) if rx.try_recv().is_err() => break status,
                 _ => continue,
             }
@@ -4862,22 +4879,22 @@ fn headless_remote_frames_in_chrome() {
     std::fs::create_dir_all(&shots).unwrap();
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/remote_frames.mjs");
     let out_path = shots.join("chrome-frames.log");
-    let mut child = std::process::Command::new(node)
-        .arg(&script)
-        .arg(port.to_string())
-        .arg("open sesame")
-        .arg(&shots)
-        .arg(chrome)
-        .stdout(std::fs::File::create(&out_path).unwrap())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .unwrap();
+    let mut child = Reaped::spawn(
+        std::process::Command::new(node)
+            .arg(&script)
+            .arg(port.to_string())
+            .arg("open sesame")
+            .arg(&shots)
+            .arg(chrome)
+            .stdout(std::fs::File::create(&out_path).unwrap())
+            .stderr(std::process::Stdio::inherit()),
+    );
     // The window's event loop, as eframe would run it: a pass whenever
     // something asks (here: as often as the harness can).
     let status = loop {
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(1));
-        if let Some(status) = child.try_wait().unwrap() {
+        if let Some(status) = child.0.try_wait().unwrap() {
             break status;
         }
     };
