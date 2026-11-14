@@ -15,7 +15,7 @@ jobs:
   # walkthroughs need a Unix shell yet). Each system in two halves, side by
   # side: most of a job is compiling, so more parts would mostly compile more.
   test:
-    name: ${{ matrix.name }} tests ${{ matrix.part + 1 }}/2
+    name: ${{ matrix.name }} tests ${{ matrix.half.label }}
     runs-on: ${{ matrix.os }}
     # Tests wait for what they expect however long it takes (no step has a
     # time limit to trip on a slow machine): this only ends a job that a
@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         name: [macOS, Windows, Linux]
-        part: [0, 1]
+        half: [{ part: 0, label: 1/2 }, { part: 1, label: 2/2 }]
         include:
           - { name: macOS, os: macos-latest }
           - { name: Windows, os: windows-latest }
@@ -49,11 +49,11 @@ jobs:
           # This machine's half, in a few processes, each with a scratch home
           # (as the pre-push hook runs them); each test's line as it finishes.
           SHOTS="$PWD/shots" SHELL="$(command -v zsh || echo "$SHELL")" \
-            PART=${{ matrix.part }} PARTS=2 .githooks/test-all
+            PART=${{ matrix.half.part }} PARTS=2 .githooks/test-all
       - name: Keep the tests' screenshots
         if: always() && runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: Test-screenshots-${{ matrix.name }}-${{ matrix.part }}
+          name: Test-screenshots-${{ matrix.name }}-${{ matrix.half.part }}
           path: shots/*
           if-no-files-found: ignore
