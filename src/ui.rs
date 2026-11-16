@@ -4217,6 +4217,7 @@ impl App {
         let (body, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         let mut clicked = None;
         let mut tile_pick = None;
+        let mut body_pick = None;
         if self.terminal_grid && self.terminals.len() > 1 {
             let tiles =
                 crate::terminal::grid_rects(body.shrink(6.0 * s), self.terminals.len(), 6.0 * s);
@@ -4261,15 +4262,19 @@ impl App {
                     pos2(tile.left() + 2.0, title.bottom() + 1.0),
                     tile.max - vec2(2.0, 2.0),
                 );
-                if self.draw_terminal(ui, i, inner, focused && active) {
+                let (hit, pick) = self.draw_terminal(ui, i, inner, focused && active);
+                if hit {
                     clicked = Some(i);
                 }
+                body_pick = body_pick.or(pick);
             }
         } else {
             let i = self.active_terminal;
-            if self.draw_terminal(ui, i, body, focused) {
+            let (hit, pick) = self.draw_terminal(ui, i, body, focused);
+            if hit {
                 clicked = Some(i);
             }
+            body_pick = body_pick.or(pick);
         }
         // Seen only if you're looking: drawn in a window you're in another
         // app from, its bell (and how its notification went) has to wait
@@ -4293,7 +4298,7 @@ impl App {
         if let Some(command) = run {
             self.run(command, &ctx);
         }
-        if let Some(command) = menu_pick.or(tile_pick) {
+        if let Some(command) = menu_pick.or(tile_pick).or(body_pick) {
             self.focus = Focus::Terminal; // the menu acts on the active terminal
             self.run(command, &ctx);
         }
@@ -4301,8 +4306,9 @@ impl App {
 
     /// One terminal's screen in `rect`: fits the PTY to it, takes input when
     /// `keyboard`, handles the mouse, and draws it. Returns whether it was
-    /// clicked (so the caller can focus it).
-    fn draw_terminal(&mut self, ui: &mut egui::Ui, i: usize, rect: Rect, keyboard: bool) -> bool {
+    /// clicked (so the caller can focus it), and what its right-click menu
+    /// picked (run once it has the keyboard).
+    fn draw_terminal(&mut self, ui: &mut egui::Ui, i: usize, rect: Rect, keyboard: bool) -> (bool, Option<Command>) {
         let c = self.config.theme.colors.clone();
         let size = self.config.settings.code_font_size;
         let font = FontId::monospace(size);
@@ -4316,7 +4322,7 @@ impl App {
             .map(|k| format!("\n{k} lists every link here"))
             .unwrap_or_default();
         let Some(term) = self.terminals.get_mut(i) else {
-            return false;
+            return (false, None);
         };
         let p = ui.painter().clone();
 
@@ -4595,7 +4601,22 @@ impl App {
         if let Some(url) = link {
             self.offer_url(url);
         }
-        clicked
+        // Right-click: copy what's selected, or paste. Each with its key
+        // only where that key gets past the shell (off macOS ^C is the
+        // shell's interrupt, so Copy shows none there).
+        let selected = self.terminals.get(i).is_some_and(|t| t.pane.selection_active());
+        let reaches = |c: Command| {
+            self.config.keymap.combo_for(c).filter(|k| {
+                let (key, m) = k.chord();
+                !crate::terminal::belongs_to_shell(key, m) || crate::terminal::passes_the_shell(c)
+            })
+        };
+        let mut pick = None;
+        resp.context_menu(|ui| {
+            let menu = [vec![(Command::Copy, "Copy", selected), (Command::Paste, "Paste", true)]];
+            pick = command_menu(ui, &menu, &|c| reaches(c).map(|k| k.label()));
+        });
+        (clicked || pick.is_some(), pick)
     }
 
     /// Ticking several rows (see `Mode::multi`): space (with nothing typed)

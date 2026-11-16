@@ -1905,6 +1905,51 @@ fn headless_redraws_on_coming_back() {
     assert!(app(&h).redraw_until.is_some(), "focused again: redraws");
 }
 
+/// Right-click in a terminal: just Copy (what's selected) and Paste.
+#[test]
+#[ignore]
+fn headless_terminal_right_click_menu() {
+    use egui_kittest::kittest::NodeT as _;
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='$ '\n").unwrap();
+    let mut h = harness(None);
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "the prompt", screen_has("$ "));
+    run(&mut h, "echo menu-word");
+    wait_for(&mut h, "its output", screen_line("menu-word"));
+    let body = app(&h).terminal_rects.first().map(|(_, r)| *r).unwrap();
+    let right_click = |h: &mut Harness<'static, Root>| {
+        click_at(h, body.center(), egui::PointerButton::Secondary);
+        h.step();
+    };
+
+    // Nothing selected: Copy is there, but greyed out.
+    right_click(&mut h);
+    shot(&mut h, "tm0-menu");
+    assert!(h.query_by_label_contains("Paste").is_some(), "Paste in the menu");
+    assert!(h.get_by_label_contains("Copy").accesskit_node().is_disabled(), "nothing to copy yet");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+
+    // Select the output, then Copy.
+    let row = screen_text(&h).lines().position(|l| l.trim_end() == "menu-word").unwrap() as u16;
+    let pane = &mut h.state_mut().0.terminal_mut().unwrap().pane;
+    pane.begin_selection(row, 0);
+    pane.update_selection(row, 9);
+    right_click(&mut h);
+    h.get_by_label_contains("Copy").click();
+    h.step();
+    assert_eq!(app(&h).clips.first().map(String::as_str), Some("menu-word"), "copied");
+
+    // Paste: here the "clipboard" holds a file (never the real clipboard in a
+    // test), typed as its path.
+    crate::app::set_clipboard_files(vec![PathBuf::from("/tmp/right click.txt")]);
+    right_click(&mut h);
+    h.get_by_label_contains("Paste").click();
+    h.step();
+    wait_for(&mut h, "the pasted path", screen_has("/tmp/right\\ click.txt"));
+    crate::app::set_clipboard_files(Vec::new());
+}
+
 /// An empty folder's tree says so under its search box, not on top of it.
 #[test]
 #[ignore]

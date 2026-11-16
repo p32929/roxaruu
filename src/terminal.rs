@@ -383,18 +383,36 @@ pub fn belongs_to_shell(key: Key, m: Modifiers) -> bool {
 /// still reach the app from a terminal (like VS Code's "skip the shell"
 /// list): getting out of it and between places, tabs, saving, quitting, text
 /// size. The shell keeps the rest (^C ^R ^W ^K ^A ^E…). On a Mac they're ⌘
-/// chords, which never clash.
+/// chords, which never clash. On Windows, Paste too: Ctrl+V pastes in its
+/// terminals (Windows Terminal, VS Code's), where a shell's ^V (insert the
+/// next key as is) is rarely wanted; Linux's keep ^V, and paste with
+/// Ctrl+Shift+V as their terminals do (shifted chords pass anyway).
 pub fn passes_the_shell(c: crate::keymap::Command) -> bool {
+    passes_the_shell_on(c, cfg!(windows))
+}
+
+fn passes_the_shell_on(c: crate::keymap::Command, windows: bool) -> bool {
     use crate::keymap::Command::*;
     matches!(
         c,
         SwitchFocus | GoToTab(_) | ToggleSidebar | FocusSidebar | Save | SaveAll | Quit | ZoomIn | ZoomOut | ResetZoom
-    )
+    ) || (windows && c == Paste)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ctrl+V in a Windows terminal pastes (as in Windows Terminal); on
+    /// Linux the shell keeps it (^V), and Ctrl+Shift+V pastes.
+    #[test]
+    fn ctrl_v_pastes_in_a_windows_terminal() {
+        use crate::keymap::Command;
+        assert!(passes_the_shell_on(Command::Paste, true));
+        assert!(!passes_the_shell_on(Command::Paste, false));
+        assert!(!passes_the_shell_on(Command::Copy, true), "Ctrl+C stays the shell's interrupt");
+        assert!(passes_the_shell_on(Command::Save, false));
+    }
 
     const CTRL: Modifiers = Modifiers {
         ctrl: true,
