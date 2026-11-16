@@ -17,31 +17,31 @@ I looked for something that already solved this, didn't like what I found, so I 
 ## What it does
 
 **Keyboard first**
-- Every action is a named command with a shortcut, and every shortcut can be changed.
-- The keys that work where you are are shown at the bottom of the screen (the editor's under the tabs, the terminal's and the file tree's in the status bar), and they change as you move around.
-- **F1** shows every shortcut. **Ctrl+Shift+P** (**⇧⌘P** on a Mac) finds any command by name.
+1. Every action is a named command with a shortcut, and every shortcut can be changed.
+2. The keys that work where you are are shown at the bottom of the screen (the editor's under the tabs, the terminal's and the file tree's in the status bar), and they change as you move around.
+3. **F1** shows every shortcut. **Ctrl+Shift+P** (**⇧⌘P** on a Mac) finds any command by name.
 
 **Terminals**
-- Built in, as tabs, or all of a project's terminals at once in a grid.
-- On macOS, a script that opens new Terminal windows opens tabs in Roxaruu instead (exactly my problem above).
-- Each tab says what its program is doing: printing, running, or gone quiet (maybe stuck, maybe waiting for you).
-- Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else.
+1. Built in, as tabs, or all of a project's terminals at once in a grid.
+2. On macOS, a script that opens new Terminal windows opens tabs in Roxaruu instead (exactly my problem above).
+3. Each tab says what its program is doing: printing, running, or gone quiet (maybe stuck, maybe waiting for you).
+4. Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else.
 
 **Editor**
-- Syntax highlighting for 23 languages, tabs, split view, find and replace, go to line, go to file, search across the whole project.
-- Opens huge files instantly: it reads only what's on screen.
-- Files reopen where you left them, with the cursor and scroll position.
+1. Syntax highlighting for 23 languages, tabs, split view, find and replace, go to line, go to file, search across the whole project.
+2. Opens huge files instantly: it reads only what's on screen.
+3. Files reopen where you left them, with the cursor and scroll position.
 
 **Remote access**
-- Turn it on, set a password, and open the address in any browser, on another computer or a phone. You get the same window, with all its files and terminals.
-- Install it on a **Linux server** (no screen needed) and code on that machine from your browser: `rox --remote on --password <password>`.
-- The browser draws the window itself, so it stays smooth even on a small server without a graphics card.
-- Keys follow your device: a Mac's browser gets ⌘ shortcuts even when the server runs Linux.
+1. Turn it on, set a password, and open the address in any browser, on another computer or a phone. You get the same window, with all its files and terminals.
+2. Install it on a **Linux server** (no screen needed) and code on that machine from your browser: `rox --remote on --password <password>`.
+3. The browser draws the window itself, so it stays smooth even on a small server without a graphics card.
+4. Keys follow your device: a Mac's browser gets ⌘ shortcuts even when the server runs Linux.
 
 **Make it yours**
-- Settings, shortcuts and colour themes are plain JSON files in `~/.config/roxaruu/`. Edits apply as soon as you save.
-- Four themes built in (Oxide, Oxide Light, Midnight, Moss), or make your own. Pick a UI font and a code font, or use any font file.
-- Also included: a clipboard history, a to-do list, and recent folders.
+1. Settings, shortcuts and colour themes are plain JSON files in `~/.config/roxaruu/`. Edits apply as soon as you save.
+2. Four themes built in (Oxide, Oxide Light, Midnight, Moss), or make your own. Pick a UI font and a code font, or use any font file.
+3. Also included: a clipboard history, a to-do list, and recent folders.
 
 ## Install
 
@@ -69,9 +69,9 @@ Terminals on Windows run **Git Bash** (or WSL), so install [Git for Windows](htt
 
 ### Linux (64-bit)
 
-- Debian, Ubuntu, Mint, Pop!_OS: `sudo apt install ./roxaruu_v<version>_linux_x64.deb`
-- Anything else: unpack `roxaruu_v<version>_linux_x64.tar.xz`; the program is `bin/roxaruu` (copy `share/` into `~/.local/share/` for the app-menu entry).
-- On a server with no screen, install Xvfb as well (`sudo apt install xvfb`) to use it through remote access.
+1. Debian, Ubuntu, Mint, Pop!_OS: `sudo apt install ./roxaruu_v<version>_linux_x64.deb`
+2. Anything else: unpack `roxaruu_v<version>_linux_x64.tar.xz`; the program is `bin/roxaruu` (copy `share/` into `~/.local/share/` for the app-menu entry).
+3. On a server with no screen, install Xvfb as well (`sudo apt install xvfb`) to use it through remote access.
 
 ### Uninstall
 
@@ -85,15 +85,15 @@ To keep your settings, keys and themes for later: `curl -fsSL https://raw.github
 
 ## Getting started
 
-- Open a folder with **Ctrl+O** (**⌘O** on a Mac), or from a terminal: `rox` for the one you're in, or `rox <folder>`. Opened from the app list (Dock, Start Menu, Spotlight), it starts with no folder.
-- **Alt+T** shows or hides the terminal, **Alt+N** opens another one.
-- **F1** shows every shortcut; the keys for wherever you are are always at the bottom of the screen.
+1. Open a folder with **Ctrl+O** (**⌘O** on a Mac), or from a terminal: `rox` for the one you're in, or `rox <folder>`. Opened from the app list (Dock, Start Menu, Spotlight), it starts with no folder.
+2. **Alt+T** shows or hides the terminal, **Alt+N** opens another one.
+3. **F1** shows every shortcut; the keys for wherever you are are always at the bottom of the screen.
 
 **Remote access**
 
-- In the app: **Ctrl+Alt+Shift+R** (**⌥⇧⌘R** on a Mac), or **Remote Access: On / Off** from the command palette. Set a password, then open the address it shows. You can also choose to use it *only* from the browser, which hides the windows on this computer.
-- From a terminal (works on a server too): `rox --remote on --password <password> [folder]` prints the address, and `rox --remote off` turns it off.
-- The password is only kept in memory, never saved, and the connection is HTTPS. The first visit warns that the certificate isn't trusted, because it's your own computer's: continue, then sign in.
+1. In the app: **Ctrl+Alt+Shift+R** (**⌥⇧⌘R** on a Mac), or **Remote Access: On / Off** from the command palette. Set a password, then open the address it shows. You can also choose to use it *only* from the browser, which hides the windows on this computer.
+2. From a terminal (works on a server too): `rox --remote on --password <password> [folder]` prints the address, and `rox --remote off` turns it off.
+3. The password is only kept in memory, never saved, and the connection is HTTPS. The first visit warns that the certificate isn't trusted, because it's your own computer's: continue, then sign in.
 
 ## Where it stands
 
@@ -123,10 +123,18 @@ Working on it: run `git config core.hooksPath .githooks` once. Then every commit
 
 **Releases.** `.githooks/release` (or "Run workflow" on GitHub's Actions page, which asks nothing) builds, tests and packages Windows, macOS and Linux, then publishes release `v<version>` from `Cargo.toml` with all the downloads above. A failed test doesn't hold the release back; its notes say which system failed. CI never runs by itself.
 
+## License
+
+[MIT](LICENSE)
+
 ## Contributing
 
 Contributions are very welcome, and thank you for even thinking about it. One small request: before you start on a change, please [open an issue](https://github.com/p32929/roxaruu/issues) first and tell me about the problem or the idea. That way we can talk it through, agree on the approach, and make sure it fits where Roxaruu is going, so your time and effort don't end up wasted on a pull request I can't merge. Bug reports and suggestions on their own help a lot too.
 
-## License
+## Share
 
-[MIT](LICENSE)
+<a href="https://p32929.github.io/share/?repo=roxaruu"><img src="https://p32929.github.io/readme/share.svg" alt="Share this with your friends in just a click" width="420"></a>
+
+## Support
+
+<a href="https://p32929.github.io/support/"><img src="https://p32929.github.io/readme/support.svg" alt="If you like my works and want to support me, feel free to support" width="420"></a>
