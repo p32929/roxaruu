@@ -50,7 +50,12 @@ for n in $(seq 0 $(( shards - 1 ))); do
   # Ubuntu's global zshrc runs compinit, which stops to ask about folders.
   echo 'skip_global_compinit=1' > "$home/.zshenv"
   # Each test's line as it finishes (format-tests), the whole output kept.
-  HOME="$home" SHOTS="${SHOTS:-$root/target/shots}" PROJECT="$root/src/main.rs" BIG="$root/src/ui.rs" \
+  # Its own XDG folders too: Linux finds settings and state through them
+  # when they're set (GitHub's runners set them), and processes sharing
+  # them shared their Recent Folders, markers and all.
+  HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
+    XDG_CACHE_HOME="$home/.cache" XDG_STATE_HOME="$home/.local/state" \
+    SHOTS="${SHOTS:-$root/target/shots}" PROJECT="$root/src/main.rs" BIG="$root/src/ui.rs" \
     "$bin" $ignored --test-threads=1 --exact $(cat "$scratch/list$n") 2>&1 |
     tee "$scratch/log$n" | "$here/format-tests" "$n" &
   pids+=("$!:$n")
