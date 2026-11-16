@@ -1680,6 +1680,77 @@ fn headless_status_hint_click_opens_palette() {
     assert!(app(&h).palette.is_none());
 }
 
+/// What a window holds in memory as it's used: empty, a project with files
+/// open, then terminals full of coloured output (a long Claude Code
+/// session's worth each), streaming on past their history's end. Written to
+/// SHOTS/memory.txt, and held to a budget.
+#[test]
+#[ignore]
+fn headless_memory_report() {
+    let footprint = || crate::sys::usage(std::process::id() as i32).map_or(0, |u| u.footprint_kb / 1024);
+    let mut report = Vec::new();
+    let mut h = harness(None);
+    h.run();
+    report.push(format!("empty window: {} MB", footprint()));
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let ctx = h.ctx.clone();
+    h.state_mut().0.open_folder(root.clone(), &ctx);
+    for f in ["app.rs", "ui.rs", "terminalpane.rs", "headless.rs", "config.rs", "keymap.rs", "sys.rs", "editor.rs", "buffer.rs", "syntax.rs"] {
+        h.state_mut().0.open_file(&root.join("src").join(f));
+        for _ in 0..3 {
+            h.step();
+        }
+    }
+    while !app(&h).active_tab().is_none_or(|t| t.highlighted()) {
+        h.step();
+    }
+    report.push(format!("+ project, 10 files open: {} MB", footprint()));
+
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='$ '\n").unwrap();
+    let fill = "awk 'BEGIN{for(i=0;i<4000;i++){printf \"\\033[3%dm\", i%7; for(j=0;j<180;j++) printf \"%c\", 97+(i+j)%26; print \"\\033[0m\"}; print \"fi\" \"lled\"}'";
+    for n in 1..=5 {
+        h.state_mut().0.run(crate::keymap::Command::NewTerminal, &ctx);
+        wait_for(&mut h, "the prompt", screen_has("$ "));
+        run(&mut h, fill);
+        wait_for(&mut h, "the output", screen_line("filled"));
+        report.push(format!("+ {n} full terminal(s): {} MB", footprint()));
+    }
+    // Far past the history's limit: what's kept stays the same size, so
+    // memory should too (growing here is a leak).
+    for round in 1..=6 {
+        run(&mut h, &fill.replace("\"fi\" \"lled\"", &format!("\"round\" \"{round}\"")));
+        let done: &'static str = Box::leak(format!("round{round}").into_boxed_str());
+        wait_for(&mut h, "the output", screen_line(done));
+        for _ in 0..5 {
+            h.step();
+        }
+        report.push(format!("  streamed {}k more lines: {} MB", round * 4, footprint()));
+    }
+    // Closed again: does the memory come back?
+    while !app(&h).terminals.is_empty() {
+        let n = app(&h).terminals.len();
+        h.state_mut().0.close_terminal(n - 1);
+        for _ in 0..3 {
+            h.step();
+        }
+    }
+    report.push(format!("all terminals closed: {} MB", footprint()));
+    let text = report.join("\n");
+    eprintln!("{text}");
+    let shots = PathBuf::from(std::env::var("SHOTS").unwrap_or_else(|_| "target/shots".into()));
+    std::fs::create_dir_all(&shots).unwrap();
+    std::fs::write(shots.join("memory.txt"), &text).unwrap();
+    // The budget: five terminals full of output (10,000 lines of history
+    // each) cost a few MB in all, not ~60 (when each kept 3,000 rows as cells).
+    let mb = |line: &str| text.lines().find(|l| l.starts_with(line)).and_then(|l| l.rsplit(": ").next()?.trim_end_matches(" MB").parse::<i64>().ok()).unwrap();
+    let terminals = mb("+ 5 full terminal(s)") - mb("+ project");
+    assert!(terminals < 20, "five full terminals took {terminals} MB:\n{text}");
+    let streamed = mb("  streamed 24k") - mb("+ 5 full terminal(s)");
+    assert!(streamed < 10, "streaming on grew it by {streamed} MB:\n{text}");
+}
+
 /// Once per install, a new window asks whether to notify you: Turn On asks
 /// the system and shows one to prove it (what it says depends on macOS's
 /// answer); Not Now turns them off; either way it isn't asked again. Turned

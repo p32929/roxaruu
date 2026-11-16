@@ -21,6 +21,7 @@ mod find;
 mod fonts;
 mod fstree;
 mod fuzzy;
+mod history;
 mod huge;
 // The UI walkthroughs drive real Unix shells (zsh), symlinks and file modes
 // (Unix only: inside). `cfg(test)` alone, so clippy knows it's test code.

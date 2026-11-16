@@ -25,12 +25,16 @@ const PROC_POLL: Duration = Duration::from_millis(400);
 /// terminal never pays for it.
 const CWD_POLL: Duration = Duration::from_millis(600);
 
-/// Lines of scrollback history each terminal keeps. A terminal that's actually
-/// filled its scrollback with real output can run tens of MB per 1,000 lines
-/// (each cell carries its own styling), so this is a real memory knob, not
-/// just a UX one — 3,000 lines is still generous (VSCode's own default is
-/// 1,000) while keeping a single terminal's worst case well under 30MB.
-const SCROLLBACK: usize = 3_000;
+/// Rows the emulator itself keeps above the screen: 32 bytes a cell, the full
+/// width, however short the line (a busy 200-column terminal's 3,000 rows
+/// were ~19 MB). Just a short live stretch; older rows go to the compact
+/// history (`Alerts::history`).
+const LIVE_HISTORY: usize = 200;
+
+/// Lines of history a terminal keeps in all: the live stretch, then the
+/// compact rest (~100–200 bytes a line, deflated: well under a MB here).
+/// Scrolling back that far draws them again (`replay`).
+const HISTORY: usize = 10_000;
 
 /// Called from a terminal's reader thread whenever new output arrives, to wake
 /// the GUI event loop so it redraws promptly (winit throttles its idle timer on
@@ -48,18 +52,38 @@ const AGENT_QUIET: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 3 }
 /// What programs in the terminal asked to tell the user: the bell, and the
 /// notification escapes — OSC 9 (iTerm2), OSC 777 (Ghostty, rxvt) and
 /// OSC 99 (kitty) — which is what Claude Code and friends send.
-#[derive(Default)]
-pub struct Alerts(Vec<String>);
+pub struct Alerts {
+    said: Vec<String>,
+    /// The terminal's history past the emulator's live stretch, compact.
+    history: crate::history::History,
+}
+
+impl Default for Alerts {
+    fn default() -> Self {
+        Self { said: Vec::new(), history: crate::history::History::new(HISTORY - LIVE_HISTORY) }
+    }
+}
 
 impl vt100::Callbacks for Alerts {
     fn audible_bell(&mut self, _: &mut vt100::Screen) {
-        self.0.push(String::new());
+        self.said.push(String::new());
     }
 
     fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
         if let Some(message) = osc_notification(params) {
-            self.0.push(message);
+            self.said.push(message);
         }
+    }
+}
+
+/// Output into the emulator; the rows its live stretch let go of into the
+/// compact history (each with its width first: it's drawn that wide again).
+fn feed(p: &mut vt100::Parser<Alerts>, bytes: &[u8]) {
+    p.process(bytes);
+    for (width, line) in p.screen_mut().take_dropped_formatted() {
+        let mut stored = width.to_le_bytes().to_vec();
+        stored.extend(line);
+        p.callbacks_mut().history.push(stored);
     }
 }
 
@@ -238,7 +262,7 @@ fn watch(
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .callbacks_mut()
-                .0,
+                .said,
         );
         let quiet = activity
             .lock()
@@ -309,12 +333,20 @@ fn watch(
 /// A read lock on a terminal's emulator that dereferences to its
 /// [`vt100::Screen`], so callers keep writing `term.screen().cell(..)` even
 /// though the parser now lives behind a mutex (written by the reader thread).
-pub struct ScreenGuard<'a>(std::sync::MutexGuard<'a, vt100::Parser<Alerts>>);
+/// What a terminal shows: the emulator's screen, or (scrolled back past its
+/// live stretch) those rows drawn again from the compact history.
+pub enum ScreenGuard<'a> {
+    Live(std::sync::MutexGuard<'a, vt100::Parser<Alerts>>),
+    Replay(&'a vt100::Parser),
+}
 
 impl std::ops::Deref for ScreenGuard<'_> {
     type Target = vt100::Screen;
     fn deref(&self) -> &vt100::Screen {
-        self.0.screen()
+        match self {
+            ScreenGuard::Live(p) => p.screen(),
+            ScreenGuard::Replay(p) => p.screen(),
+        }
     }
 }
 
@@ -351,12 +383,9 @@ pub struct TerminalPane {
     /// Bytes the reader thread has parsed since the last [`pump`] — lets the UI
     /// know a redraw is warranted without re-draining anything itself.
     pending: Arc<AtomicU64>,
-    /// Line feeds among those bytes: at most this many rows (plus wraps) can
-    /// have scrolled into history since the last pump.
-    newlines: Arc<AtomicU64>,
-    /// The rows on screen at the last pump or scroll, to find them again once
-    /// the history is full (see [`TerminalPane::pump`]).
-    view: Vec<String>,
+    /// Scrolled back past the emulator's live stretch: those rows drawn
+    /// again from the compact history (what `screen()` shows meanwhile).
+    replay: Option<vt100::Parser>,
     /// Latency probe: the reader stamps the first chunk of a fresh output burst
     /// here; [`pump`] takes it and logs if that output waited too long for a
     /// frame (i.e. the UI loop was parked) — the freeze, quantified.
@@ -370,9 +399,9 @@ pub struct TerminalPane {
     cols: u16,
     /// Scrollback offset in rows (0 = following the live bottom).
     scroll: usize,
-    /// Rows of history at the last pump, so new output can be measured. See
-    /// the scroll-lock handling in [`TerminalPane::pump`].
-    history_len: usize,
+    /// Rows that had ever gone into history at the last pump or scroll, so
+    /// new output can be measured exactly (the scroll lock in [`pump`]).
+    seen: u64,
     /// Selection anchor / live end as `(line_id, col)`, where `line_id` is the
     /// number of lines above the live bottom (0 = bottom row). Storing it this way
     /// (rather than visible coords) keeps a selection anchored to its text as the
@@ -644,13 +673,11 @@ impl TerminalPane {
             thread::spawn(move || self::watch(p, a, w, waker));
         }
         let pending = Arc::new(AtomicU64::new(0));
-        let newlines = Arc::new(AtomicU64::new(0));
         let stamp: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
         {
             let parser = parser.clone();
             let activity = activity.clone();
             let pending = pending.clone();
-            let newlines = newlines.clone();
             let stamp = stamp.clone();
             let answer = writer.clone();
             let held = startup.clone();
@@ -671,10 +698,7 @@ impl TerminalPane {
                             let chunk = buf.get(..n).unwrap_or_default();
                             // Parse off the UI thread so output is consumed even
                             // while the event loop is parked.
-                            parser
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .process(chunk);
+                            feed(&mut parser.lock().unwrap_or_else(|e| e.into_inner()), chunk);
                             // "Where's the cursor?" (DSR 6). Windows' console asks it
                             // as it starts and shows nothing until it's answered;
                             // programs anywhere may ask too. Answered here, at once.
@@ -708,8 +732,6 @@ impl TerminalPane {
                                 }
                                 a.last = Some(now);
                             }
-                            let lf = chunk.iter().filter(|b| **b == b'\n').count();
-                            newlines.fetch_add(lf as u64, Ordering::Release);
                             pending.fetch_add(n as u64, Ordering::Release);
                             // Stamp the first chunk of a burst so pump() can measure
                             // how long it waited to be shown (the freeze probe).
@@ -748,8 +770,7 @@ impl TerminalPane {
             attention: false,
             notified: None,
             pending,
-            newlines,
-            view: Vec::new(),
+            replay: None,
             stamp,
             writer,
             startup,
@@ -758,7 +779,7 @@ impl TerminalPane {
             rows,
             cols,
             scroll: 0,
-            history_len: 0,
+            seen: 0,
             sel_anchor: None,
             sel_cursor: None,
             copy_mode: false,
@@ -796,23 +817,18 @@ impl TerminalPane {
             // offset is not holding the position. Growing it by however much
             // history arrived keeps the same text on screen; at offset 0 the
             // pane is following the bottom and should keep following it.
-            let mut p = self.parser.lock().unwrap_or_else(|e| e.into_inner());
-            let len = Self::history_len(&mut p);
-            let mut arrived = len.saturating_sub(self.history_len);
-            let newlines = self.newlines.swap(0, Ordering::Acquire) as usize;
-            // Once the history is full, each new row pushes the oldest out
-            // and the length stops growing, so it can't say how much arrived.
-            // Find where the rows we were showing went instead (at most one
-            // per line feed, plus wrapped lines).
-            if len >= SCROLLBACK && !self.view.is_empty() {
-                let most = newlines + bytes / self.cols.max(1) as usize + 2;
-                arrived = Self::find_shift(&mut p, self.scroll, &self.view, newlines, most)
-                    .unwrap_or(arrived.max(newlines));
-            }
+            let parser = self.parser.clone();
+            let mut p = parser.lock().unwrap_or_else(|e| e.into_inner());
+            // Exactly how many rows went into history since: every row the
+            // live stretch let go of is counted by the compact history, so
+            // this holds once both are full too.
+            let entered = Self::entered(&mut p);
+            let arrived = entered.saturating_sub(self.seen) as usize;
+            self.seen = entered;
+            let len = Self::history_total(&mut p);
             if self.scroll > 0 {
                 self.scroll = (self.scroll + arrived).min(len);
             }
-            self.history_len = len;
             // A mark is stored the same bottom-relative way, so it needs the
             // same correction — otherwise it stays a fixed distance from the
             // bottom while the bottom moves, and the highlight visibly travels
@@ -829,9 +845,7 @@ impl TerminalPane {
                     *lid = (*lid + arrived).min(ceiling);
                 }
             }
-            p.screen_mut().set_scrollback(self.scroll);
-            self.scroll = p.screen().scrollback();
-            self.view = if len >= SCROLLBACK { Self::rows_text(&p) } else { Vec::new() };
+            self.replay = Self::show(&mut p, self.scroll, self.rows, self.cols);
             self.cwd_dirty = true;
         }
         self.refresh_foreground();
@@ -864,7 +878,7 @@ impl TerminalPane {
     /// Jump back to the live bottom of the terminal.
     pub fn scroll_to_bottom(&mut self) {
         self.scroll = 0;
-        self.view.clear();
+        self.replay = None;
         self.parser
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -915,37 +929,10 @@ impl TerminalPane {
         ((1i64 << 40) - lineid as i64) * (self.cols as i64 + 1) + col as i64
     }
 
-    /// How many rows of history exist right now.
+    /// Rows of history in the emulator's live stretch right now.
     ///
     /// vt100 has no getter for this, but `set_scrollback` clamps to it — so ask
     /// for an impossible offset and read back what you were given, then restore.
-    /// The text of each row on screen (at the current scroll offset).
-    fn rows_text(p: &vt100::Parser<Alerts>) -> Vec<String> {
-        let (_, cols) = p.screen().size();
-        p.screen().rows(0, cols).collect()
-    }
-
-    /// How many rows `view` (last seen at offset `scroll`) has moved up into
-    /// history: the smallest shift, up to `most`, at which those rows are on
-    /// screen again. `None` when they're gone (pushed out of the history, or
-    /// the screen was cleared).
-    fn find_shift(
-        p: &mut vt100::Parser<Alerts>,
-        scroll: usize,
-        view: &[String],
-        likely: usize,
-        most: usize,
-    ) -> Option<usize> {
-        // Usually one row per line feed: try that first, then the rest.
-        let candidates = std::iter::once(likely.min(most)).chain((0..=most).filter(|k| *k != likely));
-        let found = candidates.into_iter().find(|k| {
-            p.screen_mut().set_scrollback(scroll + k);
-            p.screen().scrollback() == scroll + k && Self::rows_text(p) == view
-        });
-        p.screen_mut().set_scrollback(scroll);
-        found
-    }
-
     fn history_len(p: &mut vt100::Parser<Alerts>) -> usize {
         let current = p.screen().scrollback();
         p.screen_mut().set_scrollback(usize::MAX);
@@ -954,18 +941,39 @@ impl TerminalPane {
         len
     }
 
-    /// Set the scrollback offset directly (clamped to the real history depth).
+    /// All the history there is: the live stretch and the compact rest.
+    fn history_total(p: &mut vt100::Parser<Alerts>) -> usize {
+        Self::history_len(p) + p.callbacks().history.len()
+    }
+
+    /// Every row that has ever gone into history (it only grows).
+    fn entered(p: &mut vt100::Parser<Alerts>) -> u64 {
+        Self::history_len(p) as u64 + p.callbacks().history.pushed()
+    }
+
+    /// Show history `scroll` rows up: the emulator's own offset while it's
+    /// in the live stretch; past it, those rows drawn again (returned).
+    fn show(p: &mut vt100::Parser<Alerts>, scroll: usize, rows: u16, cols: u16) -> Option<vt100::Parser> {
+        let live = Self::history_len(p);
+        if scroll <= live {
+            p.screen_mut().set_scrollback(scroll);
+            return None;
+        }
+        Some(replay(p, scroll, live, rows, cols))
+    }
+
+    /// Set the scrollback offset directly (clamped to the history there is).
     fn set_scroll(&mut self, s: usize) {
-        let mut p = self.parser.lock().unwrap_or_else(|e| e.into_inner());
-        p.screen_mut().set_scrollback(s);
-        self.scroll = p.screen().scrollback();
+        let parser = self.parser.clone();
+        let mut p = parser.lock().unwrap_or_else(|e| e.into_inner());
+        self.scroll = s.min(Self::history_total(&mut p));
         // Re-baseline the history measurement at the moment the view moves.
         // The reader thread parses output continuously, so history can have
         // grown since the last pump; without this, that growth is counted as
         // "arrived while scrolled up" and the view jumps by however much had
         // landed *before* the user scrolled.
-        self.history_len = Self::history_len(&mut p);
-        self.view = if self.history_len >= SCROLLBACK { Self::rows_text(&p) } else { Vec::new() };
+        self.seen = Self::entered(&mut p);
+        self.replay = Self::show(&mut p, self.scroll, self.rows, self.cols);
     }
 
     /// Scroll so `lineid` is on screen; returns it clamped to reachable history.
@@ -1117,8 +1125,7 @@ impl TerminalPane {
     /// The column of the word boundary reached by moving from `(row, col)` in
     /// `dir` (words are alphanumeric / underscore runs; everything else is a gap).
     fn word_boundary(&self, row: u16, col: u16, dir: i32) -> u16 {
-        let guard = self.parser.lock().unwrap_or_else(|e| e.into_inner());
-        let screen = guard.screen();
+        let screen = self.screen();
         let ch_at = |c: u16| -> char {
             screen
                 .cell(row, c)
@@ -1241,8 +1248,7 @@ impl TerminalPane {
             };
             let mut line = String::new();
             {
-                let guard = self.parser.lock().unwrap_or_else(|e| e.into_inner());
-                let screen = guard.screen();
+                let screen = self.screen();
                 for cc in c0..c1 {
                     match screen.cell(r, cc) {
                         Some(cell) => {
@@ -1463,11 +1469,10 @@ impl TerminalPane {
             pixel_width: 0,
             pixel_height: 0,
         });
-        let mut p = self.parser.lock().unwrap_or_else(|e| e.into_inner());
-        p.screen_mut().set_size(rows, cols);
-        // A resize can change the scrollback bounds; keep our offset valid.
-        p.screen_mut().set_scrollback(self.scroll);
-        self.scroll = p.screen().scrollback();
+        self.parser.lock().unwrap_or_else(|e| e.into_inner()).screen_mut().set_size(rows, cols);
+        // A resize can change the scrollback bounds; keep our offset valid
+        // (and draw a replayed view at the new size).
+        self.set_scroll(self.scroll);
     }
 
     /// ⌘K: wipe the screen and scrollback, then have the shell redraw its
@@ -1480,12 +1485,22 @@ impl TerminalPane {
         *p = new_parser(self.rows, self.cols);
         drop(p);
         self.scroll = 0;
+        self.seen = 0;
+        self.replay = None;
         self.send_input(b"\x0c");
         true
     }
 
+    /// What its compact history takes in memory (for the log).
+    pub fn history_bytes(&self) -> usize {
+        self.parser.lock().unwrap_or_else(|e| e.into_inner()).callbacks().history.bytes()
+    }
+
     pub fn screen(&self) -> ScreenGuard<'_> {
-        ScreenGuard(self.parser.lock().unwrap_or_else(|e| e.into_inner()))
+        match &self.replay {
+            Some(replay) => ScreenGuard::Replay(replay),
+            None => ScreenGuard::Live(self.parser.lock().unwrap_or_else(|e| e.into_inner())),
+        }
     }
 }
 
@@ -1504,7 +1519,47 @@ impl Drop for TerminalPane {
 /// Whether a process name is this app's own (a just-forked child that hasn't
 /// exec'd the shell yet).
 fn new_parser(rows: u16, cols: u16) -> vt100::Parser<Alerts> {
-    vt100::Parser::new_with_callbacks(rows, cols, SCROLLBACK, Alerts::default())
+    vt100::Parser::new_with_callbacks(rows, cols, LIVE_HISTORY, Alerts::default())
+}
+
+/// The screen `scroll` rows up, past the emulator's live stretch (`live`
+/// rows): each row drawn again from where it is now — the screen, the live
+/// stretch, or the compact history. As wide as its widest row: a row from
+/// when the terminal was wider runs off the edge rather than wrapping
+/// (vt100 can't turn wrapping off); the pane draws only its own width.
+fn replay(p: &mut vt100::Parser<Alerts>, scroll: usize, live: usize, rows: u16, cols: u16) -> vt100::Parser {
+    let rows_n = usize::from(rows);
+    let held = p.callbacks().history.len();
+    let lines: Vec<Option<(u16, Vec<u8>)>> = (0..rows_n)
+        .map(|r| {
+            // Lines above the live bottom (0 = its bottom row), as the
+            // selection counts them.
+            let lineid = scroll + rows_n - 1 - r;
+            if lineid < rows_n {
+                p.screen_mut().set_scrollback(0);
+                return p.screen().rows_formatted(0, cols).nth(rows_n - 1 - lineid).map(|l| (cols, l));
+            }
+            let k = lineid - rows_n; // history rows back, 0 = the newest
+            if k < live {
+                p.screen_mut().set_scrollback(k + 1);
+                return p.screen().rows_formatted(0, cols).next().map(|l| (cols, l));
+            }
+            let stored = p.callbacks().history.get(held.checked_sub(k - live + 1)?)?;
+            let (width, line) = stored.split_first_chunk::<2>()?;
+            Some((u16::from_le_bytes(*width), line.to_vec()))
+        })
+        .collect();
+    p.screen_mut().set_scrollback(0);
+    let wide = lines.iter().flatten().map(|(w, _)| *w).fold(cols, u16::max);
+    let mut out = vt100::Parser::new(rows, wide, 0);
+    out.process(b"\x1b[?25l"); // no cursor in history
+    for (r, line) in lines.into_iter().enumerate() {
+        out.process(format!("\x1b[{};1H\x1b[m", r + 1).as_bytes());
+        if let Some((_, line)) = line {
+            out.process(&line);
+        }
+    }
+    out
 }
 
 fn is_own_name(name: &str) -> bool {
@@ -1807,7 +1862,9 @@ fn has_output(term: &TerminalPane, needle: &str) -> bool {
         }
     }
     p.screen_mut().set_scrollback(keep);
-    found
+    // …and the compact history past the live stretch.
+    let history = &p.callbacks().history;
+    found || (0..history.len()).any(|i| history.get(i).is_some_and(|l| String::from_utf8_lossy(&l).contains(needle)))
 }
 
 #[cfg(test)]
@@ -2254,7 +2311,7 @@ mod tests {
         let mut cmd = CommandBuilder::new(&shell);
         cmd.cwd(std::env::temp_dir());
         let mut term = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
-        let fill = SCROLLBACK + 200;
+        let fill = HISTORY + 200;
         term.send_input(format!("for i in $(seq 1 {fill}); do echo \"LINE-$i\"; done\n").as_bytes());
         let last = format!("LINE-{fill}");
         while !screen_contains(&term, &last) {
@@ -2268,6 +2325,104 @@ mod tests {
         term.send_input(b"for i in $(seq 1 80); do echo \"NOISE-$i\"; done\n");
         settle(&mut term, "NOISE-80");
         assert_eq!(visible_text(&term), before, "the view moved with a full history");
+    }
+
+    /// The rows on screen, each trimmed.
+    fn visible_rows(t: &TerminalPane) -> Vec<String> {
+        let screen = t.screen();
+        (0..t.rows)
+            .map(|r| (0..t.cols).map(|c| screen.cell(r, c).map(|x| x.contents()).unwrap_or_default()).collect::<String>().trim_end().to_string())
+            .collect()
+    }
+
+    /// A program that prints `lines` red lines `L1`…, then `DONE`, then waits.
+    fn printed(lines: usize, rows: u16, cols: u16) -> TerminalPane {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        let script = format!("i=1; while [ $i -le {lines} ]; do printf '\\033[31mL%d\\033[m\\n' $i; i=$((i+1)); done; echo DONE; sleep 60");
+        cmd.args(["-c", &script]);
+        cmd.cwd(std::env::temp_dir());
+        let mut term = TerminalPane::spawn("t", rows, cols, cmd, None).unwrap();
+        settle(&mut term, "DONE");
+        term
+    }
+
+    /// Far past the emulator's live stretch, history is drawn again from the
+    /// compact store: the right lines, in their colours.
+    #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
+    fn deep_history_is_drawn_again() {
+        let mut term = printed(1_000, 24, 80);
+        // On screen: L979…L1000, DONE, the cursor's empty row (lines above
+        // the bottom: 0 the empty row, 1 DONE, n ≥ 2 is L(1002 - n)).
+        term.scroll_lines(700);
+        assert!(term.replay.is_some(), "past the live {LIVE_HISTORY} rows");
+        let rows = visible_rows(&term);
+        assert_eq!(rows.first().map(String::as_str), Some("L279"), "{rows:?}");
+        assert_eq!(rows.last().map(String::as_str), Some("L302"), "{rows:?}");
+        let red = term.screen().cell(0, 0).map(|c| c.fgcolor());
+        assert_eq!(red, Some(vt100::Color::Idx(1)), "its colour comes back too");
+        // Back to the live stretch, then the bottom: the emulator's own again.
+        term.scroll_lines(-650);
+        assert!(term.replay.is_none());
+        assert_eq!(visible_rows(&term).last().map(String::as_str), Some("L952"));
+        term.scroll_to_bottom();
+        assert!(visible_rows(&term).contains(&"DONE".to_string()));
+        // The far end: the oldest lines kept.
+        term.scroll_lines(100_000);
+        assert_eq!(visible_rows(&term).first().map(String::as_str), Some("L1"));
+    }
+
+    /// Scrolled deep, the view holds still while output pushes more rows
+    /// through the live stretch into the compact history.
+    #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
+    fn scroll_lock_holds_deep_in_history() {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut cmd = CommandBuilder::new(&shell);
+        cmd.cwd(std::env::temp_dir());
+        let mut term = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
+        term.send_input(b"for i in $(seq 1 1500); do echo \"LINE-$i\"; done\n");
+        settle(&mut term, "LINE-1500");
+        term.scroll_lines(900);
+        assert!(term.replay.is_some());
+        let before = visible_rows(&term);
+        term.send_input(b"for i in $(seq 1 400); do echo \"NOISE-$i\"; done\n");
+        settle(&mut term, "NOISE-400");
+        assert_eq!(visible_rows(&term), before, "the view moved deep in history");
+    }
+
+    /// A selection from deep history down into the live part copies every
+    /// line between, in order.
+    #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
+    fn a_selection_spans_the_compact_history_and_the_live_part() {
+        let mut term = printed(600, 24, 80);
+        term.scroll_lines(400); // L179… on top: in the compact history
+        term.begin_selection(0, 0);
+        term.scroll_to_bottom();
+        term.update_selection(21, 79); // L600 (DONE is on 22, the cursor's row 23)
+        let text = term.selection_text().unwrap_or_default();
+        let numbers: Vec<usize> = text.lines().filter_map(|l| l.trim().strip_prefix('L')?.parse().ok()).collect();
+        let first = *numbers.first().unwrap();
+        assert_eq!(numbers, (first..first + numbers.len()).collect::<Vec<_>>(), "no gaps, in order");
+        assert!(first < 250 && numbers.last() == Some(&600), "from deep history to the bottom: {first}…{:?}", numbers.last());
+    }
+
+    /// Rows from when the terminal was wider come back as they were, one
+    /// per row (not wrapped onto the next).
+    #[test]
+    #[cfg_attr(not(unix), ignore = "needs a Unix shell")]
+    fn rows_from_a_wider_terminal_stay_one_row_each() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", "i=1; while [ $i -le 400 ]; do printf 'W%03d%0105d\\n' $i 0; i=$((i+1)); done; echo DONE; sleep 60"]);
+        cmd.cwd(std::env::temp_dir());
+        let mut term = TerminalPane::spawn("t", 24, 120, cmd, None).unwrap();
+        settle(&mut term, "DONE");
+        term.resize(24, 60);
+        term.scroll_lines(300);
+        assert!(term.replay.is_some());
+        let rows = visible_rows(&term);
+        assert!(rows.iter().all(|r| r.starts_with('W')), "{rows:#?}");
     }
 
     /// …and at the bottom it must still follow, or the terminal would freeze.
@@ -2382,7 +2537,7 @@ mod tests {
         let said = |bytes: &[u8]| {
             let mut p = new_parser(3, 80);
             p.process(bytes);
-            std::mem::take(&mut p.callbacks_mut().0)
+            std::mem::take(&mut p.callbacks_mut().said)
         };
         assert_eq!(
             said(b"\x1b]9;Claude Code: waiting for input\x07"),

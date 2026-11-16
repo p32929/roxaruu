@@ -255,6 +255,8 @@ pub struct App {
     fps_window_start: Instant,
     pub mem_kb: Option<u64>,
     mem_last_check: Option<Instant>,
+    /// When the memory breakdown was last logged.
+    mem_logged: Option<Instant>,
 }
 
 impl App {
@@ -323,6 +325,7 @@ impl App {
             fps_window_start: Instant::now(),
             mem_kb: None,
             mem_last_check: None,
+            mem_logged: None,
         };
         app.apply(ctx);
         if let Some(path) = target.and_then(|p| dunce::canonicalize(p).ok()) {
@@ -435,6 +438,20 @@ impl App {
         {
             self.mem_last_check = Some(Instant::now());
             self.mem_kb = crate::sys::usage(std::process::id() as i32).map(|u| u.footprint_kb);
+            // Now and then, where it goes: a report of "it uses N MB" can
+            // then be answered from the log.
+            if !self.mem_logged.is_some_and(|t| t.elapsed() < Duration::from_secs(600)) {
+                self.mem_logged = Some(Instant::now());
+                let history_kb: usize = self.terminals.iter().map(|t| t.pane.history_bytes()).sum::<usize>() / 1024;
+                tracing::info!(
+                    mb = self.mem_kb.map(|kb| kb / 1024),
+                    terminals = self.terminals.len(),
+                    history_kb,
+                    tabs = self.tabs.len(),
+                    tabs_read = self.tabs.iter().filter(|t| t.is_loaded()).count(),
+                    "memory"
+                );
+            }
         }
         self.poll_config(ctx);
         self.poll_index();
