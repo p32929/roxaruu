@@ -324,24 +324,34 @@ fn link(tls: Tls, req: Request, window: &RemoteWindow, stop: &AtomicBool, links:
         let _ = share.tcp.shutdown(std::net::Shutdown::Both);
         let _ = win_socket.shutdown(std::net::Shutdown::Both);
     };
-    let relay = |from: &mut dyn FnMut() -> tungstenite::Result<Message>,
+    let relay = |way: &str,
+                 from: &mut dyn FnMut() -> tungstenite::Result<Message>,
                  to: &mut dyn FnMut(Message) -> tungstenite::Result<()>| {
         loop {
             match from() {
                 Ok(m @ (Message::Text(_) | Message::Binary(_))) => {
-                    if to(m).is_err() {
+                    if let Err(e) = to(m) {
+                        tracing::info!(way, error = %e, "remote link ended: couldn't pass a message on");
                         break;
                     }
                 }
-                Ok(Message::Close(_)) | Err(_) => break,
+                Ok(Message::Close(_)) => {
+                    tracing::debug!(way, "remote link closed");
+                    break;
+                }
+                // Why a link ends, so a dropped browser can be traced.
+                Err(e) => {
+                    tracing::info!(way, error = %e, "remote link ended");
+                    break;
+                }
                 Ok(_) => {}
             }
         }
         close();
     };
     std::thread::scope(|s| {
-        s.spawn(|| relay(&mut || from_browser.read(), &mut |m| to_win.send(m)));
-        s.spawn(|| relay(&mut || from_window.read(), &mut |m| to_browser.send(m)));
+        s.spawn(|| relay("from the browser", &mut || from_browser.read(), &mut |m| to_win.send(m)));
+        s.spawn(|| relay("to the browser", &mut || from_window.read(), &mut |m| to_browser.send(m)));
     });
     links.lock().unwrap_or_else(|e| e.into_inner()).retain(|(b, _)| !Arc::ptr_eq(b, &share.tcp));
 }

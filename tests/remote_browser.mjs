@@ -173,6 +173,17 @@ async function inputScenario() {
   await press("Backspace", "Backspace");
   await mark("typed");
 
+  // Typed while the link is down: held, and sent once the page has
+  // reconnected by itself (a Wi-Fi blip must not eat keys).
+  step = "input: typed while down";
+  const live = `document.getElementById('dot').classList.contains('live')`;
+  await evaluate(`ws.close()`);
+  await type("Z");
+  await waitFor(`!(${live})`, "the link down");
+  await waitFor(live, "the link back");
+  await mark("typed-while-down");
+  await press("Backspace", "Backspace");
+
   step = "input: lines";
   await chord(["meta"], "ArrowRight", "ArrowRight");  // ⌘→: end of line
   await press("Enter", "Enter", 0, "\r");

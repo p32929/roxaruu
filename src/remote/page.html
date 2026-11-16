@@ -241,7 +241,15 @@ function notice(text) {
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => { $("tip").hidden = true; }, 6000);
 }
-function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+// While the link is down (reconnecting), what you type waits and goes, in
+// order, the moment it's back: a blip on the Wi-Fi doesn't eat keys.
+const waiting = [];
+function send(m) {
+  if (ws && ws.readyState === 1) return ws.send(JSON.stringify(m));
+  if (m.t === "size") return; // sent afresh on reconnecting
+  waiting.push(m);
+  if (waiting.length > 500) waiting.shift();
+}
 function connect() {
   if (ws) { ws.onclose = null; ws.close(); }
   if (win == null) return;
@@ -250,7 +258,7 @@ function connect() {
   const sock = new WebSocket(`wss://${location.host}/ws/${win}`);
   sock.binaryType = "arraybuffer";
   ws = sock;
-  sock.onopen = () => { live(true); sendSize(true); };
+  sock.onopen = () => { live(true); sendSize(true); for (const m of waiting.splice(0)) sock.send(JSON.stringify(m)); };
   let drawing = Promise.resolve();
   sock.onmessage = e => {
     if (typeof e.data === "string") {

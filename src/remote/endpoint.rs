@@ -278,7 +278,11 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, stop: &AtomicBool, wak
                     wake();
                 }
             }
-            Ok(Message::Close(_)) | Err(_) => break,
+            Ok(Message::Close(_)) => break,
+            Err(e) => {
+                tracing::info!(error = %e, "a browser's link to this window ended");
+                break;
+            }
             Ok(_) => {}
         }
     }

@@ -269,7 +269,7 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   settings); test it with a scratch `HOME`, `APP_DIRS`/`BIN_DIRS` and
   `ROXARUU_NO_SYSTEM=1`. Build and test only (`cargo run
   --release -- <folder>` runs this checkout without installing).
-- Commit and push only when asked. Bump the version when asked: `./install-local.sh --vup [patch|minor|major]` (patch by default) bumps `Cargo.toml` and installs; the version shows in the status bar.
+- Commit and push only when asked. Every commit bumps the patch version (the owner's rule: the version in the status bar tells builds apart): `version` in `Cargo.toml`, then `cargo update -p roxaruu --offline` for `Cargo.lock`; a bump already made for a test build and not yet committed is that commit's. Minor or major only when asked. (`./install-local.sh --vup [patch|minor|major]` bumps and installs, which closes the user's windows: only when asked.)
 - Comments explain why, briefly; match the surrounding style. A deliberate
   shortcut with a known limit gets a `ponytail:` comment naming the limit.
 - Report honestly: what was verified (and how), what wasn't, and why.

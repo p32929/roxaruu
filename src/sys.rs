@@ -184,7 +184,7 @@ pub fn process_name(pid: i32) -> Option<String> {
 /// so egui's own pointer position is wherever it last left the window. These
 /// AppKit calls are safe; they live here with the other OS calls.
 #[cfg(all(target_os = "macos", not(test)))]
-pub fn pointer_in_window(inner: eframe::egui::Rect) -> Option<eframe::egui::Pos2> {
+pub fn pointer_in_window(inner: eframe::egui::Rect, _pixels_per_point: f32) -> Option<eframe::egui::Pos2> {
     use objc2_app_kit::{NSEvent, NSScreen};
     let mtm = objc2::MainThreadMarker::new()?;
     // Cocoa's origin is the primary screen's bottom-left, y up; egui's (via
@@ -193,6 +193,23 @@ pub fn pointer_in_window(inner: eframe::egui::Rect) -> Option<eframe::egui::Pos2
     let at = NSEvent::mouseLocation();
     let (x, y) = (at.x as f32, (primary.size.height - at.y) as f32);
     Some(eframe::egui::pos2(x - inner.left(), y - inner.top()))
+}
+
+/// Windows: the same, for drops from Explorer (no pointer moves reach the
+/// window mid-drag either). The cursor comes in screen pixels; egui's
+/// window rect is in points.
+///
+/// Safety: `GetCursorPos` writes one point into a local.
+#[cfg(all(windows, not(test)))]
+pub fn pointer_in_window(inner: eframe::egui::Rect, pixels_per_point: f32) -> Option<eframe::egui::Pos2> {
+    use windows_sys::Win32::{Foundation::POINT, UI::WindowsAndMessaging::GetCursorPos};
+    let mut at = POINT { x: 0, y: 0 };
+    #[allow(unsafe_code)]
+    if unsafe { GetCursorPos(&mut at) } == 0 {
+        return None;
+    }
+    let ppp = pixels_per_point.max(0.1);
+    Some(eframe::egui::pos2(at.x as f32 / ppp - inner.left(), at.y as f32 / ppp - inner.top()))
 }
 
 /// Where a new window opens (egui points, from the primary screen's

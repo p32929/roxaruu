@@ -1491,6 +1491,29 @@ impl TerminalPane {
         true
     }
 
+    /// How this terminal wants file paths typed (dropped or pasted): WSL its
+    /// Linux view; Git Bash quoted at its prompt, as Windows writes them for
+    /// a program running (Claude Code); macOS and Linux escaped.
+    pub fn path_style(&self) -> PathStyle {
+        if !cfg!(windows) {
+            PathStyle::Posix
+        } else if self.shell_name.eq_ignore_ascii_case("wsl") {
+            PathStyle::Wsl
+        } else if self.proc.is_empty() {
+            PathStyle::GitBashPrompt
+        } else {
+            PathStyle::WindowsProgram
+        }
+    }
+
+    /// `paths` typed into this terminal, space-separated.
+    pub fn paths_text(&self, paths: &[std::path::PathBuf]) -> String {
+        let style = self.path_style();
+        let text: Vec<String> = paths.iter().map(|p| path_text(&p.to_string_lossy(), style)).collect();
+        tracing::debug!(?style, n = paths.len(), "paths typed into a terminal");
+        text.join(" ")
+    }
+
     /// What its compact history takes in memory (for the log).
     pub fn history_bytes(&self) -> usize {
         self.parser.lock().unwrap_or_else(|e| e.into_inner()).callbacks().history.bytes()
@@ -1822,7 +1845,60 @@ fn process_cwd(pid: i32) -> Option<PathBuf> {
 /// Anything outside a conservative safe set is escaped, so a name can't smuggle
 /// in a `;` or a `$(...)` that the shell would act on.
 pub fn shell_escape(path: &std::path::Path) -> String {
-    let raw = path.to_string_lossy();
+    escape_posix(&path.to_string_lossy())
+}
+
+/// How a terminal wants a file's path typed into it (dropped, or pasted
+/// after copying files): what the program in it reads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PathStyle {
+    /// macOS and Linux: backslash-escaped, as Terminal.app does.
+    Posix,
+    /// WSL: the Linux view of a Windows path (`C:\a` → `/mnt/c/a`), escaped.
+    Wsl,
+    /// A Git Bash prompt: the Windows path in single quotes (bash would eat
+    /// its backslashes otherwise; Git Bash's programs read `C:\…` fine).
+    GitBashPrompt,
+    /// A Windows program running (Claude Code, say): the path as Windows
+    /// writes it, in double quotes when it has a space, as Windows Terminal
+    /// drops it (a program isn't a shell: it would keep `\`-escapes).
+    WindowsProgram,
+}
+
+/// `raw` (a path as the OS gave it) typed the way `style` wants.
+pub fn path_text(raw: &str, style: PathStyle) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    match style {
+        PathStyle::Posix => escape_posix(raw),
+        PathStyle::Wsl => escape_posix(&wsl_path(raw)),
+        PathStyle::GitBashPrompt => format!("'{}'", raw.replace('\'', "'\\''")),
+        PathStyle::WindowsProgram if raw.contains([' ', '&', '(', ')', '^', ',', ';', '=']) => format!("\"{raw}\""),
+        PathStyle::WindowsProgram => raw.to_string(),
+    }
+}
+
+/// A Windows path as WSL's Linux sees it: a drive under `/mnt`, a file from
+/// a WSL distro's own folder (`\\wsl$\Ubuntu\home\…`) at its own path.
+fn wsl_path(raw: &str) -> String {
+    for prefix in ["\\\\wsl$\\", "\\\\wsl.localhost\\"] {
+        if let Some(rest) = raw.strip_prefix(prefix) {
+            // Past the distro's name.
+            let within = rest.split_once('\\').map_or("", |(_, p)| p);
+            return format!("/{}", within.replace('\\', "/"));
+        }
+    }
+    let mut chars = raw.chars();
+    match (chars.next(), chars.next()) {
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic() => {
+            format!("/mnt/{}{}", drive.to_ascii_lowercase(), chars.as_str().replace('\\', "/"))
+        }
+        _ => raw.replace('\\', "/"),
+    }
+}
+
+fn escape_posix(raw: &str) -> String {
     if raw.is_empty() {
         return String::new();
     }
@@ -1831,7 +1907,7 @@ pub fn shell_escape(path: &std::path::Path) -> String {
     // through unescaped: a backslash in front of one means nothing to the
     // shell, and these are never metacharacters.
     if raw.chars().all(|c| safe(c) || !c.is_ascii()) {
-        return raw.into_owned();
+        return raw.to_string();
     }
     let mut out = String::with_capacity(raw.len() + 8);
     for c in raw.chars() {
@@ -2810,8 +2886,30 @@ mod tests {
 
 #[cfg(test)]
 mod escape_tests {
-    use super::shell_escape;
+    use super::{PathStyle, path_text, shell_escape};
     use std::path::Path;
+
+    /// A file dropped (or pasted) on Windows, typed as what's in the
+    /// terminal reads it: Claude Code (a Windows program) gets the path as
+    /// Windows writes it — `\\`-escaped, as before, it saw a broken path.
+    #[test]
+    fn a_windows_path_is_typed_as_each_terminal_reads_it() {
+        let shot = r"C:\Users\me\Pictures\shot.png";
+        let spaced = r"C:\Users\me\My Pictures\a shot.png";
+        assert_eq!(path_text(shot, PathStyle::WindowsProgram), shot);
+        assert_eq!(path_text(spaced, PathStyle::WindowsProgram), format!("\"{spaced}\""));
+        assert_eq!(path_text(r"D:\a&b\c.png", PathStyle::WindowsProgram), r#""D:\a&b\c.png""#);
+        // Git Bash's prompt: quoted, so bash keeps the backslashes.
+        assert_eq!(path_text(shot, PathStyle::GitBashPrompt), format!("'{shot}'"));
+        assert_eq!(path_text(r"C:\it's.png", PathStyle::GitBashPrompt), r"'C:\it'\''s.png'");
+        // WSL: the Linux view, escaped like any Linux path.
+        assert_eq!(path_text(spaced, PathStyle::Wsl), r"/mnt/c/Users/me/My\ Pictures/a\ shot.png");
+        assert_eq!(path_text(r"\\wsl$\Ubuntu\home\me\a.png", PathStyle::Wsl), "/home/me/a.png");
+        assert_eq!(path_text(r"\\wsl.localhost\Ubuntu\home\me\a.png", PathStyle::Wsl), "/home/me/a.png");
+        // macOS and Linux: as before.
+        assert_eq!(path_text("/a b/c.txt", PathStyle::Posix), r"/a\ b/c.txt");
+        assert_eq!(path_text("", PathStyle::WindowsProgram), "");
+    }
 
     #[test]
     fn a_plain_path_is_left_alone() {

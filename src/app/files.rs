@@ -318,10 +318,11 @@ impl App {
             return;
         }
         if let Some(i) = self.drop_terminal(ctx) {
-            let text = shell_args(&dropped) + " ";
             self.active_terminal = i;
             self.focus = Focus::Terminal;
             if let Some(t) = self.terminals.get_mut(i) {
+                // As what runs there reads it (Git Bash, WSL, a Windows program).
+                let text = t.pane.paths_text(&dropped) + " ";
                 t.pane.paste(&text);
             }
             return;
@@ -366,9 +367,9 @@ impl App {
     /// The clipboard's files as text for where the keyboard is, if it holds files.
     pub fn clipboard_paths(&self) -> Option<String> {
         let files = clipboard_files()?;
-        let shell = self.terminal_focused() && self.palette.is_none();
-        Some(if shell {
-            shell_args(&files)
+        let shell = self.terminal().filter(|_| self.terminal_focused() && self.palette.is_none());
+        Some(if let Some(t) = shell {
+            t.pane.paths_text(&files)
         } else {
             files
                 .iter()
@@ -431,23 +432,19 @@ fn same_file(a: &Path, b: &Path) -> bool {
 }
 
 /// Paths as shell arguments, backslash-escaped like Terminal.app does.
-fn shell_args(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|p| crate::terminalpane::shell_escape(p))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Where the pointer is during a drag from Finder (see `sys::pointer_in_window`).
-#[cfg(all(target_os = "macos", not(test)))]
+/// Where the pointer is during a drag from Finder or Explorer: asked of the
+/// system, as neither sends the window pointer moves mid-drag (see
+/// `sys::pointer_in_window`).
+#[cfg(all(any(target_os = "macos", windows), not(test)))]
 fn drop_pos(ctx: &egui::Context) -> Option<egui::Pos2> {
     let inner = ctx.input(|i| i.viewport().inner_rect)?;
-    crate::sys::pointer_in_window(inner)
+    crate::sys::pointer_in_window(inner, ctx.pixels_per_point())
 }
 
-/// Tests (and other platforms) go by egui's pointer.
-#[cfg(any(not(target_os = "macos"), test))]
+/// Tests (and Linux, where X11 and Wayland don't say) go by egui's pointer.
+// ponytail: on Linux a drop lands where the pointer last was inside the
+// window; asking X11 for the pointer would need its library.
+#[cfg(any(not(any(target_os = "macos", windows)), test))]
 fn drop_pos(ctx: &egui::Context) -> Option<egui::Pos2> {
     ctx.input(|i| i.pointer.latest_pos())
 }
@@ -581,14 +578,6 @@ fn trash(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shell_args_escape_spaces() {
-        assert_eq!(
-            shell_args(&[PathBuf::from("/a b/c.txt"), PathBuf::from("/d")]),
-            "/a\\ b/c.txt /d"
-        );
-    }
 
     #[test]
     fn same_file_sees_through_names() {

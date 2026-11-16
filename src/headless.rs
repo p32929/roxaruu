@@ -4508,6 +4508,7 @@ fn headless_remote_input_in_chrome() {
         let what = format!("at {step}: {first:?}");
         match step {
             "typed" => assert_eq!(first, "Hiéå row 0", "⇧H, ⌥E E, ⌥A, a Backspace {what}"),
+            "typed-while-down" => assert_eq!(first, "Hiéå Zrow 0", "a key typed while the link was down came after {what}"),
             "lines" => {
                 let second = &lines(&h)[1];
                 assert!(second.ends_with("trrr") && second.starts_with(char::is_whitespace), "{second:?}")
