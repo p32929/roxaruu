@@ -36,6 +36,9 @@ pub struct Settings {
     pub word_wrap: bool,
     /// The file tree beside the editor (⌘B).
     pub sidebar: bool,
+    /// A system notification when a terminal's agent finishes or needs you
+    /// while you're in another app (the toast in the window comes anyway).
+    pub notifications: bool,
     /// Earlier builds saved remote access here; it's off at every launch
     /// now. Accepted, so an old file doesn't show an error, and ignored.
     #[serde(rename = "remoteAccess")]
@@ -59,6 +62,7 @@ impl Default for Settings {
             indent_guides: true,
             word_wrap: false,
             sidebar: true,
+            notifications: true,
             old_remote_access: serde::de::IgnoredAny,
         }
     }
@@ -503,7 +507,9 @@ pub(crate) fn settings_template() -> String {
            // \"currentLine\": {},\n  \
            // \"indentGuides\": {},\n  \
            // \"wordWrap\": {},\n  \
-           // \"sidebar\": {},\n\
+           // \"sidebar\": {},\n\n  \
+           // A notification when a terminal's agent finishes or needs you, while you're in another app\n  \
+           // \"notifications\": {},\n\
          }}\n",
         quote(themes.into_iter().map(|t| t.name).collect()),
         d.theme,
@@ -523,6 +529,7 @@ pub(crate) fn settings_template() -> String {
         d.indent_guides,
         d.word_wrap,
         d.sidebar,
+        d.notifications,
     )
 }
 

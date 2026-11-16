@@ -15,6 +15,7 @@ use serde::Deserialize;
 pub enum Command {
     Palette,
     About,
+    OpenNotificationSettings,
     GoToFile,
     OpenFolder,
     RecentFolders,
@@ -140,6 +141,7 @@ commands! {
     Palette, "app.commandPalette", "Command Palette", ["ctrl+shift+p"];
     Help, "app.help", "Help: Keyboard Shortcuts", ["f1"];
     About, "app.about", "About Roxaruu", ["ctrl+alt+shift+i"];
+    OpenNotificationSettings, "app.notificationSettings", "Open Notification Settings", ["ctrl+alt+shift+n"];
     GoToFile, "file.goTo", "Go to File", ["alt+f", "ctrl+p"];
     OpenFolder, "folder.open", "Open Folder", ["ctrl+o"];
     RecentFolders, "folder.recent", "Recent Folders", ["alt+o"];

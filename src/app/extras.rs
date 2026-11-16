@@ -2,7 +2,7 @@
 //! Settings and Keyboard Shortcuts screens, and knowing which folders other
 //! windows have open.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -49,10 +49,11 @@ pub enum Setting {
     CurrentLine,
     IndentGuides,
     Sidebar,
+    Notifications,
 }
 
 impl Setting {
-    pub const ALL: [Setting; 11] = [
+    pub const ALL: [Setting; 12] = [
         Setting::Theme,
         Setting::UiFont,
         Setting::CodeFont,
@@ -64,6 +65,7 @@ impl Setting {
         Setting::CurrentLine,
         Setting::IndentGuides,
         Setting::Sidebar,
+        Setting::Notifications,
     ];
 
     /// Its key in `settings.json`.
@@ -80,6 +82,7 @@ impl Setting {
             Setting::CurrentLine => "currentLine",
             Setting::IndentGuides => "indentGuides",
             Setting::Sidebar => "sidebar",
+            Setting::Notifications => "notifications",
         }
     }
 
@@ -96,6 +99,7 @@ impl Setting {
             Setting::CurrentLine => "Highlight the current line",
             Setting::IndentGuides => "Indent guides",
             Setting::Sidebar => "Show file tree",
+            Setting::Notifications => "Notify when an agent finishes",
         }
     }
 
@@ -110,6 +114,7 @@ impl Setting {
             Setting::WordWrap => icon::WRAP,
             Setting::CurrentLine | Setting::IndentGuides => icon::EDIT,
             Setting::Sidebar => icon::SIDEBAR,
+            Setting::Notifications => icon::BELL,
         }
     }
 }
@@ -120,6 +125,7 @@ impl App {
     /// the key to get there, and a bell on the terminal's tab.
     pub(crate) fn poll_attention(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering::Relaxed;
+        self.heard_permission_to_notify();
         let focused = ctx.input(|i| i.focused);
         // Whether you're at this window is the window's own say: a browser's
         // copy always counts itself focused, and while one was open it kept
@@ -127,6 +133,7 @@ impl App {
         let own = !self.remote_pass;
         if own {
             crate::terminalpane::APP_FOCUSED.store(focused, Relaxed);
+            crate::terminalpane::NOTIFY.store(self.config.settings.notifications, Relaxed);
         }
         for i in 0..self.terminals.len() {
             let shown = self.terminal_open && (self.terminal_grid || i == self.active_terminal);
@@ -458,6 +465,7 @@ impl App {
             Setting::CurrentLine => on(st.current_line),
             Setting::IndentGuides => on(st.indent_guides),
             Setting::Sidebar => on(st.sidebar),
+            Setting::Notifications => on(st.notifications),
         }
     }
 
@@ -507,9 +515,86 @@ impl App {
             Setting::CurrentLine => (!st.current_line).into(),
             Setting::IndentGuides => (!st.indent_guides).into(),
             Setting::Sidebar => (!st.sidebar).into(),
+            Setting::Notifications => (!st.notifications).into(),
         };
+        // Turned on: the system may want to be asked (macOS's prompt).
+        let ask = s == Setting::Notifications && value == serde_json::Value::Bool(true);
         self.save_choice_quietly(s.key(), value, ctx);
         self.refresh_items();
+        if ask {
+            self.ask_permission_to_notify(ctx);
+        }
+    }
+
+    /// Once per install (forgotten by `uninstall.sh`): a new window asks
+    /// whether to notify you (not on a server's virtual screen).
+    pub fn offer_notifications(&mut self) {
+        if self.ask.is_none() && !notifications_asked_file().is_some_and(|f| f.exists()) {
+            self.ask = Some(crate::app::Ask::Notifications);
+        }
+    }
+
+    /// The first-run dialog answered: turn on (and ask the system), or off.
+    pub fn answer_notifications(&mut self, on: bool, ctx: &egui::Context) {
+        if let Some(f) = notifications_asked_file() {
+            let _ = f.parent().map(std::fs::create_dir_all);
+            if let Err(e) = std::fs::write(&f, if on { "on\n" } else { "off\n" }) {
+                tracing::warn!(error = %e, "couldn't note that notifications were asked about");
+            }
+        }
+        self.save_choice_quietly(Setting::Notifications.key(), serde_json::Value::Bool(on), ctx);
+        if on {
+            self.ask_permission_to_notify(ctx);
+        }
+    }
+
+    /// Ask the system to let Roxaruu notify; its answer comes back to
+    /// `poll_attention` (maybe from another thread).
+    fn ask_permission_to_notify(&mut self, ctx: &egui::Context) {
+        let (slot, ctx) = (self.notify_answer.clone(), ctx.clone());
+        crate::sys::ask_to_notify(Box::new(move |answer| {
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(answer);
+            ctx.request_repaint();
+        }));
+    }
+
+    /// The system's own settings for Roxaruu's notifications (macOS: its
+    /// page under Notifications, which links to Focus; Windows: Notifications).
+    pub fn open_notification_settings(&mut self) {
+        let opened = if cfg!(target_os = "macos") {
+            super::files::os_open(&["x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.p32929.roxaruu".as_ref()])
+        } else if cfg!(windows) {
+            super::files::os_open(&["ms-settings:notifications".as_ref()])
+        } else {
+            std::process::Command::new("gnome-control-center").arg("notifications").spawn().is_ok()
+        };
+        if !opened {
+            self.warn("Couldn't open the notification settings: open them from your system's settings");
+        }
+    }
+
+    /// The system's answer: say what it means, and show one to prove it.
+    fn heard_permission_to_notify(&mut self) {
+        use crate::sys::NotifyPermission;
+        let answer = self.notify_answer.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let mac = cfg!(target_os = "macos");
+        let msg = match answer {
+            None => return,
+            Some(NotifyPermission::Denied) => {
+                return self.warn(
+                    "Notifications for Roxaruu are off in System Settings › Notifications › Roxaruu: turn them on there",
+                );
+            }
+            Some(NotifyPermission::Own) if mac => {
+                "Notifications are on. Using a Focus? Allow Roxaruu in System Settings › Focus"
+            }
+            Some(NotifyPermission::Own) => "Notifications are on",
+            Some(NotifyPermission::Borrowed(_)) => {
+                "Notifications are on. macOS shows them as Script Editor's: using a Focus? Allow Script Editor in it"
+            }
+        };
+        self.notify(msg);
+        crate::sys::notify("Roxaruu", "Notifications are on: you'll hear when an agent finishes or needs you.");
     }
 
     /// Enter on a setting: themes and fonts open their (previewing) picker;
@@ -675,6 +760,12 @@ fn preview(text: &str) -> String {
         Some((at, _)) => format!("{}…", &squeezed[..at]),
         None => squeezed,
     }
+}
+
+/// Whether this install was asked about notifications: a file in the app's
+/// state folder, which `uninstall.sh` removes (so a reinstall asks again).
+fn notifications_asked_file() -> Option<PathBuf> {
+    crate::config::state_dir().map(|d| d.join("notifications-asked"))
 }
 
 #[cfg(test)]

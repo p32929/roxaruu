@@ -298,6 +298,7 @@ pub mod icon {
             Command::Keybindings | Command::OpenKeybindings => KEYBOARD,
             Command::Help => QUESTION,
             Command::About => INFO,
+            Command::OpenNotificationSettings => BELL,
             Command::Todos => TASKS,
             Command::ClipboardHistory => CLIPBOARD,
             Command::Save => SAVE,
@@ -1683,6 +1684,21 @@ impl App {
                 let draw = |ui: &mut egui::Ui| pt.about(ui, app_icon, &clicked);
                 self.modal(ctx, "", "", "", KEYS, None, None, Some(&draw)).or(clicked.get())
             }
+            Ask::Notifications => self.modal(
+                ctx,
+                icon::BELL,
+                "Get notified when an agent needs you?",
+                "When Claude Code (or another agent) in one of your terminals finishes, or asks you \
+                 something, while you're in another app, Roxaruu can show a notification. You can \
+                 change this any time in Settings.",
+                &[
+                    Btn { label: "Not Now", hint: "esc", keys: &[Key::Escape], primary: false },
+                    ok("Turn On"),
+                ],
+                None,
+                None,
+                None,
+            ),
             Ask::OpenUrl(url) => {
                 let body = url.clone();
                 self.modal(
@@ -1710,6 +1726,11 @@ impl App {
                 }
             }
             Some(i) if matches!(self.ask, Some(crate::app::Ask::RemoteHere { .. })) => self.answer_ask(i == 2, ctx),
+            // Not Now is an answer too: notifications off, and not asked again.
+            Some(i) if matches!(self.ask, Some(crate::app::Ask::Notifications)) => {
+                self.ask = None;
+                self.answer_notifications(i == 1, ctx);
+            }
             // Portfolio (GitHub is "yes").
             Some(1) if matches!(self.ask, Some(crate::app::Ask::About)) => {
                 self.ask = None;
@@ -3562,6 +3583,7 @@ impl App {
                 (Command::SelectAll, "Select All", true),
                 (Command::OpenTerminalLink, "Open a Link…", true),
             ],
+            vec![(Command::OpenNotificationSettings, "Notification Settings…", true)],
             vec![
                 (Command::ClearTerminal, "Clear", true),
                 (Command::MaximizeTerminal, "Maximize / Restore", true),
@@ -4078,9 +4100,21 @@ impl App {
                     .map(|k| format!(" · {k} for all"))
                     .unwrap_or_default();
                 let drag = if labels.len() > 1 { " · drag to move" } else { "" };
+                // How its notification went, and the way to its settings.
+                let notified = self.terminals.get(i).and_then(|t| t.pane.notified.as_ref()).map_or(String::new(), |(at, d)| {
+                    let ago = match at.elapsed().as_secs() / 60 {
+                        0 => "just now".to_string(),
+                        1 => "a minute ago".to_string(),
+                        m => format!("{m} minutes ago"),
+                    };
+                    let settings = key(Command::OpenNotificationSettings)
+                        .map(|k| format!("\n{k} notification settings"))
+                        .unwrap_or_default();
+                    format!("\n\nNotification, {ago}: {}{settings}", d.note)
+                });
                 match jump {
-                    Some(k) => format!("{label} · {status}\n{k} to jump here{all}{drag}"),
-                    None => format!("{label} · {status}{drag}"),
+                    Some(k) => format!("{label} · {status}\n{k} to jump here{all}{drag}{notified}"),
+                    None => format!("{label} · {status}{drag}{notified}"),
                 }
             };
             let resp = if dragged.is_some() { resp } else { resp.on_hover_text(tip) };
@@ -4126,7 +4160,10 @@ impl App {
                     12.0,
                 )
             } else if t.pane.attention {
-                (icon::BELL, c.accent, 12.0)
+                // Red when its notification wasn't sent or likely wasn't
+                // seen (hover says why and what to do).
+                let trouble = t.pane.notified.as_ref().is_some_and(|(_, d)| d.trouble);
+                (icon::BELL, if trouble { c.error } else { c.accent }, 12.0)
             } else if pulse == Some(Pulse::Printing) {
                 // A slow breath between faint and full. Its output already
                 // wakes the window (5 times a second at most) while it's on

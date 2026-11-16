@@ -216,6 +216,9 @@ pub struct App {
     pub conflict: Option<PathBuf>,
     /// A file dialog (new / rename / delete) or "open this link?".
     pub ask: Option<Ask>,
+    /// The system's answer to "may Roxaruu notify?", from whichever thread
+    /// it came on (`poll_attention` takes it).
+    pub(crate) notify_answer: std::sync::Arc<std::sync::Mutex<Option<crate::sys::NotifyPermission>>>,
     last_file_check: Instant,
     /// Looks at the open files on disk so far (tests wait for the next one).
     pub(crate) file_checks: u64,
@@ -290,6 +293,7 @@ impl App {
             modal_since: std::cell::Cell::new(None),
             conflict: None,
             ask: None,
+            notify_answer: Default::default(),
             last_file_check: Instant::now(),
             file_checks: 0,
             allow_close: false,
@@ -788,6 +792,7 @@ impl App {
             Command::ClipboardHistory => self.open_palette(Mode::Clipboard, ctx),
             Command::Help => self.help = !self.help,
             Command::About => self.ask = Some(Ask::About),
+            Command::OpenNotificationSettings => self.open_notification_settings(),
             Command::OpenProjectSettings => self.open_project_settings(ctx),
             // The config files open right here; saving applies them.
             Command::OpenSettings | Command::OpenKeybindings => {

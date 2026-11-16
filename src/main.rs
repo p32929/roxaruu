@@ -245,6 +245,12 @@ fn main() -> eframe::Result {
             let mut root = Root::new(app::App::new(&cc.egui_ctx, target));
             root.2 = virtual_screen.then_some(false);
             root.1.virtual_screen = virtual_screen;
+            // Once per install, on a real screen opened by you (not a
+            // server's, not for remote access): notify you?
+            sys::check_notifications();
+            if !virtual_screen && password.is_none() {
+                root.0.offer_notifications();
+            }
             if let Some(password) = password {
                 root.0.remote_want = Some(remote::Want::On(password, false));
             }

@@ -1,6 +1,6 @@
 [package]
 name = "roxaruu"
-version = "0.2.52"
+version = "0.2.53"
 edition = "2024"
 description = "A keyboard-first code editor with terminals built in, for macOS, Windows, Linux and any browser"
 repository = "https://github.com/p32929/roxaruu"
@@ -71,8 +71,12 @@ dunce = "1.0.5"
 # Where the pointer is when Finder drops a file (winit doesn't say), and
 # holding off App Nap.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSProcessInfo", "NSString"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSError", "NSGeometry", "NSProcessInfo", "NSString"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSScreen"] }
+# Notifications as Roxaruu's own (its name, its icon, allowed in a Focus),
+# not osascript's (Script Editor's).
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger", "UNUserNotificationCenter"] }
+block2 = "0.6"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 notify-rust = "4.19.0"
@@ -80,7 +84,7 @@ opener = { version = "0.9.0", features = ["reveal"] }
 sysinfo = "0.40.1"
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Foundation"] }
 
 # Nothing that ships may panic: every error is handled. (Tests may: a test
 # that fails says so; clippy.toml lets them.)

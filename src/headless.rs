@@ -1680,6 +1680,75 @@ fn headless_status_hint_click_opens_palette() {
     assert!(app(&h).palette.is_none());
 }
 
+/// Once per install, a new window asks whether to notify you: Turn On asks
+/// the system and shows one to prove it (what it says depends on macOS's
+/// answer); Not Now turns them off; either way it isn't asked again. Turned
+/// on later in Settings, the system is asked again.
+#[test]
+#[ignore]
+fn headless_notifications_first_run() {
+    use crate::app::Ask;
+    use crate::sys::NotifyPermission;
+    let asked = dirs::config_dir().unwrap().join("roxaruu/notifications-asked");
+    let _ = std::fs::remove_file(&asked);
+    let toast = |h: &Harness<'static, Root>| app(h).toasts.last().map(|t| (t.msg.clone(), t.error));
+    let proofs = || crate::sys::NOTIFIED.lock().unwrap().iter().filter(|(_, b)| b.starts_with("Notifications are on")).count();
+    let first_run = |answer: NotifyPermission, key: Key| {
+        *crate::sys::PERMISSION_ANSWER.lock().unwrap() = answer;
+        let _ = std::fs::remove_file(&asked);
+        let mut h = harness(None);
+        h.run();
+        h.state_mut().0.offer_notifications();
+        h.step();
+        assert!(matches!(app(&h).ask, Some(Ask::Notifications)), "asked on a first run");
+        shot(&mut h, "notifications-ask");
+        press(&mut h, Modifiers::NONE, key);
+        h.step();
+        assert!(app(&h).ask.is_none());
+        h
+    };
+
+    // Turn On, macOS says yes: on, remembered, and one shown.
+    let before = proofs();
+    let mut h = first_run(NotifyPermission::Own, Key::Enter);
+    shot(&mut h, "notifications-on");
+    assert!(app(&h).config.settings.notifications);
+    assert_eq!(std::fs::read_to_string(&asked).unwrap(), "on\n");
+    assert_eq!(proofs(), before + 1, "a notification proves it");
+    let (msg, error) = toast(&h).unwrap();
+    assert!(msg.starts_with("Notifications are on") && !error, "{msg}");
+    // Answered: not asked again.
+    let mut h = harness(None);
+    h.state_mut().0.offer_notifications();
+    assert!(app(&h).ask.is_none(), "asked once per install");
+    h.step();
+
+    // macOS turned them off for Roxaruu: where to turn them on.
+    let h = first_run(NotifyPermission::Denied, Key::Enter);
+    let (msg, error) = toast(&h).unwrap();
+    assert!(error && msg.contains("System Settings › Notifications › Roxaruu"), "{msg}");
+    // Not Roxaruu's own: they show as Script Editor's, and a Focus must allow that.
+    let h = first_run(NotifyPermission::Borrowed("no".into()), Key::Enter);
+    assert!(toast(&h).unwrap().0.contains("Script Editor"));
+
+    // Not Now: off, and not asked again either.
+    let before = proofs();
+    let mut h = first_run(NotifyPermission::Own, Key::Escape);
+    assert!(!app(&h).config.settings.notifications);
+    assert_eq!(std::fs::read_to_string(&asked).unwrap(), "off\n");
+    assert_eq!(proofs(), before, "nothing shown");
+    assert!(!crate::terminalpane::NOTIFY.load(std::sync::atomic::Ordering::Relaxed), "the watchers stop notifying");
+
+    // On again from Settings: the system is asked (and one shown).
+    let ctx = h.ctx.clone();
+    h.state_mut().0.change_setting(crate::app::Setting::Notifications, 1, &ctx);
+    h.step();
+    assert!(app(&h).config.settings.notifications);
+    assert_eq!(proofs(), before + 1);
+    assert!(crate::terminalpane::NOTIFY.load(std::sync::atomic::Ordering::Relaxed));
+    *crate::sys::PERMISSION_ANSWER.lock().unwrap() = NotifyPermission::Own;
+}
+
 /// An empty folder's tree says so under its search box, not on top of it.
 #[test]
 #[ignore]
@@ -2239,10 +2308,23 @@ fn headless_agent_alerts() {
     press(&mut h, ALT, Key::T);
     h.input_mut().focused = false;
     h.step();
+    // The system holds it back (Do Not Disturb, say): the tab says so.
+    let held = crate::sys::Delivery::held_back("Sent, but Do Not Disturb is on.");
+    *crate::sys::DELIVERY.lock().unwrap() = Some(held.clone());
     while !notified("wants your attention") {
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    *crate::sys::DELIVERY.lock().unwrap() = None;
+    while app(&h).terminals[0].pane.notified.is_none() {
+        h.step();
+    }
+    assert_eq!(app(&h).terminals[0].pane.notified.as_ref().map(|(_, d)| d), Some(&held), "the tab knows how it went");
+    // Its key opens the system's notification settings, for Roxaruu.
+    crate::app::App::take_launched();
+    press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::N);
+    let opened = crate::app::App::take_launched();
+    assert!(opened.iter().flatten().any(|a| a.contains("com.p32929.roxaruu") || a.contains("notifications")), "{opened:?}");
     let title = crate::sys::NOTIFIED
         .lock()
         .unwrap()
@@ -2257,6 +2339,7 @@ fn headless_agent_alerts() {
 
     // An agent that worked, then went quiet without a word.
     press(&mut h, ALT, Key::T);
+    assert!(app(&h).terminals[0].pane.notified.is_none(), "looked at: how it went is cleared with the bell");
     run(
         &mut h,
         "./claude -c 'for i in $(seq 1 8); do echo working $i; sleep 0.25; done; sleep 30; true'",
@@ -5047,7 +5130,7 @@ fn headless_every_key_that_applies_shows() {
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
         OpenProjectSettings, OpenConfigFolder, Todos, ClipboardHistory, ZoomIn, ZoomOut, ResetZoom, FullScreen,
         MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
-        ToggleTerminal, Palette, SearchInFiles, SwitchFocus, About,
+        ToggleTerminal, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings,
         // A tab's or the tree's right-click menu.
         RenameFile, RevealInFinder, OpenInTerminal, CopyPath, CopyRelativePath,
         // On each tab's tooltip (⌘1–8); ⌘9 is "the last".

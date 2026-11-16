@@ -191,6 +191,9 @@ const AGENTS: &[&str] = &[
 /// it doesn't, alerts also go to the OS as notifications.
 pub static APP_FOCUSED: AtomicBool = AtomicBool::new(true);
 
+/// The `notifications` setting, for the watchers (the window sets it).
+pub static NOTIFY: AtomicBool = AtomicBool::new(true);
+
 /// A terminal's alert state, shared with its watcher thread. The watcher
 /// runs off the UI loop on purpose: macOS stops giving a hidden window
 /// frames, and that's exactly when the user needs telling.
@@ -204,6 +207,8 @@ pub struct Watch {
     name: Mutex<String>,
     /// Alerts the UI hasn't shown yet.
     fired: Mutex<Vec<String>>,
+    /// How the last notification went (the UI takes it with the alert).
+    notified: Mutex<Option<crate::sys::Delivery>>,
     /// This terminal's inbox for what Claude Code's hooks say
     /// (`roxaruu-hook`, through `ROXARUU_TERM`).
     inbox: Mutex<Option<PathBuf>>,
@@ -277,9 +282,19 @@ fn watch(
             .into_iter()
             .rfind(|m| !m.is_empty())
             .unwrap_or_else(|| "wants your attention".into());
+        // Away: a notification (or why not), for the tab to say on hover.
         if away {
-            let name = w.name.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            crate::sys::notify(&format!("Roxaruu · {name}"), &message);
+            let delivery = if NOTIFY.load(Ordering::Relaxed) {
+                let name = w.name.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                crate::sys::notify(&format!("Roxaruu · {name}"), &message)
+            } else {
+                crate::sys::Delivery {
+                    sent: false,
+                    trouble: false,
+                    note: "Not sent: notifications are off in Roxaruu's Settings.".into(),
+                }
+            };
+            *w.notified.lock().unwrap_or_else(|e| e.into_inner()) = Some(delivery);
         }
         w.fired
             .lock()
@@ -330,6 +345,9 @@ pub struct TerminalPane {
     /// A program here asked for the user (bell, notification, an agent
     /// gone quiet) while nobody was looking; cleared by [`Self::mark_viewed`].
     pub attention: bool,
+    /// How the notification for this terminal's last alert went, and when;
+    /// gone once you've looked at it.
+    pub notified: Option<(Instant, crate::sys::Delivery)>,
     /// Bytes the reader thread has parsed since the last [`pump`] — lets the UI
     /// know a redraw is warranted without re-draining anything itself.
     pending: Arc<AtomicU64>,
@@ -506,6 +524,7 @@ impl TerminalPane {
     pub fn mark_viewed(&mut self) {
         self.finished_unseen = false;
         self.attention = false;
+        self.notified = None;
     }
 
     /// Alerts the watcher raised since the last call; marks the tab.
@@ -513,6 +532,9 @@ impl TerminalPane {
         let fired =
             std::mem::take(&mut *self.watch.fired.lock().unwrap_or_else(|e| e.into_inner()));
         self.attention |= !fired.is_empty();
+        if let Some(d) = self.watch.notified.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            self.notified = Some((Instant::now(), d));
+        }
         fired
     }
 
@@ -724,6 +746,7 @@ impl TerminalPane {
             activity,
             watch,
             attention: false,
+            notified: None,
             pending,
             newlines,
             view: Vec::new(),

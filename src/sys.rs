@@ -349,28 +349,226 @@ pub fn quit_closes_the_window() {
 #[cfg(not(target_os = "macos"))]
 pub fn quit_closes_the_window() {}
 
-/// A desktop notification. `osascript` needs no app bundle or permission
-/// entitlement, so it works for the bare binary too.
-// ponytail: clicking it opens Script Editor, not Roxaruu; UNUserNotificationCenter
-// fixes that but only works from a signed .app bundle.
-#[cfg(all(target_os = "macos", not(test)))]
-pub fn notify(title: &str, body: &str) {
-    let spawned = std::process::Command::new("osascript")
-        .args([
-            "-e",
-            "on run argv",
-            "-e",
-            "display notification (item 2 of argv) with title (item 1 of argv) sound name \"Glass\"",
-            "-e",
-            "end run",
-            title,
-            body,
-        ])
-        .spawn();
-    if let Ok(mut child) = spawned {
-        std::thread::spawn(move || child.wait());
+/// How a notification went, for the terminal's tab to say on hover: sent or
+/// not, whether something is likely keeping it out of sight (`trouble`),
+/// and what to do about it. Only what the system lets an app see for free:
+/// macOS doesn't tell an app whether a Focus is on, so there it's a hint.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Delivery {
+    pub sent: bool,
+    pub trouble: bool,
+    pub note: String,
+}
+
+impl Delivery {
+    pub fn sent(note: impl Into<String>) -> Self {
+        Self { sent: true, trouble: false, note: note.into() }
+    }
+    pub fn held_back(note: impl Into<String>) -> Self {
+        Self { sent: true, trouble: true, note: note.into() }
+    }
+    // Only macOS can say it won't send one (Roxaruu's turned off there).
+    #[cfg_attr(any(not(target_os = "macos"), test), allow(dead_code))]
+    pub fn not_sent(note: impl Into<String>) -> Self {
+        Self { sent: false, trouble: true, note: note.into() }
     }
 }
+
+/// What the system says about Roxaruu showing notifications. (Only macOS
+/// ever says anything but yes.)
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(all(not(target_os = "macos"), not(test)), allow(dead_code))]
+pub enum NotifyPermission {
+    /// Roxaruu's own: its name and icon, and you can let it through a Focus.
+    Own,
+    /// Turned off for Roxaruu in the system's settings.
+    Denied,
+    /// Not Roxaruu's own (not the installed app, or macOS refused it):
+    /// macOS shows them as Script Editor's, through `osascript`.
+    Borrowed(String),
+}
+
+/// macOS: Roxaruu's own notifications (UserNotifications), when this is the
+/// installed app and macOS allows them; else `osascript`'s, which needs
+/// nothing but shows as Script Editor's (its name, and a Focus has to
+/// allow Script Editor). Every one is logged, with how it went.
+#[cfg(all(target_os = "macos", not(test)))]
+mod mac_notes {
+    use super::NotifyPermission;
+    use block2::RcBlock;
+    use objc2::runtime::Bool;
+    use objc2_foundation::{NSBundle, NSError, NSString};
+    use super::Delivery;
+    use objc2_user_notifications::{
+        UNAlertStyle, UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent,
+        UNNotificationRequest, UNNotificationSettings, UNNotificationSound, UNUserNotificationCenter,
+    };
+    use std::ptr::NonNull;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    /// Whether macOS lets Roxaruu show its own (asked at start, on Turn On,
+    /// and again after each one, as you may change it meanwhile).
+    static OWN: AtomicBool = AtomicBool::new(false);
+    /// Turned off for Roxaruu in System Settings.
+    static DENIED: AtomicBool = AtomicBool::new(false);
+    /// Allowed, but set to show no banner (straight to Notification Center).
+    static NO_BANNERS: AtomicBool = AtomicBool::new(false);
+
+    /// Running as Roxaruu.app: the notification center exists only for an app
+    /// bundle (asking for it from a bare binary throws, which aborts).
+    fn bundled() -> bool {
+        let bundle = NSBundle::mainBundle();
+        bundle.bundleIdentifier().is_some_and(|id| id.to_string() == "com.p32929.roxaruu")
+            && bundle.bundlePath().to_string().ends_with(".app")
+    }
+
+    fn center() -> Option<objc2::rc::Retained<UNUserNotificationCenter>> {
+        bundled().then(UNUserNotificationCenter::currentNotificationCenter)
+    }
+
+    /// At start: whether Roxaruu's own are already allowed (asks nothing).
+    pub fn check() {
+        let Some(center) = center() else { return };
+        let block = RcBlock::new(|settings: NonNull<UNNotificationSettings>| {
+            // Safety: macOS hands the block a valid settings object.
+            let settings = unsafe { settings.as_ref() };
+            let status = settings.authorizationStatus();
+            let own = status == UNAuthorizationStatus::Authorized || status == UNAuthorizationStatus::Provisional;
+            let no_banners = own && settings.alertStyle() == UNAlertStyle::None;
+            OWN.store(own, Ordering::Relaxed);
+            DENIED.store(status == UNAuthorizationStatus::Denied, Ordering::Relaxed);
+            NO_BANNERS.store(no_banners, Ordering::Relaxed);
+            tracing::debug!(own, no_banners, status = status.0, "notifications: what macOS allows Roxaruu");
+        });
+        center.getNotificationSettingsWithCompletionHandler(&block);
+    }
+
+    /// Ask macOS (its prompt, the first time); `done` hears on another thread.
+    pub fn ask(done: Box<dyn FnOnce(NotifyPermission) + Send>) {
+        let Some(center) = center() else {
+            tracing::info!("notifications: not the installed app, so osascript's");
+            return done(NotifyPermission::Borrowed("not running as the installed Roxaruu.app".into()));
+        };
+        let done = std::sync::Mutex::new(Some(done));
+        let block = RcBlock::new(move |granted: Bool, error: *mut NSError| {
+            // Safety: null, or an NSError macOS keeps alive for the call.
+            let error = unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string());
+            let answer = match (granted.as_bool(), error) {
+                (true, _) => NotifyPermission::Own,
+                (false, None) => NotifyPermission::Denied,
+                (false, Some(e)) => NotifyPermission::Borrowed(e),
+            };
+            OWN.store(answer == NotifyPermission::Own, Ordering::Relaxed);
+            tracing::info!(?answer, "notifications: macOS answered");
+            if let Some(done) = done.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                done(answer);
+            }
+        });
+        center.requestAuthorizationWithOptions_completionHandler(
+            UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+            &block,
+        );
+    }
+
+    pub fn notify(title: &str, body: &str) -> Delivery {
+        // Turned off for Roxaruu: respect it (not around it, as Script Editor's).
+        if DENIED.load(Ordering::Relaxed) && bundled() {
+            tracing::info!("notification not sent: off for Roxaruu in System Settings");
+            return Delivery::not_sent(
+                "Not sent: notifications for Roxaruu are off in System Settings › Notifications › Roxaruu.",
+            );
+        }
+        let delivery = send(title, body);
+        check(); // what macOS allows, fresh for the next one
+        delivery
+    }
+
+    fn send(title: &str, body: &str) -> Delivery {
+        if OWN.load(Ordering::Relaxed)
+            && let Some(center) = center()
+        {
+            static N: AtomicU64 = AtomicU64::new(0);
+            let content = UNMutableNotificationContent::new();
+            content.setTitle(&NSString::from_str(title));
+            content.setBody(&NSString::from_str(body));
+            content.setSound(Some(&UNNotificationSound::defaultSound()));
+            let id = format!("roxaruu-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
+            let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&id), &content, None);
+            let block = RcBlock::new(|error: *mut NSError| {
+                // Safety: null, or an NSError macOS keeps alive for the call.
+                match unsafe { error.as_ref() } {
+                    None => tracing::debug!("notification shown (Roxaruu's own)"),
+                    Some(e) => tracing::warn!(error = %e.localizedDescription(), "macOS refused a notification"),
+                }
+            });
+            center.addNotificationRequest_withCompletionHandler(&request, Some(&block));
+            return if NO_BANNERS.load(Ordering::Relaxed) {
+                Delivery::held_back(
+                    "Sent, but Roxaruu's notifications are set to show no banner (System Settings › \
+                     Notifications › Roxaruu), so it went quietly to Notification Center.",
+                )
+            } else {
+                Delivery::sent(
+                    "Sent. Didn't see it? A Focus or Do Not Disturb may have hidden it: allow Roxaruu in \
+                     System Settings › Focus › (your Focus) › Allowed Apps.",
+                )
+            };
+        }
+        let spawned = std::process::Command::new("osascript")
+            .args([
+                "-e",
+                "on run argv",
+                "-e",
+                "display notification (item 2 of argv) with title (item 1 of argv) sound name \"Glass\"",
+                "-e",
+                "end run",
+                title,
+                body,
+            ])
+            .spawn();
+        match spawned {
+            Ok(mut child) => {
+                tracing::debug!("notification shown (osascript's: Script Editor's)");
+                std::thread::spawn(move || child.wait());
+                Delivery::sent(
+                    "Sent as Script Editor's notification (macOS didn't let Roxaruu use its own). Didn't \
+                     see it? A Focus may have hidden it: allow Script Editor in System Settings › Focus › \
+                     (your Focus) › Allowed Apps.",
+                )
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "couldn't run osascript for a notification");
+                Delivery::not_sent(format!("Not sent: macOS's osascript couldn't run ({e})."))
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "macos", not(test)))]
+pub use mac_notes::notify;
+
+/// At start: whether Roxaruu may show its own notifications (asks nothing).
+pub fn check_notifications() {
+    #[cfg(all(target_os = "macos", not(test)))]
+    mac_notes::check();
+}
+
+/// Turning notifications on: ask the system where it asks (macOS shows its
+/// prompt the first time); `done` hears the answer, maybe on another thread.
+pub fn ask_to_notify(done: Box<dyn FnOnce(NotifyPermission) + Send>) {
+    #[cfg(all(target_os = "macos", not(test)))]
+    mac_notes::ask(done);
+    // Windows and Linux don't ask an app first.
+    #[cfg(all(not(target_os = "macos"), not(test)))]
+    done(NotifyPermission::Own);
+    // Tests hear what `PERMISSION_ANSWER` says (yes, unless a test says otherwise).
+    #[cfg(test)]
+    done(PERMISSION_ANSWER.lock().unwrap_or_else(|e| e.into_inner()).clone());
+}
+
+/// What the "system" answers a test that turns notifications on.
+#[cfg(test)]
+pub static PERMISSION_ANSWER: std::sync::Mutex<NotifyPermission> = std::sync::Mutex::new(NotifyPermission::Own);
 
 /// A message that waits to be read, for when there's no window of ours to
 /// show it in (it couldn't open): the system's own alert, and stderr.
@@ -422,24 +620,76 @@ pub fn thread_cpu() -> std::time::Duration {
 pub static NOTIFIED: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-pub fn notify(title: &str, body: &str) {
+pub fn notify(title: &str, body: &str) -> Delivery {
     NOTIFIED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .push((title.into(), body.into()));
+    DELIVERY.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_else(|| Delivery::sent("Sent."))
 }
+
+/// How the "system" says a test's notification went (sent, unless set).
+#[cfg(test)]
+pub static DELIVERY: std::sync::Mutex<Option<Delivery>> = std::sync::Mutex::new(None);
 
 /// Off macOS: the desktop's own notifications (Windows' toasts, Linux's
 /// notification service), with a sound, off the caller's thread.
 #[cfg(all(not(target_os = "macos"), not(test)))]
-pub fn notify(title: &str, body: &str) {
+pub fn notify(title: &str, body: &str) -> Delivery {
+    let delivery = match held_back_by() {
+        Some(why) => Delivery::held_back(why),
+        None if cfg!(windows) => Delivery::sent(
+            "Sent. Didn't see it? Windows' Do Not Disturb (Focus Assist) may have hidden it: \
+             Settings › System › Notifications.",
+        ),
+        None => Delivery::sent("Sent. Didn't see it? Your desktop's Do Not Disturb may have hidden it."),
+    };
     let (title, body) = (title.to_string(), body.to_string());
     std::thread::spawn(move || {
         let sound = if cfg!(windows) { "Default" } else { "message-new-instant" };
-        if let Err(e) = notify_rust::Notification::new().summary(&title).body(&body).sound_name(sound).show() {
-            tracing::warn!(error = %e, "couldn't show a notification");
+        match notify_rust::Notification::new().summary(&title).body(&body).sound_name(sound).show() {
+            Ok(_) => tracing::debug!("notification shown"),
+            Err(e) => tracing::warn!(error = %e, "couldn't show a notification"),
         }
     });
+    delivery
+}
+
+/// Windows: what it says about taking notifications now (Do Not Disturb /
+/// Focus Assist's quiet hours, a presentation, a full-screen game).
+///
+/// Safety: `SHQueryUserNotificationState` writes one value into a local.
+#[cfg(all(windows, not(test)))]
+fn held_back_by() -> Option<String> {
+    use windows_sys::Win32::UI::Shell::{
+        QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_QUIET_TIME, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
+    };
+    let mut state = 0;
+    #[allow(unsafe_code)]
+    if unsafe { SHQueryUserNotificationState(&mut state) } != 0 {
+        return None;
+    }
+    let why = match state {
+        QUNS_QUIET_TIME => "Do Not Disturb (Focus Assist) is on",
+        QUNS_PRESENTATION_MODE => "a presentation is on",
+        QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN => "a full-screen app is in front",
+        _ => return None,
+    };
+    tracing::info!(why, "Windows is holding notifications back");
+    Some(format!("Sent, but Windows is holding notifications back: {why}."))
+}
+
+/// Linux (GNOME): Do Not Disturb is on when banners are off.
+#[cfg(all(not(target_os = "macos"), not(windows), not(test)))]
+fn held_back_by() -> Option<String> {
+    let out = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.notifications", "show-banners"])
+        .output()
+        .ok()?;
+    (String::from_utf8_lossy(&out.stdout).trim() == "false").then(|| {
+        tracing::info!("GNOME's Do Not Disturb is on");
+        "Sent, but Do Not Disturb is on, so it won't pop up.".to_string()
+    })
 }
 
 /// Whether this app is the one in front, asked of macOS (any thread): the

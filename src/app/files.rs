@@ -31,6 +31,8 @@ pub enum Ask {
     NeedShell,
     /// What this is: name, version, where it lives, who made it.
     About,
+    /// Once per install: notify you when an agent finishes or needs you?
+    Notifications,
 }
 
 /// Where Git for Windows (and its Git Bash) comes from.
@@ -155,6 +157,10 @@ impl App {
             }
             Ask::NeedShell => {
                 self.open_url(GIT_FOR_WINDOWS.into(), ctx);
+                Ok(())
+            }
+            Ask::Notifications => {
+                self.answer_notifications(true, ctx);
                 Ok(())
             }
             // ↵ is "GitHub"; "Portfolio" answers apart (`ui`).
