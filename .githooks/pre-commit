@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Every commit bumps the patch version (x.y.z → x.y.z+1) in Cargo.toml and
+# Cargo.lock, and takes the bump in with it: the version in the status bar
+# tells builds apart (the owner's rule). Only the version lines change, in
+# the commit and in your files; anything else you haven't staged stays out.
+#
+# Left alone when the commit already changes the version (bumped by hand,
+# or a minor/major), when nothing is staged (it never makes a commit of
+# just a bump), during a merge, rebase, cherry-pick or revert, and with
+# ROXARUU_NO_BUMP=1. `git commit --amend` counts as a commit too: it bumps
+# again unless ROXARUU_NO_BUMP=1.
+set -euo pipefail
+[ -z "${ROXARUU_NO_BUMP:-}" ] || exit 0
+git_dir=$(git rev-parse --git-dir)
+for busy in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+    [ ! -e "$git_dir/$busy" ] || exit 0
+done
+! git diff --cached --quiet || exit 0
+
+version() { sed -n 's/^version = "\(.*\)"/\1/p' | head -1; }
+staged=$(git show :Cargo.toml 2>/dev/null | version)
+before=$(git show HEAD:Cargo.toml 2>/dev/null | version || true)
+[ -n "$staged" ] && [ "$staged" = "$before" ] || exit 0
+case "$staged" in
+    *[!0-9.]* | *.*.*.* | *..*) echo "pre-commit: version \"$staged\" isn't x.y.z; not bumped" >&2; exit 0 ;;
+esac
+new="${staged%.*}.$(( ${staged##*.} + 1 ))"
+
+# Cargo.toml: its first `version = "…"` (the package's).
+toml() { awk -v v="$new" '!done && /^version = "/ { $0 = "version = \"" v "\""; done = 1 } 1'; }
+# Cargo.lock: the version under `name = "roxaruu"`.
+lock() { awk -v v="$new" 'mine && /^version = "/ { $0 = "version = \"" v "\""; mine = 0 } { if ($0 == "name = \"roxaruu\"") mine = 1 } 1'; }
+
+# In the commit (the staged copy), and in your files (the working copy).
+bump() {
+    local file=$1 edit=$2
+    [ -e "$file" ] || return 0
+    local blob
+    blob=$(git show ":$file" | $edit | git hash-object -w --stdin)
+    git update-index --cacheinfo "100644,$blob,$file"
+    $edit < "$file" > "$file.bump" && mv "$file.bump" "$file"
+}
+bump Cargo.toml toml
+bump Cargo.lock lock
+echo "pre-commit: version $staged → $new"
