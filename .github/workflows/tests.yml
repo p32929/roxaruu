@@ -17,10 +17,9 @@ jobs:
   test:
     name: ${{ matrix.name }} tests ${{ matrix.half.label }}
     runs-on: ${{ matrix.os }}
-    # Tests wait for what they expect however long it takes (no step has a
-    # time limit to trip on a slow machine): this only ends a job that a
-    # genuine bug left waiting forever. A run takes about 8 minutes.
-    timeout-minutes: 60
+    # Each test's waits fail after 2 minutes, saying what they waited for;
+    # this only ends a job stuck some other way. A half takes about 5 minutes.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

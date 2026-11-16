@@ -29,7 +29,9 @@ fn shot(h: &mut Harness<'static, Root>, name: &str) {
     for _ in 0..4 {
         h.step();
     }
+    let stuck = Stuck::new(r##"!app(h).active_tab().is_none_or(|t| !t.is_loaded() || t.highlighted())"##);
     while !app(h).active_tab().is_none_or(|t| !t.is_loaded() || t.highlighted()) {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -348,7 +350,9 @@ fn headless_big_file_typing() {
 /// show what it found.
 fn wait_disk(h: &mut Harness<'static, Root>) {
     let seen = app(h).file_checks;
+    let stuck = Stuck::new(r##"app(h).file_checks == seen"##);
     while app(h).file_checks == seen {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -365,20 +369,49 @@ fn remote_off_elsewhere() {
 fn remote_off(h: &mut Harness<'static, Root>) {
     remote_off_elsewhere();
     h.step();
+    let stuck = Stuck::new(r##"app(h).remote.on"##);
     while app(h).remote.on {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
-/// Step until `done` holds (the shell runs in real time), however long that
-/// takes: no time limit to trip on a slow machine. (`what`, said once if it
-/// isn't so at first, names what a stuck test waits for.)
-fn wait_for(h: &mut Harness<'static, Root>, what: &str, done: impl Fn(&App) -> bool) {
-    if !done(&h.state().0) {
-        eprintln!("waiting for {what}: {:?}", screen_text(h));
+/// How long a test waits for something before it fails, saying what it
+/// waited for. Waits go on the moment the thing happens (no fixed sleeps);
+/// this is only for a stuck one, which used to hang until CI's hour was up
+/// (the owner's call, 2026-11-16).
+const STUCK: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// A step-loop's guard: fails the test if what it waits for (`what`, the
+/// loop's own condition) hasn't happened within `STUCK`.
+struct Stuck {
+    what: &'static str,
+    since: std::time::Instant,
+    limit: std::time::Duration,
+}
+
+impl Stuck {
+    fn new(what: &'static str) -> Self {
+        Self { what, since: std::time::Instant::now(), limit: STUCK }
     }
+
+    /// A whole browser script (its own waits have `STUCK` each).
+    fn script(what: &'static str) -> Self {
+        Self { limit: STUCK * 5 / 2, ..Self::new(what) }
+    }
+
+    fn check(&self) {
+        assert!(self.since.elapsed() < self.limit, "waited {}s for `{}`: it never happened", self.limit.as_secs(), self.what);
+    }
+}
+
+/// Step until `done` holds (the shell runs in real time): on at once when it
+/// does; failing, with what the terminal shows, if it hasn't in `STUCK`.
+fn wait_for(h: &mut Harness<'static, Root>, what: &str, done: impl Fn(&App) -> bool) {
+    let since = std::time::Instant::now();
     while !done(&h.state().0) {
+        assert!(since.elapsed() < STUCK, "waited {}s for {what}; the terminal shows: {:?}", STUCK.as_secs(), screen_text(h));
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(40));
     }
@@ -1251,7 +1284,9 @@ fn headless_files_walkthrough() {
     h.step();
     assert!(h.query_by_label_contains("-click to open this link").is_none());
     // It shows once the pointer has rested (egui's tooltip delay).
+    let stuck = Stuck::new(r##"h.query_by_label_contains("-click to open this link").is_none()"##);
     while h.query_by_label_contains("-click to open this link").is_none() {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -1702,7 +1737,9 @@ fn headless_memory_report() {
             h.step();
         }
     }
+    let stuck = Stuck::new(r##"!app(&h).active_tab().is_none_or(|t| t.highlighted())"##);
     while !app(&h).active_tab().is_none_or(|t| t.highlighted()) {
+        stuck.check();
         h.step();
     }
     report.push(format!("+ project, 10 files open: {} MB", footprint()));
@@ -1729,7 +1766,9 @@ fn headless_memory_report() {
         report.push(format!("  streamed {}k more lines: {} MB", round * 4, footprint()));
     }
     // Closed again: does the memory come back?
+    let stuck = Stuck::new(r##"!app(&h).terminals.is_empty()"##);
     while !app(&h).terminals.is_empty() {
+        stuck.check();
         let n = app(&h).terminals.len();
         h.state_mut().0.close_terminal(n - 1);
         for _ in 0..3 {
@@ -1847,7 +1886,9 @@ fn headless_redraws_on_coming_back() {
     set(&mut h, false, false);
     h.step();
     assert!(app(&h).redraw_until.is_some(), "un-minimized: redraws");
+    let stuck = Stuck::new(r##"app(&h).redraw_until.is_some()"##);
     while app(&h).redraw_until.is_some() {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -2236,7 +2277,9 @@ fn headless_sidebar_walkthrough() {
 
     // A file made outside the app shows up on its own.
     std::fs::write(root.join("src/cart/coupon.rs"), "").unwrap();
+    let stuck = Stuck::new(r##"!names(&h).contains(&"    coupon.rs".to_string())"##);
     while !names(&h).contains(&"    coupon.rs".to_string()) {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -2289,7 +2332,9 @@ fn headless_project_home_and_file_browser() {
         let a = app(h);
         a.sidebar.selected.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string())
     };
+    let stuck = Stuck::new(r##"label(&h).as_deref() != Some("src")"##);
     while label(&h).as_deref() != Some("src") {
+        stuck.check();
         press(&mut h, Modifiers::NONE, Key::ArrowDown);
     }
     shot(&mut h, "k2-folder-selected");
@@ -2426,15 +2471,28 @@ fn headless_agent_alerts() {
     // The system holds it back (Do Not Disturb, say): the tab says so.
     let held = crate::sys::Delivery::held_back("Sent, but Do Not Disturb is on.");
     *crate::sys::DELIVERY.lock().unwrap() = Some(held.clone());
+    let stuck = Stuck::new(r##"!notified("wants your attention")"##);
     while !notified("wants your attention") {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     *crate::sys::DELIVERY.lock().unwrap() = None;
+    let stuck = Stuck::new(r##"app(&h).terminals[0].pane.notified.is_none()"##);
     while app(&h).terminals[0].pane.notified.is_none() {
+        stuck.check();
         h.step();
     }
     assert_eq!(app(&h).terminals[0].pane.notified.as_ref().map(|(_, d)| d), Some(&held), "the tab knows how it went");
+    // Drawn while you're in another app isn't seen: the bell and how its
+    // notification went wait for you.
+    press(&mut h, ALT, Key::T);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(app(&h).terminal_open);
+    assert!(app(&h).terminals[0].pane.attention && app(&h).terminals[0].pane.notified.is_some(), "cleared unseen");
+    press(&mut h, ALT, Key::T);
     // Its key opens the system's notification settings, for Roxaruu.
     crate::app::App::take_launched();
     press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::N);
@@ -2483,7 +2541,9 @@ fn headless_agent_alerts() {
     );
     wait_for(&mut h, "the agent working", screen_has("working 2"));
     *crate::sys::APP_ACTIVE.lock().unwrap() = Some(false); // macOS: another app in front
+    let stuck = Stuck::new(r##"!crate::sys::NOTIFIED.lock().unwrap().iter().any(|(t, b)| t.contains("claude") && b.contains("finished, or waiting"))"##);
     while !crate::sys::NOTIFIED.lock().unwrap().iter().any(|(t, b)| t.contains("claude") && b.contains("finished, or waiting")) {
+        stuck.check();
         h.step(); // the window still thinks it's focused
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -2509,7 +2569,9 @@ fn headless_agent_alerts() {
     both(&mut h);
     assert!(!crate::terminalpane::APP_FOCUSED.load(Relaxed), "the browser's pass doesn't count as you at the Mac");
     assert!(!app(&h).terminals[0].pane.watch.looking.load(Relaxed));
+    let stuck = Stuck::new(r##"!notified("remote-time ping")"##);
     while !notified("remote-time ping") {
+        stuck.check();
         both(&mut h);
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -3238,7 +3300,9 @@ fn headless_terminal_says_whether_it_is_printing() {
     run(&mut h, "for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 0.4; done; sleep 60");
     wait_for(&mut h, "printing", |a| a.terminal().unwrap().pane.pulse() == Some(Pulse::Printing));
     shot(&mut h, "tp0-printing");
+    let stuck = Stuck::new("the terminal to go quiet");
     let quiet = loop {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
         if let Some(p @ Pulse::Quiet(_)) = app(&h).terminal().unwrap().pane.pulse() {
@@ -3661,10 +3725,14 @@ fn headless_settings_reach_all_windows() {
     a.state_mut().0.run(crate::keymap::Command::ToggleWordWrap, &ctx);
     let wrap = app(&a).config.settings.word_wrap;
     // The other window is woken right away (asked to draw now, not later).
+    let stuck = Stuck::new(r##"!woken.lock().unwrap().iter().any(|d| d.is_zero())"##);
     while !woken.lock().unwrap().iter().any(|d| d.is_zero()) {
+        stuck.check();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+    let stuck = Stuck::new(r##"theme(&b) != other || app(&b).config.settings.word_wrap != wrap"##);
     while theme(&b) != other || app(&b).config.settings.word_wrap != wrap {
+        stuck.check();
         b.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -4071,7 +4139,9 @@ fn headless_remote_access() {
     let mut next_frame = |h: &mut Harness<'static, Root>, ws: &mut tungstenite::WebSocket<_>, texts: &mut Vec<String>| {
         let mut got = false;
         let mut quiet = 0;
+        let stuck = Stuck::new(r##"!got || quiet < QUIET_READS"##);
         while !got || quiet < QUIET_READS {
+            stuck.check();
             h.step();
             match ws.read() {
                 Ok(Message::Binary(b)) => {
@@ -4093,7 +4163,9 @@ fn headless_remote_access() {
     // Once the page says it's on a Mac (after joining), its key labels are a
     // Mac's: the window list's key comes again, with ⌘.
     send(&mut ws, r#"{"t":"size","w":900,"h":560,"dpr":1,"mac":true}"#);
+    let stuck = Stuck::new(r##"!texts.iter().any(|t| t.contains(r#""t":"keys""#) && t.contains('⌘'))"##);
     while !texts.iter().any(|t| t.contains(r#""t":"keys""#) && t.contains('⌘')) {
+        stuck.check();
         h.step();
         if let Ok(Message::Text(t)) = ws.read() {
             texts.push(t.to_string());
@@ -4103,7 +4175,9 @@ fn headless_remote_access() {
 
     // One session: typing in the browser edits the window's file.
     send(&mut ws, r#"{"t":"text","s":"// from the browser\n"}"#);
+    let stuck = Stuck::new(r##"!text_of(&h).contains("// from the browser")"##);
     while !text_of(&h).contains("// from the browser") {
+        stuck.check();
         h.step();
     }
     // ⌥T from a Mac browser: the press types "†" too (sent with it, as the
@@ -4114,7 +4188,9 @@ fn headless_remote_access() {
     let before = text_of(&h);
     send(&mut ws, r#"{"t":"key","k":"†","code":"KeyT","down":true,"m":{"alt":true},"text":"†"}"#);
     send(&mut ws, r#"{"t":"key","k":"†","code":"KeyT","down":false,"m":{"alt":true}}"#);
+    let stuck = Stuck::new(r##"!app(&h).terminal_open"##);
     while !app(&h).terminal_open {
+        stuck.check();
         h.step();
     }
     wait_for(&mut h, "a prompt", screen_has("$ "));
@@ -4133,20 +4209,26 @@ fn headless_remote_access() {
     // (in the same frame, the editor could get it).
     wait_for(&mut h, "x erased", |a| !screen_has("$ x")(a));
     send(&mut ws, r#"{"t":"key","k":"j","code":"KeyJ","down":true,"m":{"meta":true}}"#); // back to the editor
+    let stuck = Stuck::new(r##"app(&h).focus != crate::app::Focus::Editor"##);
     while app(&h).focus != crate::app::Focus::Editor {
+        stuck.check();
         h.step();
     }
 
     // A shortcut from the browser: ⌘⇧P opens the command palette.
     send(&mut ws, r#"{"t":"key","k":"p","code":"KeyP","down":true,"m":{"meta":true,"shift":true}}"#);
     send(&mut ws, r#"{"t":"key","k":"p","code":"KeyP","down":false,"m":{"meta":true,"shift":true}}"#);
+    let stuck = Stuck::new(r##"app(&h).palette.is_none()"##);
     while app(&h).palette.is_none() {
+        stuck.check();
         h.step();
     }
     let palette = next_frame(&mut h, &mut ws, &mut texts);
     assert!(palette.meshes > frame.meshes, "the palette drawn over the window: {palette:?}");
     send(&mut ws, r#"{"t":"key","k":"Escape","code":"Escape","down":true}"#);
+    let stuck = Stuck::new(r##"app(&h).palette.is_some()"##);
     while app(&h).palette.is_some() {
+        stuck.check();
         h.step();
     }
 
@@ -4156,7 +4238,9 @@ fn headless_remote_access() {
         h.step();
     }
     send(&mut ws, r#"{"t":"copy"}"#);
+    let stuck = Stuck::new(r##"!texts.iter().any(|t| t.contains("\"t\":\"clip\"") && t.contains("from the browser"))"##);
     while !texts.iter().any(|t| t.contains("\"t\":\"clip\"") && t.contains("from the browser")) {
+        stuck.check();
         h.step();
         if let Ok(Message::Text(t)) = ws.read() {
             texts.push(t.to_string());
@@ -4171,17 +4255,23 @@ fn headless_remote_access() {
     crate::app::App::take_launched();
     send(&mut ws, r#"{"t":"key","k":"o","code":"KeyO","down":true,"m":{"meta":true}}"#);
     send(&mut ws, r#"{"t":"key","k":"o","code":"KeyO","down":false,"m":{"meta":true}}"#);
+    let stuck = Stuck::new(r##"app(&h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders)"##);
     while app(&h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders) {
+        stuck.check();
         h.step();
     }
     send(&mut ws, r#"{"t":"text","s":"other"}"#);
+    let stuck = Stuck::new(r##"!app(&h).palette.as_ref().is_some_and(|p| p.query.ends_with("other"))"##);
     while !app(&h).palette.as_ref().is_some_and(|p| p.query.ends_with("other")) {
+        stuck.check();
         h.step();
     }
     send(&mut ws, r#"{"t":"key","k":"Enter","code":"Enter","down":true}"#);
     send(&mut ws, r#"{"t":"key","k":"Enter","code":"Enter","down":false}"#);
     let follow = format!(r#""path":"{}""#, crate::ui::tilde(&other.to_string_lossy()));
+    let stuck = Stuck::new(r##"!texts.iter().any(|t| t.contains(r#""t":"follow""#) && t.contains(&follow))"##);
     while !texts.iter().any(|t| t.contains(r#""t":"follow""#) && t.contains(&follow)) {
+        stuck.check();
         h.step();
         if let Ok(Message::Text(t)) = ws.read() {
             texts.push(t.to_string());
@@ -4197,11 +4287,15 @@ fn headless_remote_access() {
         let key = |down: bool| format!(r#"{{"t":"key","k":"o","code":"KeyO","down":{down},"m":{{"meta":true}}}}"#);
         ws.send(Message::text(key(true))).unwrap();
         ws.send(Message::text(key(false))).unwrap();
+        let stuck = Stuck::new(r##"app(h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders)"##);
         while app(h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders) {
+            stuck.check();
             h.step();
         }
         ws.send(Message::text(format!(r#"{{"t":"text","s":"{name}"}}"#))).unwrap();
+        let stuck = Stuck::new(r##"!app(h).palette.as_ref().is_some_and(|p| p.query.ends_with(name))"##);
         while !app(h).palette.as_ref().is_some_and(|p| p.query.ends_with(name)) {
+            stuck.check();
             h.step();
         }
         ws.send(Message::text(r#"{"t":"key","k":"Enter","code":"Enter","down":true}"#)).unwrap();
@@ -4209,7 +4303,9 @@ fn headless_remote_access() {
     };
     from_browser(&mut h, &mut ws, "elsewhere");
     let follow = format!(r#""path":"{}""#, crate::ui::tilde(&elsewhere.to_string_lossy()));
+    let stuck = Stuck::new(r##"!texts.iter().any(|t| t.contains(r#""t":"follow""#) && t.contains(&follow))"##);
     while !texts.iter().any(|t| t.contains(r#""t":"follow""#) && t.contains(&follow)) {
+        stuck.check();
         h.step();
         if let Ok(Message::Text(t)) = ws.read() {
             texts.push(t.to_string());
@@ -4234,7 +4330,9 @@ fn headless_remote_access() {
     // browser is told, to show its own notification.
     h.state_mut().0.terminal_open = false;
     h.state_mut().0.terminal_mut().unwrap().pane.send_input(b"printf '\\a'\r");
+    let stuck = Stuck::new(r##"!texts.iter().any(|t| t.contains(r#""t":"notify""#))"##);
     while !texts.iter().any(|t| t.contains(r#""t":"notify""#)) {
+        stuck.check();
         h.step();
         if let Ok(Message::Text(t)) = ws.read() {
             texts.push(t.to_string());
@@ -4253,7 +4351,9 @@ fn headless_remote_access() {
     assert!(!app(&h).remote.on && crate::instances::remote_server().is_none());
     // No longer listed (it follows the marker within a second; other tests
     // in this process may still list theirs).
+    let stuck = Stuck::new(r##"crate::instances::remote_windows().len() != listed - 1"##);
     while crate::instances::remote_windows().len() != listed - 1 {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -4338,7 +4438,9 @@ fn wait_link_closed(ws: &mut tungstenite::WebSocket<crate::remote::testing::Tls>
         .sock
         .set_read_timeout(Some(std::time::Duration::from_millis(30)))
         .unwrap();
+    let stuck = Stuck::new("the browser's link to close");
     loop {
+        stuck.check();
         step();
         match ws.read() {
             Err(tungstenite::Error::Io(e))
@@ -4351,7 +4453,9 @@ fn wait_link_closed(ws: &mut tungstenite::WebSocket<crate::remote::testing::Tls>
 
 /// Wait (calling `step`) until nothing listens on `port`.
 fn wait_port_closed(port: u16, mut step: impl FnMut()) {
+    let stuck = Stuck::new(r##"std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()"##);
     while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        stuck.check();
         step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -4381,7 +4485,9 @@ fn serve_remotely(password: &str, text: &str) -> (Harness<'static, Root>, u16) {
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert!(matches!(app(&h).ask, Some(crate::app::Ask::RemoteHere { .. })), "then: only from the browser?");
     press(&mut h, Modifiers::NONE, Key::K); // keep the window here
+    let stuck = Stuck::new(r##"std::net::TcpStream::connect(("127.0.0.1", port)).is_err()"##);
     while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -4427,7 +4533,9 @@ fn remote_in_chrome(mode: &str) -> String {
     // Keep the window running while Chrome drives the page; turn remote
     // access off when it asks (to see the page say it's disconnected).
     let mut off = false;
+    let stuck = Stuck::script("the browser script to finish");
     let status = loop {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(15));
         if !off && std::fs::read_to_string(&out_path).unwrap_or_default().contains("STEP turn-off") {
@@ -4515,7 +4623,9 @@ fn headless_remote_input_in_chrome() {
     let (mut out, mut seen, mut dragged_to) = (Vec::new(), Vec::new(), 0);
     let mut before_pinch = String::new();
     let mut caret_before = (0, 0);
+    let stuck = Stuck::script("the browser script to finish");
     let status = loop {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(15));
         let Ok(line) = rx.try_recv() else {
@@ -4547,7 +4657,9 @@ fn headless_remote_input_in_chrome() {
             // test's output is held back): a wait that never ends says why.
             let note = shots.join("input-waiting.log");
             let mut said = std::time::Instant::now();
+            let stuck = Stuck::new(r##"!ready(&h)"##);
             while !ready(&h) {
+                stuck.check();
                 h.step();
                 std::thread::sleep(std::time::Duration::from_millis(15));
                 if said.elapsed() > std::time::Duration::from_secs(5) {
@@ -4763,19 +4875,25 @@ fn headless_remote_phone_layout() {
         .unwrap();
     let send = |ws: &mut tungstenite::WebSocket<_>, json: &str| ws.send(Message::text(json)).unwrap();
     send(&mut ws, r#"{"t":"size","w":390,"h":844,"dpr":1}"#);
+    let stuck = Stuck::new(r##"!app(&h).views[1].compact"##);
     while !app(&h).views[1].compact {
+        stuck.check();
         h.step();
     }
     assert!(!app(&h).views[0].compact, "the Mac's window is still full size");
     // ⌘B on the phone: its drawer comes out; the Mac keeps its tree column.
     send(&mut ws, r#"{"t":"key","k":"b","code":"KeyB","down":true,"m":{"meta":true}}"#);
     send(&mut ws, r#"{"t":"key","k":"b","code":"KeyB","down":false,"m":{"meta":true}}"#);
+    let stuck = Stuck::new(r##"!app(&h).views[1].drawer"##);
     while !app(&h).views[1].drawer {
+        stuck.check();
         h.step();
     }
     // What the phone gets: every frame (acked), once they go quiet.
     let (mut screen, mut got, mut quiet) = (crate::remote::meshes::Seen::default(), false, 0);
+    let stuck = Stuck::new(r##"!got || quiet < QUIET_READS"##);
     while !got || quiet < QUIET_READS {
+        stuck.check();
         h.step();
         match ws.read() {
             Ok(Message::Binary(b)) => {
@@ -5167,7 +5285,9 @@ fn headless_big_file_works_around_the_view() {
     assert!(t.line_text(50_000).starts_with("/*x*/ let found_me_here"));
     assert!(t.buf.modified);
     // Highlighting arrives for the lines on screen, not for the whole file.
+    let stuck = Stuck::new(r##"app(&h).active_tab().unwrap().line_spans(50_000).is_empty()"##);
     while app(&h).active_tab().unwrap().line_spans(50_000).is_empty() {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(30));
     }
@@ -5213,7 +5333,9 @@ fn headless_remote_frames_in_chrome() {
     );
     // The window's event loop, as eframe would run it: a pass whenever
     // something asks (here: as often as the harness can).
+    let stuck = Stuck::script("the browser script to finish");
     let status = loop {
+        stuck.check();
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(1));
         if let Some(status) = child.0.try_wait().unwrap() {

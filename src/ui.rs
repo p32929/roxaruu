@@ -4271,8 +4271,13 @@ impl App {
                 clicked = Some(i);
             }
         }
+        // Seen only if you're looking: drawn in a window you're in another
+        // app from, its bell (and how its notification went) has to wait
+        // for you (as the alerts themselves judge "looking"). A browser's
+        // copy counts itself focused.
+        let looking = self.remote_pass || ui.ctx().input(|i| i.focused);
         for (i, t) in self.terminals.iter_mut().enumerate() {
-            if self.terminal_grid || i == self.active_terminal {
+            if looking && (self.terminal_grid || i == self.active_terminal) {
                 t.pane.mark_viewed();
             }
         }

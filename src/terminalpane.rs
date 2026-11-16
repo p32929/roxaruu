@@ -1921,6 +1921,14 @@ fn escape_posix(raw: &str) -> String {
 
 /// How long a test may wait for a real shell to do something before giving up.
 ///
+/// A test's wait that hasn't happened in 2 minutes fails, saying what it
+/// waited for (a stuck one used to hang until CI's hour was up; waits still
+/// go on the moment the thing happens).
+#[cfg(test)]
+pub(crate) fn stuck(what: &str, since: Instant) {
+    assert!(since.elapsed() < Duration::from_secs(120), "waited 120s for `{what}`: it never happened");
+}
+
 #[cfg(test)]
 /// Whether `needle` has arrived anywhere in the output, history included
 /// (the view is put back exactly where it was).
@@ -1947,7 +1955,9 @@ fn has_output(term: &TerminalPane, needle: &str) -> bool {
 /// Pump until `last`, the end of the output just asked for, has arrived —
 /// however long the shell takes — and once more to take it in.
 fn settle(term: &mut TerminalPane, last: &str) {
+    let waiting_since = std::time::Instant::now();
     while !has_output(term, last) {
+        crate::terminalpane::stuck(r##"!has_output(term, last)"##, waiting_since);
         term.pump();
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -1979,7 +1989,9 @@ mod tests {
                 })
             })
         };
+        let waiting_since = std::time::Instant::now();
         while !answered(&t) {
+            crate::terminalpane::stuck(r##"!answered(&t)"##, waiting_since);
             t.pump();
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -1996,7 +2008,9 @@ mod tests {
         let mut t = TerminalPane::new("t", 24, 100, &dir, None).expect("a shell starts");
         assert!(t.watch.inbox.lock().unwrap().is_some(), "the terminal has an inbox");
         t.send_input(b"echo x | roxaruu-hook stop\r");
+        let waiting_since = std::time::Instant::now();
         loop {
+            crate::terminalpane::stuck("Claude Code: finished", waiting_since);
             t.pump();
             if t.take_fired().iter().any(|m| m == "Claude Code: finished") {
                 break;
@@ -2013,7 +2027,9 @@ mod tests {
         let dir = std::env::temp_dir();
         let mut t = TerminalPane::new("t", 24, 100, &dir, None).expect("a shell starts");
         let wait = |t: &mut TerminalPane, what: &str, done: &dyn Fn(&mut TerminalPane) -> bool| {
+            let waiting_since = std::time::Instant::now();
             while !done(t) {
+                crate::terminalpane::stuck(r##"!done(t)"##, waiting_since);
                 t.pump();
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -2081,7 +2097,9 @@ mod tests {
         // Pump until the label catches up (the read is throttled and only
         // happens once the shell has printed its prompt back).
         let expect = target.file_name().unwrap().to_string_lossy().into_owned();
+        let waiting_since = std::time::Instant::now();
         while term.folder != expect {
+            crate::terminalpane::stuck(r##"term.folder != expect"##, waiting_since);
             term.pump();
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -2347,7 +2365,9 @@ mod tests {
 
         // A block of numbered lines to scroll back into.
         term.send_input(b"for i in $(seq 1 60); do echo \"LINE-$i\"; done\n");
+        let waiting_since = std::time::Instant::now();
         while !screen_contains(&term, "LINE-60") {
+            crate::terminalpane::stuck(r##"!screen_contains(&term, "LINE-60")"##, waiting_since);
             term.pump();
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -2390,7 +2410,9 @@ mod tests {
         let fill = HISTORY + 200;
         term.send_input(format!("for i in $(seq 1 {fill}); do echo \"LINE-$i\"; done\n").as_bytes());
         let last = format!("LINE-{fill}");
+        let waiting_since = std::time::Instant::now();
         while !screen_contains(&term, &last) {
+            crate::terminalpane::stuck(r##"!screen_contains(&term, &last)"##, waiting_since);
             term.pump();
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -2512,14 +2534,18 @@ mod tests {
         // (The output line, not the command echoing it.)
         let printed = |t: &TerminalPane, m: &str| visible_text(t).lines().any(|l| l.trim_end() == m);
         term.send_input(b"echo FIRST-MARKER\n");
+        let waiting_since = std::time::Instant::now();
         while !printed(&term, "FIRST-MARKER") {
+            crate::terminalpane::stuck(r##"!printed(&term, "FIRST-MARKER")"##, waiting_since);
             term.pump();
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(term.scroll_offset(), 0, "starts at the bottom");
 
         term.send_input(b"echo SECOND-MARKER\n");
+        let waiting_since = std::time::Instant::now();
         while !printed(&term, "SECOND-MARKER") {
+            crate::terminalpane::stuck(r##"!printed(&term, "SECOND-MARKER")"##, waiting_since);
             term.pump();
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -2714,7 +2740,9 @@ mod tests {
         let mut term = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
 
         let mut found = false;
+        let waiting_since = std::time::Instant::now();
         while !found {
+            crate::terminalpane::stuck(r##"!found"##, waiting_since);
             term.pump();
             let text: String = (0..24)
                 .flat_map(|r| (0..80).filter_map(move |c| (r, c).into()))
@@ -2744,7 +2772,9 @@ mod tests {
 
         term.paste("printf PASTED\n");
         let mut found = false;
+        let waiting_since = std::time::Instant::now();
         while !found {
+            crate::terminalpane::stuck(r##"!found"##, waiting_since);
             term.pump();
             let text: String = (0..24)
                 .flat_map(|r| (0..80).filter_map(move |c| (r, c).into()))
@@ -2774,7 +2804,9 @@ mod tests {
         let mut term = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
 
         let mut got = false;
+        let waiting_since = std::time::Instant::now();
         while !got {
+            crate::terminalpane::stuck(r##"!got"##, waiting_since);
             term.pump();
             let screen: String = (0..24)
                 .flat_map(|r| (0..80).map(move |c| (r, c)))
@@ -2816,7 +2848,9 @@ mod tests {
         let mut term = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
 
         let mut got = false;
+        let waiting_since = std::time::Instant::now();
         while !got {
+            crate::terminalpane::stuck(r##"!got"##, waiting_since);
             term.pump();
             let screen: String = (0..24)
                 .flat_map(|r| (0..80).map(move |c| (r, c)))
@@ -2857,7 +2891,9 @@ mod tests {
         cmd.cwd(&dir);
         let mut term = TerminalPane::spawn("t", 24, 80, cmd, None).unwrap();
 
+        let waiting_since = std::time::Instant::now();
         while !term.wants_mouse() {
+            crate::terminalpane::stuck(r##"!term.wants_mouse()"##, waiting_since);
             term.pump();
             thread::sleep(Duration::from_millis(20));
         }
@@ -2877,7 +2913,9 @@ mod tests {
 
         // Run a long-lived command; the label should pick it up.
         term.send_input(b"sleep 5\n");
+        let waiting_since = std::time::Instant::now();
         while !term.display_name().contains("sleep") {
+            crate::terminalpane::stuck(r##"!term.display_name().contains("sleep")"##, waiting_since);
             term.pump();
             thread::sleep(Duration::from_millis(50));
         }

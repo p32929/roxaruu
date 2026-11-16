@@ -188,8 +188,12 @@ HOME=$SP/home SHOTS=$SP/shots PROJECT=<a file inside a git repo> BIG=<a big sour
 - **No fixed waits, in code or tests.** Wait for the thing itself (the
   window drew, the line arrived — `settle(term, last)`, the app looked at
   the disk — `wait_disk`, the highlighting is done — `Tab::highlighted`),
-  never "N seconds, then give up / assume". A test without a deadline that
-  hangs is a bug it found (CI ends a stuck job after an hour). Durations
+  never "N seconds, then give up / assume". A wait that still hasn't
+  happened after 2 minutes fails the test, saying what it waited for
+  (`Stuck`, `wait_for`, `terminalpane::stuck`, the browser scripts'
+  `waitFor`; every loop that waits has one): a stuck test used to hang until
+  CI's hour was up, saying nothing (the owner's call). CI ends a job after
+  20 minutes only as a last resort. Durations
   that *are* behaviour stay ("quiet 10 s = maybe stuck", a debounce, a
   rate measured over a window), as do security limits (the TLS handshake's
   read limit, slowing wrong passwords).

@@ -43,7 +43,9 @@ process.on("exit", () => browser.kill());
 let devtools;
 step = "launching Chrome";
 // No deadline (a hang is a bug the test found): until Chrome says, or quits.
+const chromeSince = Date.now();
 while (!devtools && browser.exitCode === null) {
+  if (Date.now() - chromeSince > 120000) fail("Chrome didn't start in 2 minutes");
   const f = join(profile, "DevToolsActivePort");
   if (existsSync(f)) devtools = readFileSync(f, "utf8").split("\n")[0];
   else await sleep(100);
@@ -67,9 +69,15 @@ const cdp = (method, params = {}) => new Promise(ok => {
   ws.send(JSON.stringify({ id, method, params }));
 });
 const evaluate = async expr => (await cdp("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
+// On the moment it's so; failing, saying what for, if it isn't in 2 minutes
+// (a stuck wait used to hang until CI's hour was up).
 const waitFor = async (expr, what) => {
   step = what;
-  while (!(await evaluate(expr))) await sleep(150);
+  const since = Date.now();
+  while (!(await evaluate(expr))) {
+    if (Date.now() - since > 120000) fail("waited 2 minutes for: " + what);
+    await sleep(150);
+  }
 };
 const shot = async name => {
   const r = await cdp("Page.captureScreenshot", { format: "png" });

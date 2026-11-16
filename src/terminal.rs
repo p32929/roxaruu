@@ -526,7 +526,9 @@ mod tests {
             ctx.set_request_repaint_callback(move |info| requests.lock().unwrap().push(info.delay));
         }
         let mut t = Terminal::spawn(dir.path(), 24, 80, &ctx, Throttle::new(5)).unwrap();
+        let waiting_since = std::time::Instant::now();
         while requests.lock().unwrap().is_empty() {
+            crate::terminalpane::stuck(r##"requests.lock().unwrap().is_empty()"##, waiting_since);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(
@@ -538,7 +540,9 @@ mod tests {
         // before it reads input, and an echo that late isn't typing's any more.
         let mut shown = String::new();
         let mut since = Instant::now();
+        let waiting_since = std::time::Instant::now();
         while shown.trim().is_empty() || since.elapsed() < Duration::from_secs(1) {
+            crate::terminalpane::stuck(r##"shown.trim().is_empty() || since.elapsed() < Duration::from_secs(1)"##, waiting_since);
             std::thread::sleep(Duration::from_millis(50));
             let now = t.pane.screen().contents();
             if now != shown {
@@ -546,7 +550,9 @@ mod tests {
             }
         }
         t.input(&[Event::Text("echo typed".into())]);
+        let waiting_since = std::time::Instant::now();
         while !requests.lock().unwrap().contains(&Duration::ZERO) {
+            crate::terminalpane::stuck(r##"!requests.lock().unwrap().contains(&Duration::ZERO)"##, waiting_since);
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -565,7 +571,9 @@ mod tests {
             repeat: false,
             modifiers: Modifiers::NONE,
         }]);
+        let waiting_since = std::time::Instant::now();
         loop {
+            crate::terminalpane::stuck("hi-from-42 printed", waiting_since);
             t.pane.pump();
             if t.pane.screen().contents().contains("hi-from-42") {
                 break;
@@ -595,7 +603,9 @@ mod tests {
         t.input(&[key(Key::E, ALT)]);
         t.input(&[key(Key::Z, Modifiers::NONE), Event::Text("zqzq".into())]);
         // (However long the shell takes to start: Git Bash on Windows is slow.)
+        let waiting_since = std::time::Instant::now();
         while !t.pane.screen().contents().contains("zqzq") {
+            crate::terminalpane::stuck(r##"!t.pane.screen().contents().contains("zqzq")"##, waiting_since);
             t.pane.pump();
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
