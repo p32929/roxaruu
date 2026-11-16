@@ -2801,6 +2801,10 @@ fn headless_open_several_folders() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().canonicalize().unwrap();
     let names = ["alpha", "bravo", "charlie", "delta", "echo"];
+    // Only these: folders other tests in this process left in the list made
+    // it longer, and finding a row by hovering then scrolled it (the
+    // ⌘-click landed on another row).
+    let _ = std::fs::remove_file(crate::config::state_dir().unwrap().join("recent"));
     for n in names.iter().rev() {
         std::fs::create_dir_all(base.join(n).join(".git")).unwrap();
         crate::recent::record(&base.join(n)); // alpha ends up first
