@@ -571,7 +571,7 @@ impl App {
         } else if cfg!(windows) {
             super::files::os_open(&["ms-settings:notifications".as_ref()])
         } else {
-            std::process::Command::new("gnome-control-center").arg("notifications").spawn().is_ok()
+            super::files::os_run("gnome-control-center", &["notifications"])
         };
         if !opened {
             self.warn("Couldn't open the notification settings: open them from your system's settings");

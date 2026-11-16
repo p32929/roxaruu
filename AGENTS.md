@@ -238,7 +238,7 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   on a failure. The other two systems' tests run on GitHub:
   `.githooks/ci-tests` (`tests.yml`, "Tests": every system's tests, nothing
   built to download, nothing released; about 5 minutes) — before merging to
-  master, once the owner says yes (pushed to `cross-platform` first: CI
+  master, once the owner says yes (pushed to `dev`, the working branch, first: CI
   tests what's on GitHub). Neither workflow has an automatic trigger
   (not a push, a tag or a pull request). `build.yml`: "Run workflow" (or
   `.githooks/release`) builds, tests and packages all three systems — every

@@ -4528,11 +4528,13 @@ fn headless_remote_input_in_chrome() {
         seen.push(step.to_string());
         // The page asks what only this window can see; it goes on when told.
         let ready = |h: &Harness<'static, Root>| match step {
-            // What `echo` printed, a line of its own (the command itself may
-            // wrap: a long prompt put "…/ro" and "x" on two rows).
+            // The link whole somewhere on screen (the link list finds it
+            // there): the command's own line with a short prompt; with a
+            // long one that wraps it ("…/ro", "x"), the line `echo` printed.
+            // (On GitHub's Mac that printed line once never showed.)
             "link-printed" => app(h)
                 .terminal()
-                .is_some_and(|t| t.pane.screen().contents().lines().any(|l| l.trim_end() == "https://example.com/rox")),
+                .is_some_and(|t| t.pane.screen().contents().contains("https://example.com/rox")),
             "links-listed" => app(h).palette.as_ref().is_some_and(|p| !p.items.is_empty()),
             _ => true,
         };

@@ -462,6 +462,24 @@ pub fn set_clipboard_files(files: Vec<PathBuf>) {
     CLIPBOARD_FILES.with(|c| *c.borrow_mut() = files);
 }
 
+/// Start `program` with `args` (a settings app, say), not waiting for it.
+/// Tests only record it, as `os_open` does: they must never open windows.
+pub fn os_run(program: &str, args: &[&str]) -> bool {
+    #[cfg(test)]
+    {
+        LAUNCHED.with(|l| l.borrow_mut().push(std::iter::once(program).chain(args.iter().copied()).map(String::from).collect()));
+        true
+    }
+    #[cfg(not(test))]
+    {
+        std::process::Command::new(program)
+            .args(args)
+            .spawn()
+            .inspect_err(|e| tracing::warn!(program, error = %e, "couldn't start"))
+            .is_ok()
+    }
+}
+
 /// Hand `args` to `open` (Finder, the browser). Tests only record it — they
 /// must never open windows.
 pub fn os_open(args: &[&std::ffi::OsStr]) -> bool {
