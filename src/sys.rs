@@ -564,10 +564,48 @@ mod mac_notes {
 #[cfg(all(target_os = "macos", not(test)))]
 pub use mac_notes::notify;
 
-/// At start: whether Roxaruu may show its own notifications (asks nothing).
+/// At start: whether Roxaruu may show its own notifications (asks nothing);
+/// on Windows, its name for them registered.
 pub fn check_notifications() {
     #[cfg(all(target_os = "macos", not(test)))]
     mac_notes::check();
+    #[cfg(all(windows, not(test)))]
+    register_app_id();
+}
+
+/// Windows: the id Roxaruu's notifications go under, so Windows shows them
+/// as Roxaruu's (with its icon), not PowerShell's.
+#[cfg(windows)]
+pub const APP_ID: &str = "p32929.Roxaruu";
+
+/// Windows: register `APP_ID` for this user (HKCU, no admin; however it was
+/// installed: the installer, the zip, install-local.sh), with Windows' own
+/// `reg.exe`, once at start and off the main thread, no console flashing.
+/// The installer's uninstaller and uninstall.sh remove it.
+#[cfg(all(windows, not(test)))]
+fn register_app_id() {
+    use std::os::windows::process::CommandExt;
+    const NO_WINDOW: u32 = 0x0800_0000; // CREATE_NO_WINDOW
+    std::thread::spawn(|| {
+        let key = format!(r"HKCU\Software\Classes\AppUserModelId\{APP_ID}");
+        let mut values = vec![("DisplayName", "Roxaruu".to_string())];
+        // The installer puts the icon beside the program.
+        if let Some(icon) = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("roxaruu.ico"))).filter(|i| i.is_file()) {
+            values.push(("IconUri", icon.to_string_lossy().into_owned()));
+        }
+        for (name, value) in values {
+            let done = std::process::Command::new("reg")
+                .args(["add", &key, "/v", name, "/t", "REG_SZ", "/d", &value, "/f"])
+                .creation_flags(NO_WINDOW)
+                .output();
+            match done {
+                Ok(out) if out.status.success() => {}
+                Ok(out) => tracing::warn!(name, err = %String::from_utf8_lossy(&out.stderr).trim(), "couldn't register Roxaruu's notification id"),
+                Err(e) => tracing::warn!(name, error = %e, "couldn't run reg.exe"),
+            }
+        }
+        tracing::debug!("notification id registered");
+    });
 }
 
 /// Turning notifications on: ask the system where it asks (macOS shows its
@@ -664,7 +702,12 @@ pub fn notify(title: &str, body: &str) -> Delivery {
     let (title, body) = (title.to_string(), body.to_string());
     std::thread::spawn(move || {
         let sound = if cfg!(windows) { "Default" } else { "message-new-instant" };
-        match notify_rust::Notification::new().summary(&title).body(&body).sound_name(sound).show() {
+        let mut note = notify_rust::Notification::new();
+        note.summary(&title).body(&body).sound_name(sound);
+        // As Roxaruu's (registered at start), not PowerShell's.
+        #[cfg(windows)]
+        note.app_id(APP_ID);
+        match note.show() {
             Ok(_) => tracing::debug!("notification shown"),
             Err(e) => tracing::warn!(error = %e, "couldn't show a notification"),
         }

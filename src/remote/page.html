@@ -712,6 +712,24 @@ async function follow(path) {
     if (following === want) await loadWindows();
   }
 }
+// An agent in a terminal finished or needs you: the browser's own
+// notification, when this tab isn't the one you're looking at (in front,
+// the window's own message is enough). Browsers let a page ask only on a
+// click or key, so it asks at the first one after an alert, not before.
+let askToNotify = false;
+function notifyHere(title, body) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "default") askToNotify = true;
+  if (Notification.permission !== "granted" || (!document.hidden && document.hasFocus())) return;
+  try { new Notification(title, { body, icon: "/icon.png", tag: title }); } catch (e) { /* a phone's browser may want a service worker */ }
+}
+for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => {
+  if (askToNotify && "Notification" in window && Notification.permission === "default") {
+    askToNotify = false;
+    Notification.requestPermission();
+  }
+}, true);
+
 function control(m) {
   if (m.t === "full") fullScreen();
   else if (m.t === "keys") {
@@ -724,6 +742,7 @@ function control(m) {
   // A folder opened in another window (new, or already open there): show
   // that one, once it's listed (a new one takes a moment to start).
   else if (m.t === "follow") follow(m.path);
+  else if (m.t === "notify") notifyHere(m.title, m.body);
   else if (m.t === "open") {
     // Allowed while the click or key that asked is recent; else a link to tap.
     const w = window.open(m.url, "_blank");

@@ -206,7 +206,7 @@ if system; then
         # The installer's own uninstaller first (its files, shortcuts and
         # File Explorer's "Open with Roxaruu").
         [ -x "$PROGRAM/unins000.exe" ] && "$PROGRAM/unins000.exe" //VERYSILENT //SUPPRESSMSGBOXES //NORESTART || true
-        for key in 'Directory\shell\Roxaruu' 'Directory\Background\shell\Roxaruu' '*\shell\Roxaruu'; do
+        for key in 'Directory\shell\Roxaruu' 'Directory\Background\shell\Roxaruu' '*\shell\Roxaruu' 'AppUserModelId\p32929.Roxaruu'; do
             reg delete "HKCU\\Software\\Classes\\$key" //f >/dev/null 2>&1 || true
         done
         # `rox` on PATH: the installer added the folder, its uninstaller doesn't take it out.

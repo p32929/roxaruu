@@ -50,6 +50,9 @@ Name: "{autoprograms}\Roxaruu"; Filename: "{app}\roxaruu.exe"; IconFilename: "{a
 Name: "{autodesktop}\Roxaruu"; Filename: "{app}\roxaruu.exe"; IconFilename: "{app}\roxaruu.ico"; Tasks: desktopicon
 
 [Registry]
+; Roxaruu's name and icon for its notifications (the app registers it as it
+; starts; the uninstaller takes it away).
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\p32929.Roxaruu"; Flags: uninsdeletekey dontcreatekey
 ; `rox` on PATH, for this user.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath(ExpandConstant('{app}'))
 ; Right-click a folder, the inside of one, or a file: Open with Roxaruu.

@@ -196,6 +196,9 @@ pub struct App {
     /// A browser opened a folder that's in another window: it goes there
     /// (`remote` tells the page, which switches once the window is listed).
     pub(crate) remote_follow: Option<String>,
+    /// Alerts for the browsers looking at this window (title, message): each
+    /// shows a notification there when that tab isn't the one in front.
+    pub(crate) remote_notes: Vec<(String, String)>,
     /// Picked from the editor's right-click menu, run once it's drawn.
     pub(crate) editor_pick: Option<Command>,
     /// Layout per view: `[the window, a browser's copy]` (see `View`).
@@ -220,6 +223,11 @@ pub struct App {
     /// it came on (`poll_attention` takes it).
     pub(crate) notify_answer: std::sync::Arc<std::sync::Mutex<Option<crate::sys::NotifyPermission>>>,
     last_file_check: Instant,
+    /// Hidden at the last frame (another Space, minimized): coming back is
+    /// noticed (`came_back`).
+    was_hidden: bool,
+    /// Redraw until then, after coming back (`came_back`).
+    pub(crate) redraw_until: Option<Instant>,
     /// Looks at the open files on disk so far (tests wait for the next one).
     pub(crate) file_checks: u64,
     /// Set once unsaved work is dealt with, so the window may really close.
@@ -284,6 +292,7 @@ impl App {
             remote_pass: false,
             remote_windows: false,
             remote_follow: None,
+            remote_notes: Vec::new(),
             editor_pick: None,
             views: Default::default(),
             main_ctx: ctx.clone(),
@@ -297,6 +306,8 @@ impl App {
             ask: None,
             notify_answer: Default::default(),
             last_file_check: Instant::now(),
+            was_hidden: false,
+            redraw_until: None,
             file_checks: 0,
             allow_close: false,
             palette: None,
@@ -473,13 +484,25 @@ impl App {
         {
             f.refresh(&t.buf, i);
         }
-        // Coming back to the window is when files most likely changed.
-        if ctx.input(|i| {
-            i.events
-                .iter()
-                .any(|e| matches!(e, egui::Event::WindowFocused(true)))
-        }) {
+        // Coming back to the window (its focus, or seen again: another
+        // Space, un-minimized) is when files most likely changed, and when
+        // what ran meanwhile has to show.
+        if !self.remote_pass && self.came_back(ctx) {
             self.last_file_check = Instant::now() - Duration::from_secs(5);
+            // While hidden, macOS gives the window no surface and its frames
+            // are skipped (no work while away). The frame asked for on coming
+            // back can be skipped too, if the surface isn't ready that moment,
+            // and nothing asks for another: the old picture stayed until the
+            // mouse moved. A few more, briefly, make sure one draws.
+            self.redraw_until = Some(Instant::now() + Duration::from_millis(600));
+            tracing::debug!("back to the window: redrawing");
+        }
+        if let Some(until) = self.redraw_until {
+            if Instant::now() < until {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            } else {
+                self.redraw_until = None;
+            }
         }
         self.poll_file_changes();
         // Shells that exited (`exit`, ^D) close their terminal; the last one
@@ -1494,6 +1517,21 @@ impl App {
     /// and the editor has the keyboard, never by jumping to it. A deleted
     /// file keeps its text, struck through and marked unsaved, so saving
     /// brings it back. A cheap `stat` per tab, once a second.
+    /// Whether you've just come back to this window: it got the keyboard, or
+    /// can be seen again (back from another Space, un-minimized).
+    fn came_back(&mut self, ctx: &egui::Context) -> bool {
+        let (focused, hidden) = ctx.input(|i| {
+            let v = i.viewport();
+            (
+                i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(true))),
+                v.occluded.unwrap_or(false) || v.minimized.unwrap_or(false),
+            )
+        });
+        let seen_again = self.was_hidden && !hidden;
+        self.was_hidden = hidden;
+        focused || seen_again
+    }
+
     fn poll_file_changes(&mut self) {
         use crate::buffer::DiskStatus;
         if !self.modal_open()

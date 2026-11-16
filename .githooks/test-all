@@ -75,8 +75,20 @@ for n in $(seq 0 $(( shards - 1 ))); do
     sed -n '/^failures:/,/^test result/p' "$scratch/log$n"
   fi
 done
-passed=$(cat "$scratch"/log* | grep -c " \.\.\. ok$" || true)
-fails=$(cat "$scratch"/log* | grep -c " \.\.\. FAILED$" || true)
+# Counted from each process's own summary ("test result: … N passed; M
+# failed"): a test's line can come out broken by what a program it runs
+# prints meanwhile (node, Chrome), which once read "0 failed" for a failure.
+passed=0 fails=0 crashed=0
+for n in $(seq 0 $(( shards - 1 ))); do
+  [ -s "$scratch/list$n" ] || continue
+  summary=$(grep "^test result:" "$scratch/log$n" | tail -1)
+  if [ -z "$summary" ]; then
+    crashed=$(( crashed + 1 ))
+    continue
+  fi
+  passed=$(( passed + $(sed -E 's/.* ([0-9]+) passed.*/\1/' <<<"$summary") ))
+  fails=$(( fails + $(sed -E 's/.* ([0-9]+) failed.*/\1/' <<<"$summary") ))
+done
 echo
-echo "test-all: $passed passed, $fails failed, in $(( SECONDS - start ))s"
+echo "test-all: $passed passed, $fails failed${crashed:+$( [ "$crashed" -gt 0 ] && echo ", $crashed process(es) crashed before finishing")}, in $(( SECONDS - start ))s"
 exit $failed

@@ -1820,6 +1820,50 @@ fn headless_notifications_first_run() {
     *crate::sys::PERMISSION_ANSWER.lock().unwrap() = NotifyPermission::Own;
 }
 
+/// Back to the window — from another Space (it was covered), minimized, or
+/// another app (it gets the keyboard back) — it redraws a few times, so
+/// what ran meanwhile shows even if the first frame finds no surface ready.
+/// Hidden, it asks for nothing.
+#[test]
+#[ignore]
+fn headless_redraws_on_coming_back() {
+    let mut h = harness(None);
+    h.run();
+    let viewport = |h: &mut Harness<'static, Root>| h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().clone();
+    let set = |h: &mut Harness<'static, Root>, occluded: bool, minimized: bool| {
+        let v = h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default();
+        v.occluded = Some(occluded);
+        v.minimized = Some(minimized);
+    };
+    let _ = viewport(&mut h);
+    // Away: covered, then minimized. Nothing asked for.
+    set(&mut h, true, false);
+    h.step();
+    assert!(app(&h).redraw_until.is_none(), "hidden: no frames asked for");
+    set(&mut h, false, true);
+    h.step();
+    assert!(app(&h).redraw_until.is_none());
+    // Seen again: a few frames, briefly.
+    set(&mut h, false, false);
+    h.step();
+    assert!(app(&h).redraw_until.is_some(), "un-minimized: redraws");
+    while app(&h).redraw_until.is_some() {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Back from another Space: covered, then not.
+    set(&mut h, true, false);
+    h.step();
+    set(&mut h, false, false);
+    h.step();
+    assert!(app(&h).redraw_until.is_some(), "uncovered: redraws");
+    // The keyboard back from another app.
+    h.state_mut().0.redraw_until = None;
+    h.event(Event::WindowFocused(true));
+    h.step();
+    assert!(app(&h).redraw_until.is_some(), "focused again: redraws");
+}
+
 /// An empty folder's tree says so under its search box, not on top of it.
 #[test]
 #[ignore]
@@ -4181,6 +4225,19 @@ fn headless_remote_access() {
     shot(&mut h, "r3-address-dialog");
     press(&mut h, Modifiers::NONE, Key::Escape);
     assert!(app(&h).ask.is_none(), "esc closes it");
+
+    // An alert in a terminal you're not looking at (its panel hidden): the
+    // browser is told, to show its own notification.
+    h.state_mut().0.terminal_open = false;
+    h.state_mut().0.terminal_mut().unwrap().pane.send_input(b"printf '\\a'\r");
+    while !texts.iter().any(|t| t.contains(r#""t":"notify""#)) {
+        h.step();
+        if let Ok(Message::Text(t)) = ws.read() {
+            texts.push(t.to_string());
+        }
+    }
+    let note = texts.iter().find(|t| t.contains(r#""t":"notify""#)).unwrap();
+    assert!(note.contains("Roxaruu · ") && note.contains("wants your attention"), "{note}");
 
     // Turned off: the server stops, the browser's link closes, and this
     // window is no longer listed.

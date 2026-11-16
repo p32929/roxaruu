@@ -144,6 +144,11 @@ impl App {
             }
             let name = t.pane.display_name();
             for message in t.pane.take_fired() {
+                // Browsers looking in hear it too, as their own notification.
+                if self.remote.clients > 0 && self.config.settings.notifications {
+                    let body = if message.is_empty() { "wants your attention".to_string() } else { message.clone() };
+                    self.remote_notes.push((format!("Roxaruu · {name}"), body));
+                }
                 let key = self
                     .config
                     .keymap
