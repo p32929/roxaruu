@@ -309,5 +309,7 @@ jobs:
           > Some tests failed in this build (${failed:-see the run}). It should still work; [the run]($RUN) shows what failed.
           "
           fi
+          # What the app checks an update against before installing it (src/update.rs).
+          (cd dist && sha256sum roxaruu_v* > SHA256SUMS)
           gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Roxaruu $tag" --notes "$notes" --generate-notes
           echo "published: $(gh release view "$tag" --json url -q .url)"

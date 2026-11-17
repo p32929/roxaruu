@@ -39,6 +39,9 @@ pub struct Settings {
     /// A system notification when a terminal's agent finishes or needs you
     /// while you're in another app (the toast in the window comes anyway).
     pub notifications: bool,
+    /// Check for updates now and then, download them, and install them
+    /// when the last window closes (Check for Updates works either way).
+    pub updates: bool,
     /// Earlier builds saved remote access here; it's off at every launch
     /// now. Accepted, so an old file doesn't show an error, and ignored.
     #[serde(rename = "remoteAccess")]
@@ -63,6 +66,7 @@ impl Default for Settings {
             word_wrap: false,
             sidebar: true,
             notifications: true,
+            updates: true,
             old_remote_access: serde::de::IgnoredAny,
         }
     }
@@ -509,7 +513,9 @@ pub(crate) fn settings_template() -> String {
            // \"wordWrap\": {},\n  \
            // \"sidebar\": {},\n\n  \
            // A notification when a terminal's agent finishes or needs you, while you're in another app\n  \
-           // \"notifications\": {},\n\
+           // \"notifications\": {},\n\n  \
+           // Download updates from GitHub and install them when you close the last window\n  \
+           // \"updates\": {},\n\
          }}\n",
         quote(themes.into_iter().map(|t| t.name).collect()),
         d.theme,
@@ -530,6 +536,7 @@ pub(crate) fn settings_template() -> String {
         d.word_wrap,
         d.sidebar,
         d.notifications,
+        d.updates,
     )
 }
 

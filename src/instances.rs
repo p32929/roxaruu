@@ -86,6 +86,49 @@ pub fn unregister() {
     }
 }
 
+/// Every window, with a folder or not: `running/windows/<pid>`. An update
+/// installs when the last one closes.
+fn windows_dir() -> Option<PathBuf> {
+    running_dir().map(|d| d.join("windows"))
+}
+
+/// Count this process as an open window (until `unregister_window`).
+pub fn register_window() {
+    if let Some(dir) = windows_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(std::process::id().to_string()), "");
+    }
+}
+
+pub fn unregister_window() {
+    if let Some(dir) = windows_dir() {
+        let _ = std::fs::remove_file(dir.join(std::process::id().to_string()));
+    }
+}
+
+/// How many other Roxaruu windows are open (stale markers pruned).
+pub fn other_windows() -> usize {
+    windows_dir().map_or(0, |d| other_windows_in(&d, std::process::id()))
+}
+
+fn other_windows_in(dir: &Path, me: u32) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    entries
+        .flatten()
+        .filter_map(|e| Some((e.file_name().to_string_lossy().parse::<i32>().ok()?, e.path())))
+        .filter(|(pid, path)| {
+            if *pid as u32 == me {
+                return false;
+            }
+            let alive = pid_is_roxaruu(*pid);
+            if !alive {
+                let _ = std::fs::remove_file(path);
+            }
+            alive
+        })
+        .count()
+}
+
 /// Folders open in other live Roxaruu windows, with each window's pid
 /// (stale markers pruned in passing).
 pub fn open_folders() -> Vec<(i32, PathBuf)> {
@@ -290,6 +333,18 @@ mod tests {
             open_folders_in(tmp.path(), std::process::id()).is_empty(),
             "not this window's own"
         );
+    }
+
+    #[test]
+    fn other_windows_are_counted_and_gone_ones_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let me = std::process::id();
+        std::fs::write(tmp.path().join(me.to_string()), "").unwrap();
+        assert_eq!(other_windows_in(tmp.path(), me), 0, "not this one");
+        assert_eq!(other_windows_in(tmp.path(), 0), 1, "a live one (this test, as another window)");
+        std::fs::write(tmp.path().join("2147483646"), "").unwrap();
+        assert_eq!(other_windows_in(tmp.path(), me), 0);
+        assert!(!tmp.path().join("2147483646").exists(), "gone: pruned");
     }
 
     #[test]

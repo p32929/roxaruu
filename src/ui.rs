@@ -94,6 +94,7 @@ pub mod icon {
     pub const INFO: &str = "\u{ea74}";
     pub const GITHUB: &str = "\u{ea84}";
     pub const GLOBE: &str = "\u{eb01}";
+    pub const DOWNLOAD: &str = "\u{eac2}";
 
     /// A file's type icon and its colour (Seti's, as VS Code shows them).
     /// `None`: no known type, the plain page in the caller's colour.
@@ -298,6 +299,7 @@ pub mod icon {
             Command::Keybindings | Command::OpenKeybindings => KEYBOARD,
             Command::Help => QUESTION,
             Command::About => INFO,
+            Command::CheckForUpdates => DOWNLOAD,
             Command::OpenNotificationSettings => BELL,
             Command::Todos => TASKS,
             Command::ClipboardHistory => CLIPBOARD,
@@ -498,10 +500,17 @@ struct Paint {
 }
 
 impl Paint {
-    /// About Roxaruu: the icon, name, version and what it is; then where it
-    /// lives and who made it, as rows that open them (`clicked`: 2 GitHub,
-    /// 1 the portfolio, as `ask_ui` numbers them); then their keys.
-    fn about(&self, ui: &mut egui::Ui, app_icon: Option<egui::TextureId>, clicked: &std::cell::Cell<Option<usize>>) {
+    /// About Roxaruu: the icon, name, version and what it is; then rows
+    /// that open where it lives and who made it, and its update (`update`:
+    /// what that row says; `clicked`: 2 GitHub, 1 the portfolio, 3 the
+    /// update, as `ask_ui` numbers them); then their keys.
+    fn about(
+        &self,
+        ui: &mut egui::Ui,
+        app_icon: Option<egui::TextureId>,
+        update: (&str, &str),
+        clicked: &std::cell::Cell<Option<usize>>,
+    ) {
         let (c, s) = (&self.c, self.s);
         ui.vertical_centered(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0 * s;
@@ -536,11 +545,13 @@ impl Paint {
             );
         });
         ui.add_space(16.0 * s);
+        let shown = |url: &'static str| url.trim_start_matches("https://").trim_end_matches('/');
         let links = [
-            (2, icon::GITHUB, "Source code on GitHub", crate::REPO),
-            (1, icon::GLOBE, "Made by p32929", crate::PORTFOLIO),
+            (3, icon::DOWNLOAD, update.0, update.1),
+            (2, icon::GITHUB, "Source code on GitHub", shown(crate::REPO)),
+            (1, icon::GLOBE, "Made by p32929", shown(crate::PORTFOLIO)),
         ];
-        for (i, glyph, title, url) in links {
+        for (i, glyph, title, detail) in links {
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 50.0 * s), Sense::click());
             // Named, for screen readers (and tests).
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, title));
@@ -555,12 +566,11 @@ impl Paint {
             );
             p.text(pos2(r.left() + 18.0 * s, r.center().y), Align2::LEFT_CENTER, glyph, self.font(18.0, Weight::Regular), c.accent);
             p.text(pos2(r.left() + 48.0 * s, r.center().y - 8.0 * s), Align2::LEFT_CENTER, title, self.font(13.0, Weight::Medium), c.text);
-            let shown = url.trim_start_matches("https://").trim_end_matches('/');
-            p.text(pos2(r.left() + 48.0 * s, r.center().y + 9.0 * s), Align2::LEFT_CENTER, shown, self.font(12.0, Weight::Regular), c.text_subtle);
+            p.text(pos2(r.left() + 48.0 * s, r.center().y + 9.0 * s), Align2::LEFT_CENTER, detail, self.font(12.0, Weight::Regular), c.text_subtle);
             p.text(
                 pos2(r.right() - 16.0 * s, r.center().y),
                 Align2::RIGHT_CENTER,
-                icon::LINK,
+                if i == 3 { icon::CHEVRON_RIGHT } else { icon::LINK },
                 self.font(14.0, Weight::Regular),
                 if hover { c.text } else { c.text_subtle },
             );
@@ -574,7 +584,12 @@ impl Paint {
         }
         // Their keys, once: one row, centred.
         ui.add_space(10.0 * s);
-        let hints: [Hint; 3] = [(vec!["G".into()], "GitHub"), (vec!["P".into()], "portfolio"), (vec!["esc".into()], "close")];
+        let hints: [Hint; 4] = [
+            (vec!["U".into()], "update"),
+            (vec!["G".into()], "GitHub"),
+            (vec!["P".into()], "portfolio"),
+            (vec!["esc".into()], "close"),
+        ];
         let w = self.key_hints(ui, None, &hints, 11.0, Pos2::ZERO);
         let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0 * s), Sense::hover());
         self.key_hints(ui, Some(ui.painter()), &hints, 11.0, pos2(row.center().x - w / 2.0, row.center().y));
@@ -1673,15 +1688,28 @@ impl App {
             ),
             Ask::About => {
                 // Keys only (the links below are what's clicked): close,
-                // the portfolio, GitHub, numbered as the answer reads them.
+                // the portfolio, GitHub, the update, numbered as the
+                // answer reads them.
                 const KEYS: &[Btn] = &[
                     Btn { label: "", hint: "", keys: &[Key::Escape], primary: false },
                     Btn { label: "", hint: "", keys: &[Key::P], primary: false },
                     Btn { label: "", hint: "", keys: &[Key::Enter, Key::G], primary: true },
+                    Btn { label: "", hint: "", keys: &[Key::U], primary: false },
                 ];
+                use crate::app::Update;
+                let update = match self.update_state() {
+                    Update::Unknown => ("Check for updates".to_string(), "Updates install by themselves when you quit".to_string()),
+                    Update::Checking => ("Checking for updates…".into(), "Asking GitHub for the latest release".into()),
+                    Update::UpToDate => ("Up to date".into(), "Check again".into()),
+                    Update::Downloading(v) => (format!("Downloading Roxaruu {v}…"), "It installs when you quit".into()),
+                    Update::Ready(v) => (format!("Roxaruu {v} is ready"), "Installs when you quit · restart now".into()),
+                    Update::Installed(v) => (format!("Roxaruu {v} is installed"), "Restart to use it".into()),
+                    Update::ByHand(v) => (format!("Roxaruu {v} is out"), "Get it from the release page".into()),
+                    Update::Failed(_) => ("Couldn't check for updates".into(), "Try again".into()),
+                };
                 let pt = self.paint();
                 let clicked = std::cell::Cell::new(None);
-                let draw = |ui: &mut egui::Ui| pt.about(ui, app_icon, &clicked);
+                let draw = |ui: &mut egui::Ui| pt.about(ui, app_icon, (&update.0, &update.1), &clicked);
                 self.modal(ctx, "", "", "", KEYS, None, None, Some(&draw)).or(clicked.get())
             }
             Ask::Notifications => self.modal(
@@ -1699,6 +1727,18 @@ impl App {
                 None,
                 None,
             ),
+            Ask::Update { others } => {
+                let (title, body, button) = self.update_dialog(*others);
+                let ok_btn;
+                let buttons: &[Btn] = match button {
+                    Some(label) => {
+                        ok_btn = [Btn { label: "Later", hint: "esc", keys: &[Key::Escape], primary: false }, ok(label)];
+                        &ok_btn
+                    }
+                    None => &[Btn { label: "OK", hint: "↵", keys: &[Key::Enter, Key::Escape], primary: true }],
+                };
+                self.modal(ctx, icon::DOWNLOAD, &title, &body, buttons, None, None, None)
+            }
             Ask::OpenUrl(url) => {
                 let body = url.clone();
                 self.modal(
@@ -1735,6 +1775,10 @@ impl App {
             Some(1) if matches!(self.ask, Some(crate::app::Ask::About)) => {
                 self.ask = None;
                 self.open_url(crate::PORTFOLIO.into(), ctx);
+            }
+            Some(3) if matches!(self.ask, Some(crate::app::Ask::About)) => {
+                self.ask = None;
+                self.run(Command::CheckForUpdates, ctx);
             }
             Some(i) if matches!(self.ask, Some(crate::app::Ask::About)) => self.answer_ask(i == 2, ctx),
             Some(i) => self.answer_ask(i == 1, ctx),
@@ -2425,8 +2469,18 @@ impl App {
             (None, 0) => format!("{}  remote on{key}", icon::EYE),
             (None, n) => format!("{}  remote · {n} viewing{key}", icon::EYE),
         });
+        // An update waiting: the version says so, in the accent.
+        let news = match self.update_state() {
+            crate::app::Update::Ready(v) => Some(format!("Roxaruu {v} is ready")),
+            crate::app::Update::Installed(v) => Some(format!("Roxaruu {v} is installed")),
+            crate::app::Update::ByHand(v) => Some(format!("Roxaruu {v} is out")),
+            _ => None,
+        };
         let stats = [
-            full.then(|| format!("v{}", crate::VERSION)),
+            full.then(|| match news {
+                Some(_) => format!("v{}  {}", crate::VERSION, icon::DOWNLOAD),
+                None => format!("v{}", crate::VERSION),
+            }),
             remote.filter(|r| !r.is_empty()),
             self.mem_kb
                 .filter(|_| full)
@@ -2443,7 +2497,8 @@ impl App {
         let mut x = rect.right() - 12.0 * s;
         for (i, text) in stats.into_iter().enumerate() {
             let Some(text) = text else { continue };
-            let g = ui.fonts_mut(|f| f.layout_no_wrap(text, font.clone(), c.text_subtle));
+            let color = if i == 0 && news.is_some() { c.accent } else { c.text_subtle };
+            let g = ui.fonts_mut(|f| f.layout_no_wrap(text, font.clone(), color));
             if x - g.size().x < rect.left() + 12.0 * s {
                 break;
             }
@@ -2462,7 +2517,11 @@ impl App {
                     p.rect_filled(r, 4.0 * s, c.hover);
                     ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                 }
-                if about.on_hover_text(format!("About Roxaruu{keys}")).clicked() {
+                let tip = match &news {
+                    Some(n) => format!("{n} — About Roxaruu{keys}"),
+                    None => format!("About Roxaruu{keys}"),
+                };
+                if about.on_hover_text(tip).clicked() {
                     picked = Some(Command::About);
                 }
             }

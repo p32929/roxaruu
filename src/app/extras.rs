@@ -50,10 +50,11 @@ pub enum Setting {
     IndentGuides,
     Sidebar,
     Notifications,
+    Updates,
 }
 
 impl Setting {
-    pub const ALL: [Setting; 12] = [
+    pub const ALL: [Setting; 13] = [
         Setting::Theme,
         Setting::UiFont,
         Setting::CodeFont,
@@ -66,6 +67,7 @@ impl Setting {
         Setting::IndentGuides,
         Setting::Sidebar,
         Setting::Notifications,
+        Setting::Updates,
     ];
 
     /// Its key in `settings.json`.
@@ -83,6 +85,7 @@ impl Setting {
             Setting::IndentGuides => "indentGuides",
             Setting::Sidebar => "sidebar",
             Setting::Notifications => "notifications",
+            Setting::Updates => "updates",
         }
     }
 
@@ -100,6 +103,7 @@ impl Setting {
             Setting::IndentGuides => "Indent guides",
             Setting::Sidebar => "Show file tree",
             Setting::Notifications => "Notify when an agent finishes",
+            Setting::Updates => "Install updates when you quit",
         }
     }
 
@@ -115,6 +119,7 @@ impl Setting {
             Setting::CurrentLine | Setting::IndentGuides => icon::EDIT,
             Setting::Sidebar => icon::SIDEBAR,
             Setting::Notifications => icon::BELL,
+            Setting::Updates => icon::DOWNLOAD,
         }
     }
 }
@@ -471,6 +476,7 @@ impl App {
             Setting::IndentGuides => on(st.indent_guides),
             Setting::Sidebar => on(st.sidebar),
             Setting::Notifications => on(st.notifications),
+            Setting::Updates => on(st.updates),
         }
     }
 
@@ -521,6 +527,7 @@ impl App {
             Setting::IndentGuides => (!st.indent_guides).into(),
             Setting::Sidebar => (!st.sidebar).into(),
             Setting::Notifications => (!st.notifications).into(),
+            Setting::Updates => (!st.updates).into(),
         };
         // Turned on: the system may want to be asked (macOS's prompt).
         let ask = s == Setting::Notifications && value == serde_json::Value::Bool(true);

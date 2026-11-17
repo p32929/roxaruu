@@ -42,6 +42,7 @@ mod terminalpane;
 mod theme;
 mod todo;
 mod ui;
+mod update;
 mod wrap;
 
 use eframe::egui;
@@ -90,6 +91,11 @@ fn main() -> eframe::Result {
     // Typed in a terminal with nothing after it (`rox`, `roxaruu`): the
     // folder you're in. Opened from the app list, the Dock or the Start Menu
     // (no terminal), or `rox --remote on …` without a folder: nothing.
+    // Windows' installer starting it again after an update: the folder the
+    // window had.
+    if launch.after_update {
+        launch.target = update::take_reopen();
+    }
     if launch.target.is_none() && opens_here(std::env::args_os().len() == 1, from_shell) {
         launch.target = std::env::current_dir().ok();
     }
@@ -102,6 +108,7 @@ fn main() -> eframe::Result {
             println!("roxaruu {VERSION}");
             return Ok(());
         }
+        Some(Info::Update) => std::process::exit(update::from_command_line(instances::other_windows())),
         Some(Info::Unknown(flag)) => {
             eprintln!("roxaruu: unknown option {flag}\n\n{}", help());
             std::process::exit(2);
@@ -223,6 +230,7 @@ fn main() -> eframe::Result {
     remember_renderer(true);
     let renderer = eframe::Renderer::Wgpu;
     tracing::info!(safe, "opening the window");
+    instances::register_window();
     let result = eframe::run_native(
         "Roxaruu",
         eframe::NativeOptions {
@@ -264,8 +272,12 @@ fn main() -> eframe::Result {
     // ends the server's threads regardless.)
     termbridge::cleanup();
     instances::unregister();
+    instances::unregister_window();
     instances::unregister_remote();
     instances::clear_remote_server(true);
+    // The last window: install a downloaded update (or this one asked to
+    // restart into it).
+    update::on_close(instances::other_windows());
     if let Err(e) = &result {
         tracing::error!(error = %e, "the window couldn't open");
         if !DRAWN.load(std::sync::atomic::Ordering::Relaxed) {
@@ -423,6 +435,9 @@ Usage:
                        and this prints the address to open in a browser.
                        The password is kept in memory only.
   rox --remote off     Turn remote access off, wherever it runs.
+  rox --update         Install the latest version, if there's a newer one.
+                       (Roxaruu also does this by itself: it downloads an
+                       update and installs it when the last window closes.)
   rox -h | --help      Show this help.
   rox -V | --version   Show the version.
 
@@ -439,6 +454,8 @@ command by name. Settings, keys and themes are JSON in ~/.config/roxaruu/.",
 enum Info {
     Help,
     Version,
+    /// `--update`: install the latest version, here in the terminal.
+    Update,
     Unknown(String),
 }
 
@@ -462,6 +479,9 @@ struct Launch {
     remote: Option<RemoteArg>,
     /// `--virtual-screen`: started on Xvfb by `detach` (no real screen).
     virtual_screen: bool,
+    /// `--after-update`: Windows' installer starting it again; reopen the
+    /// folder the window had (`update::take_reopen`).
+    after_update: bool,
     /// `roxaruu [folder | file]`. Bare, it's decided in `main` (`opens_here`):
     /// typed in a terminal, the folder you're in; else nothing.
     target: Option<std::path::PathBuf>,
@@ -470,7 +490,7 @@ struct Launch {
 impl Launch {
     fn parse(args: impl Iterator<Item = std::ffi::OsString>) -> Launch {
         let (mut info, mut foreground, mut remote, mut password, mut target) = (None, false, None, None, None);
-        let mut virtual_screen = false;
+        let (mut virtual_screen, mut after_update) = (false, false);
         let mut args = args.peekable();
         while let Some(a) = args.next() {
             match a.to_str() {
@@ -478,6 +498,8 @@ impl Launch {
                 Some("-V" | "--version") => info = info.or(Some(Info::Version)),
                 Some("--foreground") => foreground = true,
                 Some("--virtual-screen") => virtual_screen = true,
+                Some("--after-update") => after_update = true,
+                Some("--update") => info = info.or(Some(Info::Update)),
                 Some("--remote") => match args.next().as_ref().and_then(|v| v.to_str()) {
                     Some("on") => remote = Some(true),
                     Some("off") => remote = Some(false),
@@ -492,7 +514,7 @@ impl Launch {
         // Absolute, so the copy opens the same thing wherever it starts.
         let target = target.map(|t| std::path::absolute(&t).unwrap_or(t));
         let remote = remote.map(|on| if on { RemoteArg::On(password) } else { RemoteArg::Off });
-        Launch { info, foreground, remote, virtual_screen, target }
+        Launch { info, foreground, remote, virtual_screen, after_update, target }
     }
 }
 
@@ -723,9 +745,12 @@ mod tests {
         assert_eq!(parse(&["-V"]).info, Some(Info::Version));
         assert_eq!(parse(&["--nope"]).info, Some(Info::Unknown("--nope".into())));
         assert_eq!(parse(&["src"]).info, None);
+        assert_eq!(parse(&["--update"]).info, Some(Info::Update));
+        assert!(parse(&["--after-update"]).after_update);
+        assert!(!parse(&["src"]).after_update);
         assert_eq!(parse(&["--foreground"]).info, None);
         let h = help();
-        for flag in ["--help", "--version", "--foreground", "rox <folder>"] {
+        for flag in ["--help", "--version", "--foreground", "--update", "rox <folder>"] {
             assert!(h.contains(flag), "{flag}");
         }
     }

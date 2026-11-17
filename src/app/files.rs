@@ -33,6 +33,9 @@ pub enum Ask {
     About,
     /// Once per install: notify you when an agent finishes or needs you?
     Notifications,
+    /// An update: restart into it, install it, or where to get it.
+    /// `others`: other Roxaruu windows open, as it opened.
+    Update { others: usize },
 }
 
 /// Where Git for Windows (and its Git Bash) comes from.
@@ -161,6 +164,10 @@ impl App {
             }
             Ask::Notifications => {
                 self.answer_notifications(true, ctx);
+                Ok(())
+            }
+            Ask::Update { .. } => {
+                self.answer_update(ctx);
                 Ok(())
             }
             // ↵ is "GitHub"; "Portfolio" answers apart (`ui`).

@@ -2019,6 +2019,71 @@ fn headless_about() {
     assert!(!about(&h) && App::take_launched().is_empty());
 }
 
+/// An update waiting (another window downloaded it): said once, shown on
+/// the version and in About, and Restart Now restarts into it (after
+/// asking about unsaved work). One this copy can't install (built from
+/// source) opens the release page.
+#[test]
+#[ignore]
+fn headless_updates() {
+    use crate::app::{App, Ask, Update};
+    use crate::keymap::Command;
+    let dir = crate::update::dir().unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("roxaruu_v99.0.0_macos_intel.dmg"), "package").unwrap();
+    std::fs::write(dir.join("ready"), "99.0.0 roxaruu_v99.0.0_macos_intel.dmg").unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
+    let mut h = harness(Some(root.clone()));
+    h.run();
+    assert_eq!(app(&h).update_state(), Update::Ready("99.0.0".into()), "found on disk");
+    let said = |h: &Harness<'static, Root>| app(h).toasts.iter().filter(|t| t.msg.contains("99.0.0 is ready")).count();
+    assert_eq!(said(&h), 1, "said once: {:?}", app(&h).toasts.iter().map(|t| &t.msg).collect::<Vec<_>>());
+    h.run();
+    assert_eq!(said(&h), 1, "and only once");
+    // The version on the status bar is About, which has the update's row.
+    let version = crate::ui::drawn_hints(Command::About).into_iter().max_by(|a, b| a.top().total_cmp(&b.top())).unwrap();
+    click_at(&mut h, version.center(), egui::PointerButton::Primary);
+    assert!(matches!(app(&h).ask, Some(Ask::About)));
+    assert!(h.query_all_by_label_contains("Roxaruu 99.0.0 is ready").next().is_some(), "About's update row");
+    shot(&mut h, "about-update");
+    press(&mut h, Modifiers::NONE, Key::U);
+    assert!(matches!(app(&h).ask, Some(Ask::Update { .. })), "U: the update");
+    for want in ["Roxaruu 99.0.0 is ready", "Restart Now", "Later"] {
+        assert!(h.query_all_by_label_contains(want).next().is_some(), "the dialog shows {want}");
+    }
+    shot(&mut h, "update-ready");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(app(&h).ask.is_none() && !crate::update::restarting(), "Later: nothing happens");
+    // Restart Now with an unsaved file: asked about it first, then closes to restart.
+    h.state_mut().0.open_file(&root.join("a.rs"));
+    h.run();
+    type_text(&mut h, "x");
+    press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::D);
+    assert!(matches!(app(&h).ask, Some(Ask::Update { .. })), "its key: the update");
+    assert!(h.query_all_by_label_contains("unsaved").next().is_some(), "says what a restart closes");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(app(&h).prompt.is_some() && !app(&h).allow_close, "save changes? first");
+    assert!(!crate::update::restarting());
+    let ctx = h.ctx.clone();
+    h.state_mut().0.answer_prompt(crate::app::Answer::Discard, &ctx);
+    h.step();
+    assert!(app(&h).allow_close && crate::update::restarting(), "closes, to restart into it");
+
+    // Out, but this copy is built from source: the release page.
+    let mut h = harness(None);
+    h.run();
+    *app(&h).updates.state.lock().unwrap() = Update::ByHand("99.0.0".into());
+    h.run();
+    App::take_launched();
+    press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::D);
+    assert!(h.query_all_by_label_contains("Open Release Page").next().is_some());
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(App::take_launched(), vec![vec![crate::update::RELEASES.to_string()]]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 #[ignore]
 fn headless_idle_and_startup() {
@@ -5432,7 +5497,7 @@ fn headless_every_key_that_applies_shows() {
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
         OpenProjectSettings, OpenConfigFolder, Todos, ClipboardHistory, ZoomIn, ZoomOut, ResetZoom, FullScreen,
         MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
-        ToggleTerminal, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings,
+        ToggleTerminal, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
         // A tab's or the tree's right-click menu.
         RenameFile, RevealInFinder, OpenInTerminal, CopyPath, CopyRelativePath,
         // On each tab's tooltip (⌘1–8); ⌘9 is "the last".

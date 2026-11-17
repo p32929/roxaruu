@@ -22,8 +22,10 @@ use crate::ui::icon;
 
 mod extras;
 mod files;
+mod updates;
 pub use extras::{Setting, Toast};
 pub use files::Ask;
+pub(crate) use updates::Update;
 #[cfg(test)]
 pub use files::set_clipboard_files;
 
@@ -80,6 +82,8 @@ pub enum After {
     Nothing,
     CloseFolder,
     Quit,
+    /// Quit, then start again on the update (`update::on_close`).
+    Restart,
 }
 
 /// Where the keyboard goes.
@@ -199,6 +203,8 @@ pub struct App {
     /// Alerts for the browsers looking at this window (title, message): each
     /// shows a notification there when that tab isn't the one in front.
     pub(crate) remote_notes: Vec<(String, String)>,
+    /// Where this window's update stands (`app/updates.rs`).
+    pub(crate) updates: updates::Updates,
     /// Picked from the editor's right-click menu, run once it's drawn.
     pub(crate) editor_pick: Option<Command>,
     /// Layout per view: `[the window, a browser's copy]` (see `View`).
@@ -293,6 +299,7 @@ impl App {
             remote_windows: false,
             remote_follow: None,
             remote_notes: Vec::new(),
+            updates: Default::default(),
             editor_pick: None,
             views: Default::default(),
             main_ctx: ctx.clone(),
@@ -466,6 +473,9 @@ impl App {
         }
         self.poll_config(ctx);
         self.poll_index();
+        if !self.remote_pass {
+            self.poll_updates(ctx);
+        }
 
         // The OS close button (or ⌘Q from the app menu): ask about unsaved
         // work first.
@@ -832,6 +842,7 @@ impl App {
             Command::ClipboardHistory => self.open_palette(Mode::Clipboard, ctx),
             Command::Help => self.help = !self.help,
             Command::About => self.ask = Some(Ask::About),
+            Command::CheckForUpdates => self.run_check_for_updates(ctx),
             Command::OpenNotificationSettings => self.open_notification_settings(),
             Command::OpenProjectSettings => self.open_project_settings(ctx),
             // The config files open right here; saving applies them.
@@ -1931,7 +1942,10 @@ impl App {
                 crate::instances::unregister();
                 self.reload_config(ctx); // without the project's settings
             }
-            After::Quit => {
+            After::Quit | After::Restart => {
+                if prompt.after == After::Restart {
+                    crate::update::restart_after_close(self.project.as_ref().map(|p| p.root.clone()));
+                }
                 self.save_session();
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);

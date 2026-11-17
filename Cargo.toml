@@ -1,6 +1,6 @@
 [package]
 name = "roxaruu"
-version = "0.2.62"
+version = "0.2.63"
 edition = "2024"
 description = "A keyboard-first code editor with terminals built in, for macOS, Windows, Linux and any browser"
 repository = "https://github.com/p32929/roxaruu"
@@ -66,6 +66,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 which = "8.0.6"
 keepawake = "0.6.1"
 dunce = "1.0.5"
+ureq = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Where the pointer is when Finder drops a file (winit doesn't say), and
@@ -101,7 +102,7 @@ indexing_slicing = "deny"
 flate2 = "1"
 
 # Windows: the icon goes into the .exe (build.rs).
-[target.'cfg(windows)'.build-dependencies]
+[target."cfg(windows)".build-dependencies]
 winresource = "0.1"
 
 [dev-dependencies]

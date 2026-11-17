@@ -68,8 +68,16 @@ Root: HKCU; Subkey: "Software\Classes\*\shell\Roxaruu\command"; ValueType: strin
 
 [Run]
 Filename: "{app}\roxaruu.exe"; Description: "Open Roxaruu"; Flags: nowait postinstall skipifsilent
+; An update from inside Roxaruu (Restart to Update): open it again, with
+; the folder it had (src/update.rs).
+Filename: "{app}\roxaruu.exe"; Parameters: "--after-update"; Flags: nowait; Check: Relaunch
 
 [Code]
+function Relaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
 function NeedsAddPath(Dir: string): Boolean;
 var
   Path: string;
