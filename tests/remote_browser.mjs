@@ -353,7 +353,7 @@ async function inputScenario() {
   await touches("touchEnd", []);
   await sleep(1000);
   await tapType("A");
-  await mark("dragged");
+  await goAhead("dragged");
   await chord(["meta"], "ArrowUp", "ArrowUp");
   await sleep(300);
   await touches("touchStart", [[fx, fy + 120]]);
@@ -363,7 +363,7 @@ async function inputScenario() {
   // loaded machine, so a fixed wait tapped mid-coast and stopped it short).
   await waitFor(`coast === 0`, "the flick to stop coasting");
   await tapType("F");
-  await mark("flicked");
+  await goAhead("flicked");
   await shot("w6a-flicked.png");
   // A tap clicks: the caret goes to the end of line 1.
   await chord(["meta"], "ArrowUp", "ArrowUp");

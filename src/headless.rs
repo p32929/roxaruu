@@ -4760,9 +4760,13 @@ fn headless_remote_input_in_chrome() {
                 .terminal()
                 .is_some_and(|t| t.pane.screen().contents().contains("https://example.com/rox")),
             "links-listed" => app(h).palette.as_ref().is_some_and(|p| !p.items.is_empty()),
+            // The letter typed where the tap left the caret (a loaded
+            // machine got the step before the key).
+            "dragged" => row_with(h, "A").is_some(),
+            "flicked" => row_with(h, "F").is_some(),
             _ => true,
         };
-        if matches!(step, "link-printed" | "links-listed") {
+        if matches!(step, "link-printed" | "links-listed" | "dragged" | "flicked") {
             // What it's waiting on, every few seconds, in a file (a waiting
             // test's output is held back): a wait that never ends says why.
             let note = shots.join("input-waiting.log");
@@ -4785,7 +4789,6 @@ fn headless_remote_input_in_chrome() {
             }
             use std::io::Write as _;
             writeln!(to_page, "go").unwrap();
-            continue;
         }
         let a = app(&h);
         let screen = a.terminal().map(|t| t.pane.screen().contents()).unwrap_or_default();
