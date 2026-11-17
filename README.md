@@ -136,10 +136,4 @@ Working on it: run `git config core.hooksPath .githooks` once. Then every commit
 
 Contributions are very welcome, and thank you for even thinking about it. One small request: before you start on a change, please [open an issue](https://github.com/p32929/roxaruu/issues) first and tell me about the problem or the idea. That way we can talk it through, agree on the approach, and make sure it fits where Roxaruu is going, so your time and effort don't end up wasted on a pull request I can't merge. Bug reports and suggestions on their own help a lot too.
 
-## Share
-
-<a href="https://p32929.github.io/share/?repo=roxaruu"><picture><source media="(prefers-color-scheme: dark)" srcset="https://p32929.github.io/readme/share-dark.svg"><img src="https://p32929.github.io/readme/share-light.svg" alt="Share this with your friends in just a click" width="420"></picture></a>
-
-## Support
-
-<a href="https://p32929.github.io/support/"><picture><source media="(prefers-color-scheme: dark)" srcset="https://p32929.github.io/readme/support-dark.svg"><img src="https://p32929.github.io/readme/support-light.svg" alt="If you like my works and want to support me, feel free to support" width="420"></picture></a>
+<p><a href="https://p32929.github.io/share/?repo=roxaruu"><picture><source media="(prefers-color-scheme: dark)" srcset="https://p32929.github.io/readme/footer-share-dark.svg"><img src="https://p32929.github.io/readme/footer-share-light.svg" width="50%" align="top" alt="Share this project with your friends in one click"></picture></a><a href="https://p32929.github.io/support/"><picture><source media="(prefers-color-scheme: dark)" srcset="https://p32929.github.io/readme/footer-support-dark.svg"><img src="https://p32929.github.io/readme/footer-support-light.svg" width="50%" align="top" alt="If you like my work and want to support me, feel free to support"></picture></a><br><a href="https://openstore.pfay.workers.dev/add"><picture><source media="(prefers-color-scheme: dark)" srcset="https://p32929.github.io/readme/footer-join-dark.svg"><img src="https://p32929.github.io/readme/footer-join-light.svg" width="100%" align="top" alt="Put your own apps on OpenStore: free, your listing lives in your own repo"></picture></a></p>
