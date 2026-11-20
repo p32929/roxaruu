@@ -2412,13 +2412,13 @@ impl App {
         } else if self.sidebar.searching && self.sidebar.query.is_empty() {
             vec![raw("type", "search"), raw("↓", "browse"), raw("esc", back)]
         } else if !self.sidebar.query.is_empty() {
-            let build = self.project.as_ref().is_some_and(|p| p.build);
+            let build = self.config.settings.search_ignored;
             vec![
                 raw("↑↓", "choose"),
                 raw("↵", "open"),
                 cmd(Command::RenameFile, "rename"),
                 cmd(Command::DeleteFile, "move to trash"),
-                cmd(Command::ToggleBuildFolders, if build { "hide build folders" } else { "show build folders" }),
+                cmd(Command::ToggleBuildFolders, if build { "skip ignored files" } else { "include ignored files" }),
                 raw("esc", back),
             ]
         } else {
@@ -5485,11 +5485,11 @@ impl App {
         let screen = ctx.content_rect();
         let searching = self.searching();
         let search_summary = self.search_summary();
-        let build = self.project.as_ref().is_some_and(|p| p.build);
+        let build = self.config.settings.search_ignored;
         let footer = self.palette_footer(mode);
         let no_match_hint = match self.config.keymap.combo_for(Command::ToggleBuildFolders) {
             Some(k) => format!(
-                "No matches — {} to include node_modules, target…",
+                "No matches — {} to include ignored files (.gitignore, node_modules…)",
                 k.label()
             ),
             None => "No matches".to_string(),
@@ -5657,7 +5657,7 @@ impl App {
                 };
                 let count = match mode {
                     Mode::Search if build => {
-                        format!("{count}  + build folders").trim().to_string()
+                        format!("{count}  + ignored files").trim().to_string()
                     }
                     Mode::Todos => todo_summary.clone(),
                     m if m.multi() && !pal.ticked.is_empty() => {
@@ -5952,7 +5952,15 @@ impl App {
                 (k("⇧⇥"), "go up a folder"),
                 esc,
             ],
-            Mode::Search => vec![(k("↑ ↓"), "move"), (k("↵"), "open file at match"), esc],
+            Mode::Search => {
+                let mut v = vec![(k("↑ ↓"), "move"), (k("↵"), "open file at match")];
+                if let Some(key) = self.config.keymap.combo_for(Command::ToggleBuildFolders) {
+                    let what = if self.config.settings.search_ignored { "skip ignored files" } else { "include ignored files" };
+                    v.push((vec![key.label()], what));
+                }
+                v.push(esc);
+                v
+            }
             Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to terminal"), esc],
             Mode::Links => vec![(k("↑ ↓"), "move"), (k("↵"), "open in browser"), esc],
             Mode::Line => vec![(k("↵"), "go to line"), esc],

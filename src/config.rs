@@ -46,6 +46,10 @@ pub struct Settings {
     pub confirm_close_terminal: bool,
     /// The Open list (⌘O) lists folders A to Z instead of newest first (its ⌘S).
     pub open_list_by_name: bool,
+    /// Search in Files includes what's ignored: gitignored files and build
+    /// folders (node_modules, target…); Go to File, the build folders (it
+    /// lists gitignored files anyway, faded). ⌥H.
+    pub search_ignored: bool,
     /// Earlier builds saved remote access here; it's off at every launch
     /// now. Accepted, so an old file doesn't show an error, and ignored.
     #[serde(rename = "remoteAccess")]
@@ -73,6 +77,7 @@ impl Default for Settings {
             updates: true,
             confirm_close_terminal: true,
             open_list_by_name: false,
+            search_ignored: false,
             old_remote_access: serde::de::IgnoredAny,
         }
     }
@@ -534,7 +539,9 @@ pub(crate) fn settings_template() -> String {
            // Closing a terminal that's still running something asks first\n  \
            // \"confirmCloseTerminal\": {},\n\n  \
            // The Open list (⌘O) lists folders A to Z instead of newest first (⌘S there)\n  \
-           // \"openListByName\": {},\n\
+           // \"openListByName\": {},\n\n  \
+           // Search includes gitignored files and build folders (node_modules, target…) (Alt+H)\n  \
+           // \"searchIgnored\": {},\n\
          }}\n",
         quote(themes.into_iter().map(|t| t.name).collect()),
         d.theme,
@@ -558,6 +565,7 @@ pub(crate) fn settings_template() -> String {
         d.updates,
         d.confirm_close_terminal,
         d.open_list_by_name,
+        d.search_ignored,
     )
 }
 

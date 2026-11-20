@@ -138,18 +138,15 @@ impl App {
         }
     }
 
+    /// ⌥H: search what's ignored too, or not (kept, for every window).
     fn toggle_build_folders(&mut self, ctx: &egui::Context) {
-        let Some(p) = &mut self.project else { return };
-        p.build = !p.build;
-        let msg = if p.build {
-            "Search now includes node_modules, target and other build folders"
+        let on = !self.config.settings.search_ignored;
+        self.save_choice_quietly(crate::app::Setting::SearchIgnored.key(), on, ctx);
+        self.notify(if on {
+            "Search now includes ignored files: .gitignore'd, node_modules, target…"
         } else {
-            "Search skips node_modules, target and other build folders"
-        };
-        self.notify(msg);
-        self.index(ctx);
-        self.search.query.clear(); // run the current search again
-        self.search.changed = Some(std::time::Instant::now());
+            "Search skips ignored files: .gitignore'd, node_modules, target…"
+        });
     }
 
     /// Enter / a button on the file dialog: `ok` false cancels.

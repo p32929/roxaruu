@@ -1,5 +1,6 @@
 //! Project-wide "Search in Files" (⌘⇧F), ported from Oxru: one query searched
-//! across every file Go to File would show (same gitignore / junk-dir rules,
+//! across the project's files as git sees them (gitignored files and build
+//! folders skipped, unless the `searchIgnored` setting, ⌥H, includes them;
 //! via [`crate::fstree::walk_builder`]), grouped by file with a line preview
 //! per match — VS Code's "Search" view.
 //!
@@ -133,7 +134,8 @@ pub fn search_project(root: &Path, query: &str, build: bool) -> Results {
     // *entire* project just to throw away results past the cap.
     let stop = Arc::new(AtomicBool::new(false));
 
-    let walker = fstree::walk_builder(root, false, build).build_parallel();
+    // `build`: everything; else as git sees it, without build folders.
+    let walker = fstree::walk_builder(root, !build, build).build_parallel();
     walker.run(|| {
         let matcher = matcher.clone();
         let results = Arc::clone(&results);
@@ -302,29 +304,27 @@ mod tests {
         assert!(!truncated);
     }
 
+    /// By default as git sees it: gitignored files and build folders
+    /// skipped; with ignored files included (⌥H), everything.
     #[test]
-    fn respects_gitignore_and_junk_pruning_like_quick_open() {
+    fn skips_ignored_files_unless_asked() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
         fs::write(dir.path().join("ignored.txt"), "needle\n").unwrap();
         fs::create_dir_all(dir.path().join("node_modules")).unwrap();
         fs::write(dir.path().join("node_modules/pkg.js"), "needle\n").unwrap();
         fs::write(dir.path().join("keep.txt"), "needle\n").unwrap();
-
-        // Gitignored files ARE still searched (Quick Open finds them too,
-        // just faded) — only the well-known junk dirs are pruned outright.
-        let (results, _) = search_project(dir.path(), "needle", false);
-        let names: Vec<_> = results
-            .iter()
-            .map(|r| r.path.file_name().unwrap().to_str().unwrap())
-            .collect();
-        assert!(names.contains(&"keep.txt"));
-        assert!(names.contains(&"ignored.txt"));
-        assert!(
-            !results
+        let names = |all: bool| {
+            let mut v: Vec<String> = search_project(dir.path(), "needle", all)
+                .0
                 .iter()
-                .any(|r| r.path.to_string_lossy().contains("node_modules"))
-        );
+                .map(|r| r.path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(names(false), ["keep.txt"]);
+        assert_eq!(names(true), ["ignored.txt", "keep.txt", "pkg.js"]);
     }
 
     #[test]

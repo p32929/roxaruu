@@ -70,8 +70,6 @@ pub struct Project {
     /// The walk's result, with its matcher built there too (a big repo's
     /// would hold the window up).
     indexing: Option<Receiver<Index>>,
-    /// Search includes the build/dependency folders (node_modules, target…).
-    pub build: bool,
 }
 
 /// Closing tabs that may hold unsaved work: they're worked through one at a
@@ -427,7 +425,14 @@ impl App {
     /// Re-read the config (global + this project's) and apply it.
     pub fn reload_config(&mut self, ctx: &egui::Context) {
         let root = self.root().map(Path::to_path_buf);
+        let ignored = self.config.settings.search_ignored;
         self.config = config::load(Some(&self.config), root.as_deref());
+        if self.config.settings.search_ignored != ignored {
+            // What search covers changed (⌥H, Settings, another window).
+            self.index(ctx);
+            self.search.query.clear(); // run the current search again
+            self.search.changed = Some(Instant::now());
+        }
         self.fingerprint = config::fingerprint(root.as_deref());
         tracing::debug!(errors = ?self.config.errors, "config read");
         for e in &self.config.errors {
@@ -1043,7 +1048,6 @@ impl App {
             files: Vec::new(),
             matcher: None,
             indexing: None,
-            build: false,
         });
         self.index(ctx);
         self.reload_config(ctx); // with the project's own settings
@@ -1132,7 +1136,7 @@ impl App {
     fn index(&mut self, ctx: &egui::Context) {
         let Some(p) = &mut self.project else { return };
         let (tx, rx) = channel();
-        let (root, build, ctx2) = (p.root.clone(), p.build, ctx.clone());
+        let (root, build, ctx2) = (p.root.clone(), self.config.settings.search_ignored, ctx.clone());
         std::thread::spawn(move || {
             let files: Vec<(String, bool)> = fstree::collect_files_marked(&root, build)
                 .into_iter()
@@ -2324,7 +2328,7 @@ impl App {
         let (root, q, build, ctx2) = (
             project.root.clone(),
             pal.query.clone(),
-            project.build,
+            self.config.settings.search_ignored,
             ctx.clone(),
         );
         std::thread::spawn(move || {

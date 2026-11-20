@@ -757,8 +757,8 @@ impl App {
                 .config
                 .keymap
                 .combo_for(Command::ToggleBuildFolders)
-                .filter(|_| !p.build)
-                .map(|k| format!("{} to include build folders", k.label()));
+                .filter(|_| !self.config.settings.search_ignored)
+                .map(|k| format!("{} to include ignored files", k.label()));
             let msg = if indexing { "Indexing files…".to_string() } else { "No matches".to_string() };
             let at = out.inner_rect.center_top() + vec2(0.0, 24.0 * s);
             ui.painter().text(at, Align2::CENTER_CENTER, msg, pt.font(12.5, Weight::Regular), c.text_subtle);

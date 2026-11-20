@@ -52,10 +52,11 @@ pub enum Setting {
     Notifications,
     Updates,
     ConfirmCloseTerminal,
+    SearchIgnored,
 }
 
 impl Setting {
-    pub const ALL: [Setting; 14] = [
+    pub const ALL: [Setting; 15] = [
         Setting::Theme,
         Setting::UiFont,
         Setting::CodeFont,
@@ -70,6 +71,7 @@ impl Setting {
         Setting::Notifications,
         Setting::Updates,
         Setting::ConfirmCloseTerminal,
+        Setting::SearchIgnored,
     ];
 
     /// Its key in `settings.json`.
@@ -89,6 +91,7 @@ impl Setting {
             Setting::Notifications => "notifications",
             Setting::Updates => "updates",
             Setting::ConfirmCloseTerminal => "confirmCloseTerminal",
+            Setting::SearchIgnored => "searchIgnored",
         }
     }
 
@@ -108,6 +111,7 @@ impl Setting {
             Setting::Notifications => "Notify when an agent finishes",
             Setting::Updates => "Install updates when you quit",
             Setting::ConfirmCloseTerminal => "Ask before closing a running terminal",
+            Setting::SearchIgnored => "Search ignored files too (.gitignore, node_modules…)",
         }
     }
 
@@ -124,6 +128,7 @@ impl Setting {
             Setting::Sidebar => icon::SIDEBAR,
             Setting::Notifications => icon::BELL,
             Setting::Updates => icon::DOWNLOAD,
+            Setting::SearchIgnored => icon::SEARCH,
         }
     }
 }
@@ -482,6 +487,7 @@ impl App {
             Setting::Notifications => on(st.notifications),
             Setting::Updates => on(st.updates),
             Setting::ConfirmCloseTerminal => on(st.confirm_close_terminal),
+            Setting::SearchIgnored => on(st.search_ignored),
         }
     }
 
@@ -534,6 +540,7 @@ impl App {
             Setting::Notifications => (!st.notifications).into(),
             Setting::Updates => (!st.updates).into(),
             Setting::ConfirmCloseTerminal => (!st.confirm_close_terminal).into(),
+            Setting::SearchIgnored => (!st.search_ignored).into(),
         };
         // Turned on: the system may want to be asked (macOS's prompt).
         let ask = s == Setting::Notifications && value == serde_json::Value::Bool(true);

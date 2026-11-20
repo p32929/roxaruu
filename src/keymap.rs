@@ -208,7 +208,7 @@ commands! {
     OpenInTerminal, "file.openInTerminal", "Open in Terminal (a New One, in That Folder)", ["alt+shift+t"];
     CopyPath, "file.copyPath", "Copy Path", ["ctrl+alt+c"];
     CopyRelativePath, "file.copyRelativePath", "Copy Relative Path", [];
-    ToggleBuildFolders, "search.toggleBuildFolders", "Search: Include / Skip Build Folders", ["alt+h"];
+    ToggleBuildFolders, "search.toggleBuildFolders", "Search: Include / Skip Ignored Files", ["alt+h"];
     NextTab, "tab.next", "Next Tab", ["ctrl+tab"];
     PrevTab, "tab.previous", "Previous Tab", ["ctrl+shift+tab"];
     MoveTabLeft, "tab.moveLeft", "Move Tab Left", ["ctrl+shift+,"];
