@@ -295,12 +295,19 @@ CNF
             blue "Trusting Roxaruu's own signing key (once): macOS asks for your password…"
             security add-trusted-cert -r trustRoot -p codeSign -k "$SIGN_KC" "$SIGN_DIR/cert.pem" || true
         fi
-        if signing_ready &&
+        # codesign finds a key only in a keychain on your search list: the
+        # key's goes there for the signing, then the list is as it was (one
+        # path a line; split on lines only, so spaces in a path are kept).
+        kcs="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
+        search_list() { (IFS='
+'; set -f; security list-keychains -d user -s $kcs "$@"); }
+        if signing_ready && search_list "$SIGN_KC" &&
             codesign --force --deep --keychain "$SIGN_KC" -s "$SIGN_NAME" "$DEST.new" >/dev/null 2>&1 &&
             codesign --verify "$DEST.new" >/dev/null 2>&1; then
             signed=1
             green "Signed with this Mac's own key: permissions you allow stay allowed across updates"
         fi
+        [ -n "$kcs" ] && search_list
     fi
     if [ -z "$signed" ]; then
         echo "Note: not signed (the signing key isn't set up); macOS may ask for permissions again after updates."

@@ -438,6 +438,7 @@ fn replace_app(dmg: &Path, app: &Path, mount: &Path) -> Result<(), String> {
     let copied = run("ditto", &[mount.join("Roxaruu.app").as_os_str(), new.as_os_str()]);
     let _ = run("hdiutil", &["detach".as_ref(), "-quiet".as_ref(), mount.as_os_str()]);
     copied?;
+    sign_with_own_key(&new);
     let old = app.with_extension("app.old");
     let _ = std::fs::remove_dir_all(&old);
     std::fs::rename(app, &old).map_err(|e| format!("couldn't move {} aside: {e}", app.display()))?;
@@ -447,6 +448,64 @@ fn replace_app(dmg: &Path, app: &Path, mount: &Path) -> Result<(), String> {
     }
     let _ = std::fs::remove_dir_all(&old);
     Ok(())
+}
+
+/// macOS: sign the new app with this Mac's own key, the one
+/// `install-local.sh` makes, if it's there. macOS remembers what you allowed
+/// an app (files, the local network, automation…) by its signature; the
+/// download's is a placeholder that changes with every version, so each
+/// update was asked again. Without the key, or if signing fails, it keeps
+/// the placeholder, as before.
+fn sign_with_own_key(app: &Path) {
+    if let Some(home) = crate::config::home() {
+        sign_with_key_in(app, &home.join("Library/Application Support/Roxaruu/signing"));
+    }
+}
+
+/// `sign_with_own_key`, with the key's folder (`install-local.sh`'s).
+fn sign_with_key_in(app: &Path, dir: &Path) {
+    const NAME: &str = "Roxaruu Local Signing";
+    let keychain = dir.join("roxaruu.keychain-db");
+    let Ok(password) = std::fs::read_to_string(dir.join("password")) else { return };
+    if !keychain.is_file() {
+        return;
+    }
+    // Not through `run`: nothing here is logged, the password least of all.
+    let out = |program: &str, args: &[&std::ffi::OsStr]| {
+        std::process::Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let os = std::ffi::OsStr::new;
+    // codesign finds a key only in a keychain on your search list: the key's
+    // is put there for the signing, then the list is as it was.
+    let Some(listed) = out("security", &[os("list-keychains"), os("-d"), os("user")]) else { return };
+    let before = search_list(&listed);
+    if before.is_empty() {
+        return; // nothing to put back to
+    }
+    let set = |list: &[std::ffi::OsString]| {
+        let mut args = vec![os("list-keychains"), os("-d"), os("user"), os("-s")];
+        args.extend(list.iter().map(|k| k.as_os_str()));
+        out("security", &args).is_some()
+    };
+    let with_key: Vec<std::ffi::OsString> = before.iter().cloned().chain([keychain.clone().into_os_string()]).collect();
+    let signed = out("security", &[os("unlock-keychain"), os("-p"), os(password.trim()), keychain.as_os_str()]).is_some()
+        && set(&with_key)
+        && out("codesign", &[os("--force"), os("--deep"), os("--keychain"), keychain.as_os_str(), os("-s"), os(NAME), app.as_os_str()])
+            .is_some();
+    let restored = set(&before);
+    let signed = signed && out("codesign", &[os("--verify"), app.as_os_str()]).is_some();
+    tracing::info!(signed, restored, "the update signed with this Mac's own key");
+}
+
+/// The keychains `security list-keychains` prints, one quoted path a line.
+fn search_list(listed: &str) -> Vec<std::ffi::OsString> {
+    listed.lines().map(|l| l.trim().trim_matches('"')).filter(|l| !l.is_empty()).map(Into::into).collect()
 }
 
 /// Linux: unpack the .tar.xz over `prefix`, then point its menu entry and
@@ -616,6 +675,13 @@ pub(crate) fn from_command_line(others: usize) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_keychain_search_list() {
+        let listed = "    \"/Users/me/Library/Keychains/login.keychain-db\"\n    \"/Users/me/My Keys.keychain-db\"\n";
+        assert_eq!(search_list(listed), ["/Users/me/Library/Keychains/login.keychain-db", "/Users/me/My Keys.keychain-db"]);
+        assert!(search_list("").is_empty());
+    }
 
     /// Linux and Windows packages are x86-64 only: the tests' (any test
     /// machine's) arch.
