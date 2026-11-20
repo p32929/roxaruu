@@ -169,8 +169,6 @@ pub enum Answer {
     DiscardAll,
 }
 
-pub const TAB_WIDTH: usize = 4;
-
 pub struct App {
     pub config: Config,
     /// Config file mtimes at the last load, polled to reload on save.
@@ -384,6 +382,7 @@ impl App {
     pub fn apply(&mut self, _ctx: &egui::Context) {
         let ctx = &self.main_ctx.clone();
         let s = &self.config.settings;
+        crate::buffer::set_indent_settings(s.tab_size, s.insert_spaces);
         let wanted = (s.ui_font.clone(), s.code_font.clone());
         if self.applied_fonts.as_ref() != Some(&wanted) {
             fonts::unpack(&wanted.0, &wanted.1);

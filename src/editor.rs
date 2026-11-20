@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Event, Key, Modifiers};
 
-use crate::app::TAB_WIDTH;
+use crate::buffer::tab_size;
 use crate::buffer::{self, Buffer};
 use crate::huge::{self, HugeView};
 use crate::syntax::{self, LineSpans};
@@ -96,11 +96,11 @@ impl WrapLayout {
     }
 }
 
-/// Display columns of a line's text (a tab is `TAB_WIDTH`).
+/// Display columns of a line's text (a tab is `tab_size`).
 pub fn display_cols(chars: impl Iterator<Item = char>) -> usize {
     chars
         .map(|c| match c {
-            '\t' => TAB_WIDTH,
+            '\t' => tab_size(),
             '\n' | '\r' => 0,
             _ => 1,
         })
@@ -638,8 +638,13 @@ impl Tab {
                 b.indent_selection()
             }
             Key::Tab => {
-                let unit = b.indent_unit().max(1);
-                b.insert_str(&" ".repeat(unit - b.cursor_col() % unit));
+                let indent = b.indent();
+                if indent.tabs {
+                    b.insert_str("\t");
+                } else {
+                    let unit = indent.unit.max(1);
+                    b.insert_str(&" ".repeat(unit - b.cursor_col() % unit));
+                }
             }
             _ => return,
         }
@@ -651,7 +656,7 @@ impl Tab {
 pub fn col_to_char(line: &str, col: f32) -> usize {
     let mut x = 0.0;
     for (i, c) in line.trim_end_matches(['\n', '\r']).chars().enumerate() {
-        let w = if c == '\t' { TAB_WIDTH as f32 } else { 1.0 };
+        let w = if c == '\t' { tab_size() as f32 } else { 1.0 };
         if col < x + w / 2.0 {
             return i;
         }
@@ -664,7 +669,7 @@ pub fn col_to_char(line: &str, col: f32) -> usize {
 pub fn char_to_col(line: &str, ch: usize) -> usize {
     line.chars()
         .take(ch)
-        .map(|c| if c == '\t' { TAB_WIDTH } else { 1 })
+        .map(|c| if c == '\t' { tab_size() } else { 1 })
         .sum()
 }
 
@@ -818,8 +823,8 @@ mod tests {
 
     #[test]
     fn column_mapping_counts_tabs() {
-        assert_eq!(char_to_col("\tab", 2), TAB_WIDTH + 1);
-        assert_eq!(col_to_char("\tab", (TAB_WIDTH + 1) as f32), 2);
+        assert_eq!(char_to_col("\tab", 2), tab_size() + 1);
+        assert_eq!(col_to_char("\tab", (tab_size() + 1) as f32), 2);
         assert_eq!(col_to_char("ab\n", 9.0), 2);
     }
 

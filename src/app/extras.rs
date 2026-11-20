@@ -46,6 +46,8 @@ pub enum Setting {
     TerminalFps,
     TerminalShell,
     WordWrap,
+    TabSize,
+    InsertSpaces,
     CurrentLine,
     IndentGuides,
     Sidebar,
@@ -56,7 +58,7 @@ pub enum Setting {
 }
 
 impl Setting {
-    pub const ALL: [Setting; 15] = [
+    pub const ALL: [Setting; 17] = [
         Setting::Theme,
         Setting::UiFont,
         Setting::CodeFont,
@@ -65,6 +67,8 @@ impl Setting {
         Setting::TerminalFps,
         Setting::TerminalShell,
         Setting::WordWrap,
+        Setting::TabSize,
+        Setting::InsertSpaces,
         Setting::CurrentLine,
         Setting::IndentGuides,
         Setting::Sidebar,
@@ -85,6 +89,8 @@ impl Setting {
             Setting::TerminalFps => "terminalFps",
             Setting::TerminalShell => "terminalShell",
             Setting::WordWrap => "wordWrap",
+            Setting::TabSize => "tabSize",
+            Setting::InsertSpaces => "insertSpaces",
             Setting::CurrentLine => "currentLine",
             Setting::IndentGuides => "indentGuides",
             Setting::Sidebar => "sidebar",
@@ -105,6 +111,8 @@ impl Setting {
             Setting::TerminalFps => "Terminal frame rate (when you aren't typing)",
             Setting::TerminalShell => "Terminal shell (for new terminals)",
             Setting::WordWrap => "Word wrap",
+            Setting::TabSize => "Tab size",
+            Setting::InsertSpaces => "Indent with spaces (a file indented with tabs keeps tabs)",
             Setting::CurrentLine => "Highlight the current line",
             Setting::IndentGuides => "Indent guides",
             Setting::Sidebar => "Show file tree",
@@ -124,6 +132,7 @@ impl Setting {
             Setting::TerminalFps => icon::PULSE,
             Setting::TerminalShell | Setting::ConfirmCloseTerminal => icon::TERMINAL,
             Setting::WordWrap => icon::WRAP,
+            Setting::TabSize | Setting::InsertSpaces => icon::LINES,
             Setting::CurrentLine | Setting::IndentGuides => icon::EDIT,
             Setting::Sidebar => icon::SIDEBAR,
             Setting::Notifications => icon::BELL,
@@ -481,6 +490,8 @@ impl App {
             Setting::TerminalFps => format!("{} fps", st.terminal_fps),
             Setting::TerminalShell => crate::sys::shell_title(&st.terminal_shell),
             Setting::WordWrap => on(st.word_wrap),
+            Setting::TabSize => format!("{}", st.tab_size),
+            Setting::InsertSpaces => on(st.insert_spaces),
             Setting::CurrentLine => on(st.current_line),
             Setting::IndentGuides => on(st.indent_guides),
             Setting::Sidebar => on(st.sidebar),
@@ -534,6 +545,12 @@ impl App {
             )
             .into(),
             Setting::WordWrap => (!st.word_wrap).into(),
+            Setting::TabSize => {
+                const SIZES: [usize; 3] = [2, 4, 8];
+                let at = SIZES.iter().position(|s| *s == st.tab_size).unwrap_or(1) as i32;
+                SIZES.get((at + delta).clamp(0, 2) as usize).copied().unwrap_or(4).into()
+            }
+            Setting::InsertSpaces => (!st.insert_spaces).into(),
             Setting::CurrentLine => (!st.current_line).into(),
             Setting::IndentGuides => (!st.indent_guides).into(),
             Setting::Sidebar => (!st.sidebar).into(),

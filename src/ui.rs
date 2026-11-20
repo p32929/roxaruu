@@ -6143,7 +6143,7 @@ fn line_job(
     font: &FontId,
     c: &Colors,
 ) -> LayoutJob {
-    let tab_str = " ".repeat(crate::app::TAB_WIDTH);
+    let tab_str = " ".repeat(crate::buffer::tab_size());
     let mut job = LayoutJob::default();
     let mut push = |s: &str, color: Color32| {
         if !s.is_empty() {

@@ -11,7 +11,35 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::SystemTime;
+
+/// The `tabSize` and `insertSpaces` settings (one window's, set as they
+/// load, `App::apply`): how wide a tab is drawn, and how a file that
+/// doesn't show its own style is indented.
+static TAB_SIZE: AtomicUsize = AtomicUsize::new(4);
+static SPACES: AtomicBool = AtomicBool::new(true);
+
+pub fn set_indent_settings(tab_size: usize, spaces: bool) {
+    TAB_SIZE.store(tab_size.clamp(1, 16), Ordering::Relaxed);
+    SPACES.store(spaces, Ordering::Relaxed);
+}
+
+/// Columns a tab takes (`tabSize`).
+pub fn tab_size() -> usize {
+    TAB_SIZE.load(Ordering::Relaxed)
+}
+
+/// `Buffer::indent` as last worked out: for (revision, settings).
+type IndentCache = Option<(u64, (usize, bool), Indent)>;
+
+/// A file's indentation: one level's width in columns, and whether it's a
+/// tab (else that many spaces).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Indent {
+    pub unit: usize,
+    pub tabs: bool,
+}
 
 use anyhow::{Context, Result};
 use ropey::Rope;
@@ -153,10 +181,10 @@ pub struct Buffer {
     /// Kind + resulting cursor of the last edit, for coalescing.
     last_kind: Option<EditKind>,
     last_edit_cursor: Option<usize>,
-    /// Cached `(revision, unit)` for [`Buffer::indent_unit`] — detecting it
-    /// means scanning the head of the file, which is far too much to redo on
-    /// every frame just to place indent guides.
-    indent_unit_cache: std::cell::Cell<Option<(u64, usize)>>,
+    /// Cached [`Buffer::indent`] for (revision, the settings it fell back
+    /// on) — detecting it means scanning the head of the file, which is far
+    /// too much to redo on every frame just to place indent guides.
+    indent_unit_cache: std::cell::Cell<IndentCache>,
     /// Whether this holds the file's text. A tab not read yet (or a file too
     /// big to hold, see `crate::huge`) has an empty buffer that must never
     /// be saved over the file.
@@ -229,26 +257,47 @@ impl Buffer {
     /// Falls back to 4 (what Tab inserts, see [`Buffer::indent_selection`])
     /// when there's nothing to learn from, e.g. a flat or empty file.
     pub fn indent_unit(&self) -> usize {
-        const SCAN_LINES: usize = 400;
-        const DEFAULT: usize = 4;
+        self.indent().unit
+    }
 
-        if let Some((rev, unit)) = self.indent_unit_cache.get()
+    /// One level of indentation as text: a tab, or `unit` spaces.
+    pub fn indent_text(&self) -> String {
+        let i = self.indent();
+        if i.tabs { "\t".to_string() } else { " ".repeat(i.unit.max(1)) }
+    }
+
+    /// This file's indentation: what its own lines show (tabs if most
+    /// indented lines start with one; else spaces, one level being the
+    /// smallest step between lines), else the settings'.
+    pub fn indent(&self) -> Indent {
+        const SCAN_LINES: usize = 400;
+        let settings = (tab_size(), SPACES.load(Ordering::Relaxed));
+        let default = settings.0;
+
+        if let Some((rev, s, indent)) = self.indent_unit_cache.get()
             && rev == self.revision
+            && s == settings
         {
-            return unit;
+            return indent;
         }
 
         let mut prev: Option<usize> = None;
         let mut smallest_step = usize::MAX;
+        let (mut tab_lines, mut space_lines) = (0usize, 0usize);
         for line in self.rope.lines().take(SCAN_LINES) {
             let mut width = 0usize;
             let mut all_blank = true;
+            match line.chars().next() {
+                Some('\t') => tab_lines += 1,
+                Some(' ') => space_lines += 1,
+                _ => {}
+            }
             for ch in line.chars() {
                 match ch {
                     ' ' => width += 1,
                     // A tab is its own level; a tab-indented file needs no
-                    // inferred unit, so treat it as the default width.
-                    '\t' => width += DEFAULT,
+                    // inferred unit, so it's the tab width.
+                    '\t' => width += default,
                     '\n' | '\r' => break,
                     _ => {
                         all_blank = false;
@@ -271,13 +320,11 @@ impl Buffer {
             prev = Some(width);
         }
 
-        let unit = if smallest_step == usize::MAX {
-            DEFAULT
-        } else {
-            smallest_step
-        };
-        self.indent_unit_cache.set(Some((self.revision, unit)));
-        unit
+        let tabs = if tab_lines + space_lines == 0 { !settings.1 } else { tab_lines > space_lines };
+        let unit = if tabs || smallest_step == usize::MAX { default } else { smallest_step };
+        let indent = Indent { unit, tabs };
+        self.indent_unit_cache.set(Some((self.revision, settings, indent)));
+        indent
     }
 
     /// The width in columns of `line`'s leading whitespace, and whether the
@@ -1390,10 +1437,11 @@ impl Buffer {
         self.goal_col = self.cursor_col();
     }
 
-    /// Indent every line in the range by four spaces (Tab on a multi-line
-    /// selection).
+    /// Indent every line in the range one level (Tab on a multi-line
+    /// selection): a tab or spaces, as the file does (`indent`).
     pub fn indent_selection(&mut self) {
-        const PAD: &str = "    ";
+        let pad = self.indent_text();
+        let pad = pad.as_str();
         self.carets.clear();
         let (first, last) = self.indent_line_range();
         let had_sel = self.selection().is_some();
@@ -1401,21 +1449,23 @@ impl Buffer {
         self.checkpoint(EditKind::Insert);
         for line in (first..=last).rev() {
             let at = self.rope.line_to_char(line);
-            self.rope.insert(at, PAD);
+            self.rope.insert(at, pad);
         }
         if had_sel {
             self.select_lines(first, last);
         } else {
-            self.cursor = oc + PAD.chars().count();
+            self.cursor = oc + pad.chars().count();
             self.goal_col = self.cursor_col();
         }
         self.note_edit(EditKind::Insert);
         self.bump();
     }
 
-    /// Remove up to four leading spaces (or one leading tab) from every line in
-    /// the range (Shift+Tab; works on the cursor's line with no selection).
+    /// Remove one level — up to a level's spaces, or one leading tab — from
+    /// every line in the range (Shift+Tab; works on the cursor's line with no
+    /// selection).
     pub fn outdent_selection(&mut self) {
+        let level = self.indent().unit.max(1);
         self.carets.clear();
         let (first, last) = self.indent_line_range();
         let had_sel = self.selection().is_some();
@@ -1428,7 +1478,7 @@ impl Buffer {
         for line in first..=last {
             let start = self.rope.line_to_char(line);
             let mut n = 0;
-            while n < 4 {
+            while n < level {
                 match self.rope.get_char(start + n) {
                     Some(' ') => n += 1,
                     Some('\t') if n == 0 => {
@@ -2027,6 +2077,29 @@ mod tests {
         assert_eq!(b.rope.to_string(), "    a\n    b\n    c");
         b.outdent_selection();
         assert_eq!(b.rope.to_string(), "a\nb\nc");
+    }
+
+    /// A file's own indentation wins: tabs where its lines start with tabs,
+    /// its own step in spaces; Tab and Shift+Tab move one such level.
+    #[test]
+    fn indentation_follows_the_file() {
+        let tabs = Buffer::from_text(Path::new("a.go"), "func f() {\n\tx := 1\n\tif x {\n\t\ty()\n\t}\n}\n");
+        assert_eq!(tabs.indent(), Indent { unit: tab_size(), tabs: true });
+        assert_eq!(tabs.indent_text(), "\t");
+        let mut two = Buffer::from_text(Path::new("a.yaml"), "a:\n  b:\n    c: 1\n");
+        assert_eq!(two.indent(), Indent { unit: 2, tabs: false });
+        // Tab on a selected block: one level each; Shift+Tab: one off.
+        two.anchor = Some(0);
+        two.cursor = two.rope.len_chars();
+        two.indent_selection();
+        assert_eq!(two.rope.to_string(), "  a:\n    b:\n      c: 1\n");
+        two.outdent_selection();
+        assert_eq!(two.rope.to_string(), "a:\n  b:\n    c: 1\n");
+        let mut t = Buffer::from_text(Path::new("a.go"), "\tx\n\ty\n");
+        t.anchor = Some(0);
+        t.cursor = t.rope.len_chars();
+        t.indent_selection();
+        assert_eq!(t.rope.to_string(), "\t\tx\n\t\ty\n");
     }
 
     #[test]

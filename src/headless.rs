@@ -3275,6 +3275,45 @@ fn headless_install_rox() {
     let _ = Command::InstallRox;
 }
 
+/// tabSize and insertSpaces: what Tab puts in a file that doesn't show its
+/// own style (a new one); a file indented with tabs keeps tabs whatever
+/// they say.
+#[test]
+#[ignore]
+fn headless_tab_size_and_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join("new.txt"), "").unwrap();
+    std::fs::write(root.join("tabs.go"), "func f() {\n\tx()\n}\n").unwrap();
+    let file = crate::config::dir().join("settings.json");
+    let before = std::fs::read_to_string(&file).ok();
+    let mut h = harness(Some(root.join("new.txt")));
+    let ctx = h.ctx.clone();
+    let set = |h: &mut Harness<'static, Root>, json: &str| {
+        std::fs::write(&file, json).unwrap();
+        h.state_mut().0.reload_config(&ctx);
+        h.step();
+    };
+    let text = |h: &Harness<'static, Root>| app(h).active_tab().unwrap().buf.rope.to_string();
+    set(&mut h, r#"{ "insertSpaces": false }"#);
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert_eq!(text(&h), "\t");
+    press(&mut h, Modifiers::SHIFT, Key::Tab);
+    set(&mut h, r#"{ "tabSize": 2 }"#);
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert_eq!(text(&h), "  ");
+    // A tab-indented file: tabs, whatever the settings say.
+    h.state_mut().0.open_file(&root.join("tabs.go"));
+    h.step();
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert!(text(&h).starts_with("\tfunc"), "{:?}", text(&h));
+    match before {
+        Some(b) => std::fs::write(&file, b).unwrap(),
+        None => std::fs::remove_file(&file).unwrap(),
+    }
+    h.state_mut().0.reload_config(&ctx);
+}
+
 /// New Window: an empty one, from anywhere, its key on Open…'s last row.
 #[test]
 #[ignore]

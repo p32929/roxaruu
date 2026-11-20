@@ -34,6 +34,12 @@ pub struct Settings {
     pub indent_guides: bool,
     /// Wrap long lines instead of scrolling sideways (⌥Z).
     pub word_wrap: bool,
+    /// Columns a tab takes, and one level of indentation where a file
+    /// doesn't show its own.
+    pub tab_size: usize,
+    /// Tab indents with spaces (else a tab) where a file doesn't show its
+    /// own style: a file indented with tabs keeps tabs.
+    pub insert_spaces: bool,
     /// The file tree beside the editor (⌘B).
     pub sidebar: bool,
     /// A system notification when a terminal's agent finishes or needs you
@@ -72,6 +78,8 @@ impl Default for Settings {
             current_line: true,
             indent_guides: true,
             word_wrap: false,
+            tab_size: 4,
+            insert_spaces: true,
             sidebar: true,
             notifications: true,
             updates: true,
@@ -530,7 +538,11 @@ pub(crate) fn settings_template() -> String {
            // \"terminalShell\": \"\",\n\n  \
            // \"currentLine\": {},\n  \
            // \"indentGuides\": {},\n  \
-           // \"wordWrap\": {},\n  \
+           // \"wordWrap\": {},\n\n  \
+           // Columns a tab takes, and one level of indentation, where a file doesn't show its own: 2, 4 or 8\n  \
+           // \"tabSize\": {},\n  \
+           // Indent with spaces (false: tabs) where a file doesn't show its own style\n  \
+           // \"insertSpaces\": {},\n\n  \
            // \"sidebar\": {},\n\n  \
            // A notification when a terminal's agent finishes or needs you, while you're in another app\n  \
            // \"notifications\": {},\n\n  \
@@ -560,6 +572,8 @@ pub(crate) fn settings_template() -> String {
         d.current_line,
         d.indent_guides,
         d.word_wrap,
+        d.tab_size,
+        d.insert_spaces,
         d.sidebar,
         d.notifications,
         d.updates,
