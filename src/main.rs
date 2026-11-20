@@ -491,7 +491,7 @@ struct Launch {
     /// typed in a terminal, the folder you're in; else nothing.
     target: Option<std::path::PathBuf>,
     /// `--terminal <folder>`, again for each: a terminal in each, side by
-    /// side (Recent Terminals opening them in a new window).
+    /// side (the Open list opening them in a new window).
     terminals: Vec<std::path::PathBuf>,
 }
 

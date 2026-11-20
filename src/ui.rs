@@ -289,7 +289,6 @@ pub mod icon {
             Command::Palette => PALETTE,
             Command::GoToFile => GO_TO_FILE,
             Command::OpenFolder => FOLDER_OPEN,
-            Command::RecentFolders => HISTORY,
             Command::CloseFolder => CLOSE,
             Command::SelectTheme => THEME,
             Command::SelectUiFont | Command::SelectCodeFont => FONT,
@@ -359,7 +358,7 @@ pub mod icon {
             Command::SwitchFocus => TERMINAL,
             Command::ClearTerminal => CLEAR,
             Command::FocusSidebar => FILE,
-            Command::ToggleTerminal | Command::SwitchTerminal | Command::RecentTerminals | Command::OpenTerminalIn | Command::JumpTerminal(_) => {
+            Command::ToggleTerminal | Command::SwitchTerminal | Command::JumpTerminal(_) => {
                 TERMINAL
             }
             Command::NewTerminal => ADD,
@@ -2413,7 +2412,6 @@ impl App {
                 cmd(Command::ToggleTerminal, "hide"),
                 cmd(Command::MaximizeTerminal, if self.terminal_max { "restore size" } else { "maximize" }),
                 cmd(Command::SwitchTerminal, "switch"),
-                cmd(Command::RecentTerminals, "recent"),
                 cmd(Command::ClearTerminal, "clear"),
                 cmd(Command::OpenTerminalLink, "open a link"),
             ]
@@ -2424,7 +2422,6 @@ impl App {
                     .and_then(|(c, what)| cmd(c, what))
                     .or_else(|| cmd(Command::ToggleTerminal, "open")),
                 cmd(Command::MaximizeTerminal, "open maximized"),
-                cmd(Command::RecentTerminals, "recent"),
             ]
         } else {
             vec![
@@ -2432,7 +2429,6 @@ impl App {
                 self.focus_hint(Focus::Terminal).and_then(|(c, what)| cmd(c, what)),
                 cmd(Command::ToggleTerminal, if shown { "hide" } else { "show" }),
                 cmd(Command::MaximizeTerminal, if shown { "maximize" } else { "show maximized" }).filter(|_| !self.terminal_max),
-                cmd(Command::RecentTerminals, "recent"),
                 cmd(Command::NewTerminal, "new").filter(|_| !shown || self.view().short),
             ]
         };
@@ -2442,9 +2438,9 @@ impl App {
         }
         list.extend([
             mark(icon::KEYBOARD),
+            cmd(Command::OpenFolder, "open…"),
             cmd(Command::Palette, "all commands"),
             cmd(Command::Help, "all shortcuts"),
-            cmd(Command::NewWindow, "new window"),
         ]);
         tidy(list)
     }
@@ -2897,8 +2893,7 @@ impl App {
         // (Every command and every shortcut are in the status bar.)
         let actions: &[Command] = &[
             Command::OpenFolder,
-            Command::RecentFolders,
-            Command::RecentTerminals,
+            Command::NewTerminal,
             Command::Settings,
             Command::Quit,
         ];
@@ -4187,7 +4182,7 @@ impl App {
             ),
             (icon::GRID, if self.terminal_grid { "Show as tabs" } else { "Show side by side" }, Command::ToggleTerminalGrid),
             (icon::ADD, "New terminal", Command::NewTerminal),
-            (icon::HISTORY, "Recent terminals", Command::RecentTerminals),
+            (icon::FOLDER_OPEN, "Open a folder, or ⌘↵ a terminal in one", Command::OpenFolder),
         ];
         let mut run = None;
         let mut bx = head.right() - 6.0 * s - btn / 2.0;
@@ -4919,6 +4914,11 @@ impl App {
         if mode.multi() {
             self.tick_keys(ctx, empty);
         }
+        // A folder's ⌘↵: a terminal there, not the folder.
+        if matches!(mode, Mode::Open | Mode::Folders) && ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter)) {
+            self.open_as_terminals(ctx);
+            return self.palette.is_none();
+        }
         match mode {
             Mode::Todos => {
                 // A pasted list: one task per line.
@@ -4949,9 +4949,7 @@ impl App {
                     return true;
                 }
             }
-            Mode::RecentTerminals if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) => {
-                self.sort_recent_terminals(ctx)
-            }
+            Mode::Open if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) => self.sort_open_list(ctx),
             Mode::Clipboard => {
                 let clear = ctx.input_mut(|i| empty && i.consume_key(Modifiers::COMMAND, Key::Backspace));
                 if clear {
@@ -4979,7 +4977,7 @@ impl App {
             {
                 self.reset_binding(ctx)
             }
-            Mode::Folders | Mode::TerminalFolders => {
+            Mode::Folders => {
                 // ⇥ into the selected folder, ⇧⇥ up out of the one typed.
                 let (up, into) = ctx.input_mut(|i| {
                     (i.consume_key(Modifiers::SHIFT, Key::Tab), i.consume_key(Modifiers::NONE, Key::Tab))
@@ -5333,41 +5331,23 @@ impl App {
                 ],
                 vec![],
             ),
-            Some(Mode::Recent) => (
-                "Recent folders",
+            Some(Mode::Open) => (
+                "Open",
                 vec![
-                    ("↵", "Open it (the selected ones, if any, each in its own window)"),
-                    ("space  ⇥", "Select folders to open several"),
-                    ("⇧↑  ⇧↓", "Select a range of them"),
-                    ("⌘-click  ⇧-click", "Select one, or a range"),
-                ],
-                vec![],
-            ),
-            Some(Mode::RecentTerminals) => (
-                "Recent terminals",
-                vec![
-                    ("↵", "Open a terminal in each, side by side: the selected ones in their order, else this row"),
+                    ("↵", "Open the folder (the selected ones, if any, each in its own window)"),
+                    ("⌘↵", "Open a terminal in it instead (the selected ones side by side, in their order)"),
                     ("space  ⇥", "Select folders, numbered in the order they'll open"),
-                    ("⌘S", "Sort by name, or by when last used"),
                     ("⇧↑  ⇧↓", "Select a range of them"),
                     ("⌘-click  ⇧-click", "Select one, or a range"),
+                    ("⌘S", "Sort by name, or by when last used"),
                 ],
                 vec![],
             ),
             Some(Mode::Folders) => (
-                "Open Folder",
+                "Browse to a folder",
                 vec![
                     ("↵", "Open the selected folder"),
-                    ("⇥", "Go into it, to list its folders"),
-                    ("⇧⇥", "Go up a folder"),
-                    ("~/", "Start from your home folder"),
-                ],
-                vec![],
-            ),
-            Some(Mode::TerminalFolders) => (
-                "Open Terminal in Folder",
-                vec![
-                    ("↵", "Open a terminal in the selected folder"),
+                    ("⌘↵", "Open a terminal in it instead"),
                     ("⇥", "Go into it, to list its folders"),
                     ("⇧⇥", "Go up a folder"),
                     ("~/", "Start from your home folder"),
@@ -5729,7 +5709,7 @@ impl App {
                             "Type to search every file in the project"
                         }
                         Mode::Search if searching => "Searching…",
-                        Mode::Folders | Mode::TerminalFolders => "No folder here — ⇧⇥ goes up",
+                        Mode::Folders => "No folder here — ⇧⇥ goes up",
                         _ => "No matches",
                     };
                     ui.painter().text(
@@ -5910,44 +5890,25 @@ impl App {
                 esc,
             ],
             Mode::Commands => vec![(k("↑ ↓"), "move"), (k("↵"), "run command"), esc],
-            Mode::Recent => {
-                let ticked = self.ticked().len();
-                let mut v = vec![
-                    (k("↑ ↓"), "move"),
-                    (k("↵"), if ticked > 0 { "open selected folders" } else { "open folder" }),
-                    (k("space ⇥"), "select several to open"),
-                    (k("⇧↑ ⇧↓"), "select a range"),
-                ];
-                if let Some(key) = self.config.keymap.combo_for(Command::OpenFolder) {
-                    v.push((vec![key.label()], "open another folder…"));
-                }
-                v.push(esc);
-                v
+            Mode::Open => {
+                let several = !self.ticked().is_empty();
+                vec![
+                    (k("↵"), if several { "open selected folders" } else { "open folder" }),
+                    (k("⌘↵"), if several { "terminals in them, in order" } else { "terminal in it" }),
+                    (k("space ⇥"), "select several"),
+                    (k("⌘S"), if self.config.settings.open_list_by_name { "sort by date" } else { "sort by name" }),
+                    esc,
+                ]
             }
             Mode::Folders => vec![
-                (k("↑ ↓"), "move"),
                 (k("↵"), "open folder"),
-                (k("⇥"), "go into folder"),
-                (k("⇧⇥"), "go up a folder"),
-                esc,
-            ],
-            Mode::TerminalFolders => vec![
-                (k("↑ ↓"), "move"),
-                (k("↵"), "open a terminal here"),
+                (k("⌘↵"), "terminal in it"),
                 (k("⇥"), "go into folder"),
                 (k("⇧⇥"), "go up a folder"),
                 esc,
             ],
             Mode::Search => vec![(k("↑ ↓"), "move"), (k("↵"), "open file at match"), esc],
             Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to terminal"), esc],
-            Mode::RecentTerminals => vec![
-                (k("↑ ↓"), "move"),
-                (k("↵"), if self.ticked().is_empty() { "open" } else { "open selected, in order" }),
-                (k("space ⇥"), "select (numbered in opening order)"),
-                (k("⇧↑ ⇧↓"), "select a range"),
-                (k("⌘S"), if self.config.settings.recent_terminals_by_name { "sort by date" } else { "sort by name" }),
-                esc,
-            ],
             Mode::Links => vec![(k("↑ ↓"), "move"), (k("↵"), "open in browser"), esc],
             Mode::Line => vec![(k("↵"), "go to line"), esc],
         }
@@ -6054,9 +6015,8 @@ impl App {
                 .unwrap_or_default()
         };
         Some(format!(
-            "Folder open in this window:\n{}\n\n{}  recent folders   {}  open another folder (in a new window)",
+            "Folder open in this window:\n{}\n\n{}  open another folder (in a new window), or a terminal in one",
             tilde(&p.root.to_string_lossy()),
-            key(Command::RecentFolders),
             key(Command::OpenFolder),
         ))
     }

@@ -15,14 +15,12 @@ pub enum Mode {
     Themes,
     UiFonts,
     CodeFonts,
-    Recent,
-    /// Open Folder: browse to any folder, by typing its path.
+    /// Open…: every folder you've opened, as a project or with a
+    /// terminal in it; ↵ opens it, ⌘↵ a terminal there.
+    Open,
+    /// Browse to any folder, by typing its path (Open…'s "Browse…").
     Folders,
-    /// Open Terminal in Folder: browse like Open Folder, a terminal there.
-    TerminalFolders,
     Terminals,
-    /// Recent Terminals: every folder a terminal was in.
-    RecentTerminals,
     Search,
     Todos,
     Clipboard,
@@ -39,10 +37,9 @@ impl Mode {
             Mode::Themes => "Select a theme — ↑↓ to preview",
             Mode::UiFonts => "Select a UI font — ↑↓ to preview",
             Mode::CodeFonts => "Select a code font — ↑↓ to preview",
-            Mode::Recent => "Open a recent folder…",
-            Mode::Folders | Mode::TerminalFolders => "Type a folder's path…",
+            Mode::Open => "Open a folder, or a terminal in one…",
+            Mode::Folders => "Type a folder's path…",
             Mode::Terminals => "Switch to a terminal…",
-            Mode::RecentTerminals => "Open recent terminals…",
             Mode::Line => "Line number — or line:column",
             Mode::Search => "Search in files…",
             Mode::Todos => "Add a task…",
@@ -56,7 +53,7 @@ impl Mode {
     /// Lists where several rows can be ticked and done at once: paste
     /// several clips, open several folders or terminals.
     pub fn multi(self) -> bool {
-        matches!(self, Mode::Clipboard | Mode::Recent | Mode::RecentTerminals)
+        matches!(self, Mode::Clipboard | Mode::Open)
     }
 }
 
@@ -69,8 +66,8 @@ pub enum Pick {
     CodeFont(String),
     Folder(PathBuf),
     Terminal(usize),
-    /// Recent Terminals: one folder.
-    TerminalIn(PathBuf),
+    /// Open…'s "Browse…": to any folder, by its path.
+    Browse,
     /// A search hit: file, line, and the match's char columns.
     Hit(PathBuf, usize, usize, usize),
     /// An entry of the to-do list (index into `App::todos`).
@@ -190,7 +187,7 @@ impl Palette {
     /// Folder…").
     pub fn set_tick(&mut self, i: usize, on: bool) {
         let Some(pick) = self.items.get(i).map(|it| it.pick.clone()) else { return };
-        if !matches!(pick, Pick::Clip(_) | Pick::Folder(_) | Pick::TerminalIn(_)) {
+        if !matches!(pick, Pick::Clip(_) | Pick::Folder(_)) {
             return;
         }
         self.ticked.retain(|t| *t != pick);

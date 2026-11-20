@@ -20,7 +20,6 @@ pub enum Command {
     OpenNotificationSettings,
     GoToFile,
     OpenFolder,
-    RecentFolders,
     CloseFolder,
     SelectTheme,
     SelectUiFont,
@@ -101,8 +100,6 @@ pub enum Command {
     ToggleTerminalGrid,
     MaximizeTerminal,
     SwitchTerminal,
-    RecentTerminals,
-    OpenTerminalIn,
     OpenTerminalLink,
     ToggleRemoteAccess,
     ShowRemoteAddress,
@@ -134,6 +131,10 @@ pub const OPEN_FOLDER_TITLE: &str = if cfg!(target_os = "macos") {
     "Open in Files"
 };
 
+/// Ids of commands that are gone (merged into Open…): a keybindings file
+/// naming one is quietly ignored, not an error.
+const RETIRED: &[&str] = &["folder.recent", "terminal.recent", "terminal.openInFolder"];
+
 macro_rules! commands {
     ($($command:ident $(($arg:literal))?, $id:literal, $title:expr, [$($key:literal),*];)*) => {
         pub const COMMANDS: &[CommandInfo] = &[
@@ -150,8 +151,7 @@ commands! {
     CheckForUpdates, "app.update", "Check for Updates", ["ctrl+alt+shift+d"];
     OpenNotificationSettings, "app.notificationSettings", "Open Notification Settings", ["ctrl+alt+shift+n"];
     GoToFile, "file.goTo", "Go to File", ["alt+f", "ctrl+p"];
-    OpenFolder, "folder.open", "Open Folder", ["ctrl+o"];
-    RecentFolders, "folder.recent", "Recent Folders", ["alt+o"];
+    OpenFolder, "folder.open", "Open Folder or Terminal…", ["ctrl+o", "alt+o"];
     CloseFolder, "folder.close", "Close Folder", ["ctrl+alt+shift+w"];
     SelectTheme, "theme.select", "Select Theme", ["ctrl+alt+shift+t"];
     SelectUiFont, "font.selectUi", "Select UI Font", ["ctrl+alt+shift+u"];
@@ -239,8 +239,6 @@ commands! {
     ToggleTerminalGrid, "terminal.grid", "Terminals Side by Side / as Tabs", ["alt+g"];
     MaximizeTerminal, "terminal.maximize", "Maximize / Restore Terminal", ["alt+m"];
     SwitchTerminal, "terminal.switch", "Switch to Terminal…", ["alt+k"];
-    RecentTerminals, "terminal.recent", "Recent Terminals", ["alt+r"];
-    OpenTerminalIn, "terminal.openInFolder", "Open Terminal in Folder…", ["alt+shift+o"];
     OpenTerminalLink, "terminal.openLink", "Open a Link from the Terminal…", ["ctrl+shift+o"];
     ToggleRemoteAccess, "remote.toggle", "Remote Access: On / Off", ["ctrl+alt+shift+r"];
     ShowRemoteAddress, "remote.address", "Remote Access: Show Address", ["ctrl+alt+shift+a"];
@@ -494,7 +492,7 @@ impl Keymap {
             }
         }
         for b in user {
-            if !COMMANDS.iter().any(|c| c.id == b.command) {
+            if !COMMANDS.iter().any(|c| c.id == b.command) && !RETIRED.contains(&b.command.as_str()) {
                 errors.push(format!("unknown command \"{}\"", b.command));
             }
         }
@@ -717,9 +715,18 @@ mod tests {
         // ⌥O on macOS: no logical letter, physical O.
         assert_eq!(
             km.command_for(Key::Escape, Some(Key::O), alt),
-            Some(Command::RecentFolders)
+            Some(Command::OpenFolder)
         );
         assert_eq!(km.command_for(Key::F, None, alt), Some(Command::GoToFile));
+    }
+
+    /// A keybindings file naming a command merged away loads without an error.
+    #[test]
+    fn retired_commands_are_quietly_ignored() {
+        let (_, errors) = Keymap::new(&[user("alt+r", "terminal.recent"), user("alt+o", "folder.recent")]);
+        assert!(errors.is_empty(), "{errors:?}");
+        let (_, errors) = Keymap::new(&[user("alt+r", "terminal.nope")]);
+        assert_eq!(errors.len(), 1);
     }
 
     #[test]

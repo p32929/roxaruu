@@ -247,7 +247,7 @@ pub struct App {
     pub terminal_grid: bool,
     /// The terminal panel fills the window (the editor steps aside).
     pub terminal_max: bool,
-    /// This window's terminals' folders as last saved in Recent Terminals.
+    /// This window's terminals' folders as last saved in the Open list.
     terms_saved: Vec<PathBuf>,
     /// All open files tiled side by side (split view).
     pub editor_grid: bool,
@@ -647,13 +647,10 @@ impl App {
         // The key that opened a list closes it again.
         let list = match command {
             Command::Palette => Some(Mode::Commands),
-            Command::RecentFolders => Some(Mode::Recent),
-            Command::OpenFolder => Some(Mode::Folders),
+            Command::OpenFolder => Some(Mode::Open),
             Command::SearchInFiles => Some(Mode::Search),
             Command::GoToLine => Some(Mode::Line),
             Command::SwitchTerminal => Some(Mode::Terminals),
-            Command::RecentTerminals => Some(Mode::RecentTerminals),
-            Command::OpenTerminalIn => Some(Mode::TerminalFolders),
             Command::OpenTerminalLink => Some(Mode::Links),
             Command::Settings => Some(Mode::Settings),
             Command::Keybindings => Some(Mode::Keybindings),
@@ -675,8 +672,7 @@ impl App {
             }
             // Our own picker, never the system's: that one is missing on a
             // server and opens out of sight of a browser using remote access.
-            Command::OpenFolder => self.open_palette(Mode::Folders, ctx),
-            Command::RecentFolders => self.open_palette(Mode::Recent, ctx),
+            Command::OpenFolder => self.open_palette(Mode::Open, ctx),
             // An empty one: no folder, its terminals start at home.
             Command::NewWindow => {
                 if let Err(e) = files::spawn_empty_window() {
@@ -830,8 +826,6 @@ impl App {
                 self.terminal_max = max && !self.terminals.is_empty();
             }
             Command::SwitchTerminal => self.open_palette(Mode::Terminals, ctx),
-            Command::RecentTerminals => self.open_palette(Mode::RecentTerminals, ctx),
-            Command::OpenTerminalIn => self.open_palette(Mode::TerminalFolders, ctx),
             Command::OpenTerminalLink => self.open_palette(Mode::Links, ctx),
             Command::ToggleRemoteAccess => self.toggle_remote(ctx),
             Command::ShowRemoteAddress => {
@@ -1010,7 +1004,7 @@ impl App {
             }
             return;
         }
-        crate::recent::record(&dir);
+        crate::recent::record(std::slice::from_ref(&dir));
         crate::instances::register(&dir);
         self.project = Some(Project {
             name: display_name(&dir),
@@ -2093,12 +2087,9 @@ impl App {
             Mode::UiFonts | Mode::CodeFonts => Some(Revert::Settings(self.config.settings.clone())),
             _ => None,
         };
-        if matches!(mode, Mode::Folders | Mode::TerminalFolders) {
-            // A folder: start beside the one that's open; a terminal: in it.
-            // Else at home.
-            let open = self.project.as_ref().map(|p| p.root.as_path());
-            let open = if mode == Mode::Folders { open.and_then(Path::parent) } else { open };
-            let start = open.map(PathBuf::from).or_else(crate::config::home);
+        if mode == Mode::Folders {
+            // Start beside the folder that's open, else at home.
+            let start = self.project.as_ref().and_then(|p| p.root.parent()).map(PathBuf::from).or_else(crate::config::home);
             if let Some(start) = start {
                 p.query = folder_text(&start);
                 p.to_end = true;
@@ -2136,7 +2127,11 @@ impl App {
 
     /// Rebuild the palette's items for its mode and query.
     pub fn refresh_items(&mut self) {
-        let Some(p) = &self.palette else { return };
+        let Some(p) = &mut self.palette else { return };
+        // A path typed into Open…: browse there.
+        if p.mode == Mode::Open && (p.query.starts_with('~') || Path::new(&p.query).is_absolute()) {
+            p.mode = Mode::Folders;
+        }
         let (mode, query) = (p.mode, p.query.clone());
         let items = match mode {
             Mode::Commands => self.command_items(&query),
@@ -2157,11 +2152,9 @@ impl App {
                 icon::FONT,
                 Pick::CodeFont,
             ),
-            Mode::Recent => self.recent_items(&query),
-            Mode::Folders => folder_items(&query, "Open This Folder"),
-            Mode::TerminalFolders => folder_items(&query, "Open a Terminal Here"),
+            Mode::Open => self.open_items(&query),
+            Mode::Folders => folder_items(&query),
             Mode::Terminals => self.terminal_items(&query),
-            Mode::RecentTerminals => self.recent_terminal_items(&query),
             Mode::Links => self.link_items(&query),
             Mode::Search => {
                 if query != self.search.query {
@@ -2392,64 +2385,90 @@ impl App {
             .collect()
     }
 
-    /// Recent Terminals: every folder a terminal was in, once, newest
-    /// first or A to Z (⌘S, remembered).
-    fn recent_terminal_items(&self, query: &str) -> Vec<Item> {
-        let mut folders = crate::recent::terminal_folders();
-        let caps = |c: Command| self.config.keymap.combo_for(c).map(|k| k.caps()).unwrap_or_default();
-        // Last, whatever was typed: a folder that isn't in the list.
-        let another = Item {
-            caps: caps(Command::OpenTerminalIn),
-            ..Item::new(icon::FOLDER_OPEN, "Open a Terminal in Another Folder…", Pick::Command(Command::OpenTerminalIn))
-                .detail("browse to any folder")
-        };
-        // Nothing yet: what the list is for, and the way to start.
-        if folders.is_empty() && query.is_empty() {
-            return vec![
-                Item {
-                    caps: caps(Command::NewTerminal),
-                    ..Item::new(icon::ADD, "New Terminal", Pick::Command(Command::NewTerminal))
-                        .detail("nothing here yet: the folders you open terminals in are kept here, to open again")
-                },
-                another,
-            ];
-        }
-        if self.config.settings.recent_terminals_by_name {
+    /// Open…: every folder you've opened, as a project or with a terminal
+    /// in it, once, newest first or A to Z (⌘S, remembered); then browsing
+    /// to any other, and a new window.
+    fn open_items(&self, query: &str) -> Vec<Item> {
+        let mut folders = crate::recent::list();
+        if self.config.settings.open_list_by_name {
             folders.sort_by_cached_key(|(d, _)| (display_name(d).to_lowercase(), d.clone()));
         }
         let now = crate::update::now();
-        folders
-            .into_iter()
-            .filter(|(d, _)| fuzzy::score(query, &display_name(d)).is_some() || fuzzy::score(query, &d.to_string_lossy()).is_some())
-            .map(|(d, at)| {
-                let detail = format!("{}  ·  {}", crate::ui::tilde(&d.to_string_lossy()), crate::recent::ago(now.saturating_sub(at)));
-                Item {
-                    matched: fuzzy::positions(query, &display_name(&d)),
-                    ..Item::new(icon::FOLDER, display_name(&d), Pick::TerminalIn(d.clone())).detail(detail)
-                }
+        let caps = |c: Command| self.config.keymap.combo_for(c).map(|k| k.caps()).unwrap_or_default();
+        let found = folders.into_iter().filter_map(|(dir, at)| {
+            let name = display_name(&dir);
+            if fuzzy::score(query, &name).is_none() && fuzzy::score(query, &dir.to_string_lossy()).is_none() {
+                return None;
+            }
+            let path = crate::ui::tilde(&dir.to_string_lossy());
+            let elsewhere = self.open_elsewhere(&dir).is_some();
+            let mut detail = vec![path];
+            if self.project.as_ref().is_some_and(|p| p.root == dir) {
+                detail.insert(0, "open in this window".into());
+            } else if elsewhere {
+                detail.insert(0, "open in another window".into());
+            }
+            // Folders from before times were kept have none to show.
+            if at > 0 {
+                detail.push(crate::recent::ago(now.saturating_sub(at)));
+            }
+            Some(Item {
+                matched: fuzzy::positions(query, &name),
+                dim: elsewhere,
+                ..Item::new(icon::FOLDER, name, Pick::Folder(dir)).detail(detail.join("  ·  "))
             })
-            .chain(std::iter::once(another))
-            .collect()
+        });
+        let browse = Item::new(icon::FOLDER_OPEN, "Browse…", Pick::Browse).detail("to any other folder, by its path");
+        let window = Item {
+            caps: caps(Command::NewWindow),
+            ..Item::new(icon::WINDOW_RESTORE, "New Window", Pick::Command(Command::NewWindow)).detail("an empty one, no folder")
+        };
+        found.chain([browse, window]).collect()
     }
 
-    /// Recent Terminals' ⌘S: sort by name, or by when, and keep that.
-    pub(crate) fn sort_recent_terminals(&mut self, ctx: &egui::Context) {
-        let by_name = !self.config.settings.recent_terminals_by_name;
-        self.config.settings.recent_terminals_by_name = by_name;
-        self.save_choice_quietly("recentTerminalsByName", by_name, ctx);
+    /// Open…'s ⌘S: sort by name, or by when, and keep that.
+    pub(crate) fn sort_open_list(&mut self, ctx: &egui::Context) {
+        let by_name = !self.config.settings.open_list_by_name;
+        self.config.settings.open_list_by_name = by_name;
+        self.save_choice_quietly("openListByName", by_name, ctx);
         self.refresh_items();
     }
 
-    /// Recent Terminals: a terminal in each of `dirs`, in that order, side
-    /// by side and filling the window — here if this window has nothing
-    /// open, else in a new one.
+    /// Open…'s and Browse's ⌘↵: a terminal in the ticked folders (in
+    /// ticking order), else in the chosen one.
+    pub(crate) fn open_as_terminals(&mut self, ctx: &egui::Context) {
+        let mut dirs: Vec<PathBuf> = self
+            .ticked()
+            .into_iter()
+            .filter_map(|t| if let Pick::Folder(d) = t { Some(d) } else { None })
+            .collect();
+        if dirs.is_empty()
+            && let Some(Pick::Folder(d)) = self.palette.as_ref().and_then(|p| p.selected_pick().cloned())
+        {
+            dirs.push(d);
+        }
+        if dirs.is_empty() {
+            return;
+        }
+        self.close_palette(true, ctx);
+        self.open_terminals(dirs, ctx);
+    }
+
+    /// A terminal in each of `dirs`, in that order, side by side and
+    /// filling the window: here if this window has nothing open, else in a
+    /// new one; just one, in a window with things open, is a new terminal
+    /// here.
     pub fn open_terminals(&mut self, dirs: Vec<PathBuf>, ctx: &egui::Context) {
         let dirs: Vec<PathBuf> = dirs.into_iter().filter(|d| d.is_dir()).collect();
         if dirs.is_empty() {
             return;
         }
         tracing::info!(n = dirs.len(), "open terminals");
-        if self.project.is_some() || !self.terminals.is_empty() {
+        let busy = self.project.is_some() || !self.terminals.is_empty();
+        if let ([dir], true) = (dirs.as_slice(), busy) {
+            return self.new_terminal_in(Some(dir.clone()), ctx);
+        }
+        if busy {
             let n = dirs.len();
             match files::spawn_terminals_window(&dirs) {
                 Ok(()) => self.notify(format!("Opened {n} terminal{} in a new window", if n == 1 { "" } else { "s" })),
@@ -2465,61 +2484,15 @@ impl App {
         self.terminal_max = true;
     }
 
-    /// Keep this window's terminals' folders in Recent Terminals when they
+    /// Keep this window's terminals' folders in the Open list when they
     /// change; `closing`: now, whether or not they did.
     fn remember_terminals(&mut self, closing: bool) {
         let dirs: Vec<PathBuf> = self.terminals.iter().map(|t| t.pane.dir.clone()).filter(|d| !d.as_os_str().is_empty()).collect();
         if dirs.is_empty() || (!closing && dirs == self.terms_saved) {
             return;
         }
-        crate::recent::record_terminals(&dirs);
+        crate::recent::record(&dirs);
         self.terms_saved = dirs;
-    }
-
-    fn recent_items(&self, query: &str) -> Vec<Item> {
-        crate::recent::list()
-            .into_iter()
-            .filter_map(|dir| {
-                let name = display_name(&dir);
-                fuzzy::score(query, &name)?;
-                let detail = crate::ui::tilde(&dir.to_string_lossy());
-                let here = self.project.as_ref().is_some_and(|p| p.root == dir);
-                let elsewhere = self.open_elsewhere(&dir).is_some();
-                let detail = if here {
-                    format!("open in this window  ·  {detail}")
-                } else if elsewhere {
-                    format!("open in another window  ·  {detail}")
-                } else {
-                    detail
-                };
-                Some(Item {
-                    icon: icon::FOLDER,
-                    matched: fuzzy::positions(query, &name),
-                    label: name,
-                    detail,
-                    caps: Vec::new(),
-                    dim: elsewhere,
-                    tint: None,
-                    pick: Pick::Folder(dir),
-                })
-            })
-            // Last, whatever was typed: a folder that isn't in the list.
-            .chain(std::iter::once(Item {
-                icon: icon::FOLDER_OPEN,
-                label: "Open Another Folder…".into(),
-                detail: "browse to any folder".into(),
-                caps: self
-                    .config
-                    .keymap
-                    .combo_for(Command::OpenFolder)
-                    .map(|k| k.caps())
-                    .unwrap_or_default(),
-                matched: Vec::new(),
-                dim: false,
-                tint: None,
-                pick: Pick::Command(Command::OpenFolder),
-            }))
-            .collect()
     }
 
     /// Whether the file index is still being built.
@@ -2601,23 +2574,7 @@ impl App {
                 self.active_terminal = i.min(self.terminals.len().saturating_sub(1));
                 self.show_terminals(ctx);
             }
-            Pick::TerminalIn(dir) => {
-                // The ticked ones, in ticking order, if any; else the row chosen.
-                let mut dirs: Vec<PathBuf> = self
-                    .ticked()
-                    .into_iter()
-                    .filter_map(|t| if let Pick::TerminalIn(d) = t { Some(d) } else { None })
-                    .collect();
-                if dirs.is_empty() {
-                    dirs.push(dir);
-                }
-                self.close_palette(true, ctx);
-                self.open_terminals(dirs, ctx);
-            }
-            Pick::Folder(dir) if self.palette.as_ref().is_some_and(|p| p.mode == Mode::TerminalFolders) => {
-                self.close_palette(true, ctx);
-                self.new_terminal_in(Some(dir), ctx);
-            }
+            Pick::Browse => self.open_palette(Mode::Folders, ctx),
             Pick::Folder(dir) => {
                 // The ticked ones, if any; else the one chosen.
                 let mut dirs: Vec<PathBuf> = self
@@ -2756,9 +2713,8 @@ pub fn folder_text(dir: &Path) -> String {
 
 /// Open Folder's list: the folder typed, then the folders in it (see
 /// `palette::folder_query`); hidden ones only once a `.` is typed.
-/// Open Folder's list (and Open Terminal in Folder's, whose first row,
-/// `here`, says what it does).
-fn folder_items(query: &str, here: &str) -> Vec<Item> {
+/// Open…'s Browse: the folders in the one typed.
+fn folder_items(query: &str) -> Vec<Item> {
     let home = crate::config::home().unwrap_or_default();
     let (dir, filter) = crate::palette::folder_query(query, &home);
     let mut found: Vec<(i64, String)> = std::fs::read_dir(&dir)
@@ -2776,7 +2732,7 @@ fn folder_items(query: &str, here: &str) -> Vec<Item> {
         .collect();
     found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
     let here = (filter.is_empty() && dir.is_dir()).then(|| {
-        Item::new(icon::FOLDER_OPEN, here, Pick::Folder(dir.clone()))
+        Item::new(icon::FOLDER_OPEN, "Open This Folder", Pick::Folder(dir.clone()))
             .detail(crate::ui::tilde(&dir.to_string_lossy()))
     });
     here.into_iter()

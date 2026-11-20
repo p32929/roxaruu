@@ -1527,7 +1527,7 @@ fn headless_extras_walkthrough() {
         other.to_string_lossy().as_bytes(),
     )
     .unwrap();
-    crate::recent::record(&other);
+    crate::recent::record(std::slice::from_ref(&other));
     press(&mut h, ALT, Key::O);
     shot(&mut h, "b8-recent-elsewhere");
     let pal = app(&h).palette.as_ref().unwrap();
@@ -2730,13 +2730,15 @@ fn headless_focus_keys() {
     assert_eq!(app(&h).focus, Focus::Sidebar);
     press(&mut h, Modifiers::NONE, Key::Escape);
 
-    // ⌥O: the recent folders, then a way to any other folder, with its key.
+    // ⌥O (⌘O's other key): the folders, then browsing to any other, and a
+    // new window, with its key.
     press(&mut h, ALT, Key::O);
     let p = app(&h).palette.as_ref().unwrap();
-    assert_eq!(p.mode, Mode::Recent);
-    let last = p.items.last().unwrap();
-    assert_eq!(last.pick, Pick::Command(crate::keymap::Command::OpenFolder));
-    assert_eq!(crate::keymap::joined(&last.caps), label("ctrl+o"));
+    assert_eq!(p.mode, Mode::Open);
+    let [.., browse, window] = p.items.as_slice() else { panic!() };
+    assert_eq!(browse.pick, Pick::Browse);
+    assert_eq!(window.pick, Pick::Command(crate::keymap::Command::NewWindow));
+    assert_eq!(crate::keymap::joined(&window.caps), label("alt+shift+n"));
     shot(&mut h, "f0-recent");
     press(&mut h, ALT, Key::O);
     assert!(app(&h).palette.is_none(), "⌥O again closes it");
@@ -2765,8 +2767,12 @@ fn headless_open_folder_list() {
     };
     let query = |h: &Harness<'static, Root>| app(h).palette.as_ref().unwrap().query.clone();
 
+    // Open…'s Browse row.
     press(&mut h, CMD, Key::O);
-    let p = app(&h).palette.as_ref().expect("Open Folder opens the list");
+    let browse = app(&h).palette.as_ref().unwrap().items.iter().position(|i| i.pick == Pick::Browse).unwrap();
+    h.state_mut().0.palette.as_mut().unwrap().selected = browse;
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let p = app(&h).palette.as_ref().expect("Browse opens the list");
     assert_eq!(p.mode, Mode::Folders);
     let home = crate::config::home().unwrap();
     assert_eq!(p.query, crate::app::folder_text(&home), "it starts at home");
@@ -2852,7 +2858,7 @@ impl Drop for Reaped {
 /// typed, ↵ — as a person would.
 fn open_through_list(h: &mut Harness<'static, Root>, path: &str) {
     if app(h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders) {
-        press(h, CMD, Key::O);
+        press(h, CMD, Key::O); // a path typed into Open… browses
     }
     let p = h.state_mut().0.palette.as_mut().unwrap();
     p.query = path.to_string();
@@ -2950,10 +2956,10 @@ fn headless_open_folder_every_case() {
     press(&mut h, Modifiers::NONE, Key::Escape);
     assert!(app(&h).palette.is_none(), "esc closes it");
 
-    // Recent's last row, "Open Another Folder…", opens the list.
+    // Open…'s "Browse…" row opens the list.
     press(&mut h, ALT, Key::O);
-    let last = app(&h).palette.as_ref().unwrap().items.len() - 1;
-    h.state_mut().0.palette.as_mut().unwrap().selected = last;
+    let browse = app(&h).palette.as_ref().unwrap().items.len() - 2;
+    h.state_mut().0.palette.as_mut().unwrap().selected = browse;
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert_eq!(app(&h).palette.as_ref().map(|p| p.mode), Some(Mode::Folders));
     press(&mut h, Modifiers::NONE, Key::Escape);
@@ -2989,10 +2995,10 @@ fn headless_open_several_folders() {
     // Only these: folders other tests left in the list (this process's, or,
     // before test-all gave each its own XDG folders, the other process's on
     // Linux) made it longer, and the rows moved under the ⌘-click.
-    let _ = std::fs::remove_file(crate::config::state_dir().unwrap().join("recent"));
+    let _ = std::fs::remove_file(crate::config::state_dir().unwrap().join("folders.json"));
     for n in names.iter().rev() {
         std::fs::create_dir_all(base.join(n).join(".git")).unwrap();
-        crate::recent::record(&base.join(n)); // alpha ends up first
+        crate::recent::record(std::slice::from_ref(&base.join(n))); // alpha ends up first
     }
     let mut h = harness(None);
     press(&mut h, ALT, Key::O);
@@ -3084,50 +3090,48 @@ fn headless_open_several_folders() {
     shot(&mut h, "o3-opened");
 }
 
-/// Recent Terminals: every folder a terminal was in, once, newest first or
-/// A to Z (⌘S, remembered). Ticks are numbered and open in that order, side
-/// by side and maximized, here when this window has nothing open, else in a
-/// new window.
+/// Open… (⌘O): every folder opened, as a project or with a terminal in it,
+/// once, newest first or A to Z (⌘S, remembered); then Browse… and New
+/// Window. ⌘↵ opens a terminal instead of the folder: the ticked ones in
+/// ticking order, side by side and maximized, here when this window has
+/// nothing open, else in a new window; just one, in a busy window, a
+/// terminal here. Browse's ⌘↵ too.
 #[test]
 #[ignore]
-fn headless_recent_terminals() {
-    use crate::palette::Pick;
-    use crate::recent::{record_terminals, terminal_folders};
+fn headless_open_list() {
+    use crate::palette::{Mode, Pick};
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().canonicalize().unwrap();
     let [api, infra, web, scripts] = ["api", "infra", "web", "scripts"].map(|n| base.join(n));
     for d in [&api, &infra, &web, &scripts] {
         std::fs::create_dir_all(d).unwrap();
     }
-    let _ = std::fs::remove_file(crate::config::state_dir().unwrap().join("terminal-folders.json"));
-    // Before any: its key is in the status bar with no terminal open, and
-    // the list says what it's for, with the way to start.
+    std::fs::create_dir_all(api.join("src")).unwrap();
+    let _ = std::fs::remove_file(crate::config::state_dir().unwrap().join("folders.json"));
+    // Before any: Browse… and New Window, and ⌘O in the status bar.
     {
         let mut h = harness(None);
-        assert!(app(&h).status_hints().iter().any(|(_, _, c)| *c == Some(crate::keymap::Command::RecentTerminals)));
-        press(&mut h, ALT, Key::R);
+        assert!(app(&h).status_hints().iter().any(|(_, _, c)| *c == Some(crate::keymap::Command::OpenFolder)));
+        press(&mut h, CMD, Key::O);
         let picks: Vec<_> = app(&h).palette.as_ref().unwrap().items.iter().map(|i| i.pick.clone()).collect();
-        use crate::keymap::Command::{NewTerminal, OpenTerminalIn};
-        assert_eq!(picks, [Pick::Command(NewTerminal), Pick::Command(OpenTerminalIn)]);
-        shot(&mut h, "rt0-empty");
+        assert_eq!(picks, [Pick::Browse, Pick::Command(crate::keymap::Command::NewWindow)]);
+        shot(&mut h, "op0-empty");
     }
-    record_terminals(std::slice::from_ref(&scripts));
-    record_terminals(&[web.clone(), api.clone(), infra.clone(), web.clone()]);
+    crate::recent::record(std::slice::from_ref(&scripts));
+    crate::recent::record(&[web.clone(), api.clone(), infra.clone(), web.clone()]);
 
     let mut h = harness(None);
-    press(&mut h, ALT, Key::R);
-    // The folders, then the way to any other.
+    press(&mut h, CMD, Key::O);
     let labels = |h: &Harness<'static, Root>| -> Vec<String> {
         let items = &app(h).palette.as_ref().unwrap().items;
-        assert_eq!(items.last().unwrap().pick, Pick::Command(crate::keymap::Command::OpenTerminalIn));
-        items[..items.len() - 1].iter().map(|i| i.label.clone()).collect()
+        items[..items.len() - 2].iter().map(|i| i.label.clone()).collect()
     };
     assert_eq!(labels(&h), ["web", "api", "infra", "scripts"], "newest first, each once");
     assert!(app(&h).palette.as_ref().unwrap().items[0].detail.ends_with("just now"));
     // ⌘S: A to Z, and it stays so.
-    press(&mut h, Modifiers::COMMAND, Key::S);
+    press(&mut h, CMD, Key::S);
     assert_eq!(labels(&h), ["api", "infra", "scripts", "web"]);
-    assert!(app(&h).config.settings.recent_terminals_by_name);
+    assert!(app(&h).config.settings.open_list_by_name);
     assert!(app(&h).palette.is_some(), "still open");
 
     // Ticked: numbered in that order, whatever the rows' order.
@@ -3137,73 +3141,65 @@ fn headless_recent_terminals() {
     }
     let p = app(&h).palette.as_ref().unwrap();
     assert_eq!([3, 0, 2].map(|r| p.tick_number(r)), [Some(1), Some(2), Some(3)]);
-    shot(&mut h, "rt1-ticked");
-    // Sorting again keeps the ticks.
-    press(&mut h, Modifiers::COMMAND, Key::S);
+    shot(&mut h, "op1-ticked");
+    // Sorting again keeps the ticks; ⌘↵: terminals, here (nothing open).
+    press(&mut h, CMD, Key::S);
     assert_eq!(labels(&h), ["web", "api", "infra", "scripts"]);
-    assert_eq!(app(&h).ticked().len(), 3);
-    press(&mut h, Modifiers::NONE, Key::Enter);
+    press(&mut h, CMD, Key::Enter);
     assert!(app(&h).palette.is_none());
+    assert!(app(&h).project.is_none(), "terminals, not a folder");
     let dirs: Vec<_> = app(&h).terminals.iter().map(|t| t.pane.dir.clone()).collect();
     assert_eq!(dirs, [web.clone(), api.clone(), scripts.clone()], "here, in the ticked order");
     assert!(app(&h).terminal_grid && app(&h).terminal_max && app(&h).terminal_focused());
-    shot(&mut h, "rt2-opened");
+    shot(&mut h, "op2-terminals");
     h.step();
-    assert_eq!(terminal_folders().len(), 4, "still each folder once");
+    assert_eq!(crate::recent::list().len(), 4, "still each folder once");
 
-    // This window has terminals now: the chosen one opens in a new window.
-    press(&mut h, ALT, Key::R);
-    let infra_row = labels(&h).iter().position(|l| l == "infra").unwrap();
-    h.state_mut().0.palette.as_mut().unwrap().selected = infra_row;
+    // This window has terminals: several open in a new window; one here.
+    press(&mut h, CMD, Key::O);
+    for name in ["infra", "web"] {
+        let row = labels(&h).iter().position(|l| l == name).unwrap();
+        h.state_mut().0.palette.as_mut().unwrap().selected = row;
+        press(&mut h, Modifiers::NONE, Key::Space);
+    }
     App::take_launched();
-    press(&mut h, Modifiers::NONE, Key::Enter);
-    assert_eq!(
-        App::take_launched(),
-        [vec!["new window".to_string(), "--terminal".into(), infra.to_string_lossy().into_owned()]]
-    );
-    assert!(app(&h).toasts.iter().any(|t| t.msg == "Opened 1 terminal in a new window"));
+    press(&mut h, CMD, Key::Enter);
+    let s = |p: &std::path::PathBuf| p.to_string_lossy().into_owned();
+    assert_eq!(App::take_launched(), [vec!["new window".to_string(), "--terminal".into(), s(&infra), "--terminal".into(), s(&web)]]);
     assert_eq!(app(&h).terminals.len(), 3, "this window keeps its own");
-}
+    press(&mut h, CMD, Key::O);
+    let row = labels(&h).iter().position(|l| l == "infra").unwrap();
+    h.state_mut().0.palette.as_mut().unwrap().selected = row;
+    press(&mut h, CMD, Key::Enter);
+    assert!(App::take_launched().is_empty(), "one: here");
+    assert_eq!(app(&h).terminals.len(), 4);
+    assert_eq!(app(&h).terminal().unwrap().pane.dir, infra);
 
-/// Open Terminal in Folder: browse like Open Folder (⇥ into a folder),
-/// ↵ opens a terminal there, in this window, whatever it has open.
-#[test]
-#[ignore]
-fn headless_open_terminal_in_folder() {
-    use crate::palette::Mode;
-    let dir = tempfile::tempdir().unwrap();
-    let shop = dir.path().canonicalize().unwrap().join("shop");
-    std::fs::create_dir_all(shop.join("api/src")).unwrap();
-    std::fs::write(shop.join("README"), "hi\n").unwrap();
-    let mut h = harness(Some(shop.join("README")));
-    press(&mut h, ALT | Modifiers::SHIFT, Key::O);
-    let p = app(&h).palette.as_ref().unwrap();
-    assert_eq!(p.mode, Mode::TerminalFolders);
-    assert_eq!(p.items[0].label, "Open a Terminal Here", "starting in the open folder");
-    let api = p.items.iter().position(|i| i.label == "api").unwrap();
-    h.state_mut().0.palette.as_mut().unwrap().selected = api;
+    // Browse…: ⇥ into a folder, ⌘↵ a terminal there.
+    press(&mut h, CMD, Key::O);
+    let p = h.state_mut().0.palette.as_mut().unwrap();
+    p.query = crate::app::folder_text(&base);
+    h.state_mut().0.refresh_items();
+    assert_eq!(app(&h).palette.as_ref().unwrap().mode, Mode::Folders, "a typed path browses");
+    let api_row = app(&h).palette.as_ref().unwrap().items.iter().position(|i| i.label == "api").unwrap();
+    h.state_mut().0.palette.as_mut().unwrap().selected = api_row;
     press(&mut h, Modifiers::NONE, Key::Tab);
-    assert_eq!(app(&h).palette.as_ref().unwrap().items[1].label, "src", "inside api");
-    shot(&mut h, "tf0-browse");
-    App::take_launched();
-    press(&mut h, Modifiers::NONE, Key::Enter);
+    shot(&mut h, "op3-browse");
+    press(&mut h, CMD, Key::Enter);
     assert!(app(&h).palette.is_none());
-    assert!(App::take_launched().is_empty(), "here, not a new window");
-    assert_eq!(app(&h).terminals.len(), 1);
-    assert_eq!(app(&h).terminals[0].pane.dir, shop.join("api"));
-    assert!(app(&h).terminal_focused());
-    // Its key closes it again.
-    press(&mut h, ALT | Modifiers::SHIFT, Key::O);
-    press(&mut h, ALT | Modifiers::SHIFT, Key::O);
-    assert!(app(&h).palette.is_none());
+    assert_eq!(app(&h).terminal().unwrap().pane.dir, api);
+    assert_eq!(app(&h).terminals.len(), 5);
 }
 
-/// New Window: an empty one, from anywhere, its key in the status bar.
+/// New Window: an empty one, from anywhere, its key on Open…'s last row.
 #[test]
 #[ignore]
 fn headless_new_window() {
     let mut h = harness(None);
-    assert!(app(&h).status_hints().iter().any(|(_, _, c)| *c == Some(crate::keymap::Command::NewWindow)));
+    press(&mut h, CMD, Key::O);
+    let last = app(&h).palette.as_ref().unwrap().items.last().unwrap().pick.clone();
+    assert_eq!(last, crate::palette::Pick::Command(crate::keymap::Command::NewWindow));
+    press(&mut h, Modifiers::NONE, Key::Escape);
     App::take_launched();
     press(&mut h, ALT | Modifiers::SHIFT, Key::N);
     assert_eq!(App::take_launched(), [vec!["new window".to_string()]]);
@@ -3859,8 +3855,7 @@ fn headless_dialogs_fit() {
     let mut h = harness(Some(root.join("file00.rs")));
     let opens = [
         Command::Palette,
-        Command::RecentFolders,
-        Command::RecentTerminals,
+        Command::OpenFolder,
         Command::SearchInFiles,
         Command::GoToLine,
         Command::Settings,
@@ -4583,12 +4578,13 @@ fn headless_remote_access() {
     crate::app::App::take_launched();
     send(&mut ws, r#"{"t":"key","k":"o","code":"KeyO","down":true,"m":{"meta":true}}"#);
     send(&mut ws, r#"{"t":"key","k":"o","code":"KeyO","down":false,"m":{"meta":true}}"#);
-    let stuck = Stuck::new(r##"app(&h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders)"##);
-    while app(&h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders) {
+    let stuck = Stuck::new(r##"app(&h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Open)"##);
+    while app(&h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Open) {
         stuck.check();
         h.step();
     }
-    send(&mut ws, r#"{"t":"text","s":"other"}"#);
+    // A path typed into Open…: browsing there.
+    send(&mut ws, &format!(r#"{{"t":"text","s":"{}"}}"#, other.to_string_lossy()));
     let stuck = Stuck::new(r##"!app(&h).palette.as_ref().is_some_and(|p| p.query.ends_with("other"))"##);
     while !app(&h).palette.as_ref().is_some_and(|p| p.query.ends_with("other")) {
         stuck.check();
@@ -4615,12 +4611,13 @@ fn headless_remote_access() {
         let key = |down: bool| format!(r#"{{"t":"key","k":"o","code":"KeyO","down":{down},"m":{{"meta":true}}}}"#);
         ws.send(Message::text(key(true))).unwrap();
         ws.send(Message::text(key(false))).unwrap();
-        let stuck = Stuck::new(r##"app(h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders)"##);
-        while app(h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Folders) {
+        let stuck = Stuck::new(r##"app(h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Open)"##);
+        while app(h).palette.as_ref().is_none_or(|p| p.mode != crate::palette::Mode::Open) {
             stuck.check();
             h.step();
         }
-        ws.send(Message::text(format!(r#"{{"t":"text","s":"{name}"}}"#))).unwrap();
+        let path = shop.parent().unwrap().join(name);
+        ws.send(Message::text(format!(r#"{{"t":"text","s":"{}"}}"#, path.to_string_lossy()))).unwrap();
         let stuck = Stuck::new(r##"!app(h).palette.as_ref().is_some_and(|p| p.query.ends_with(name))"##);
         while !app(h).palette.as_ref().is_some_and(|p| p.query.ends_with(name)) {
             stuck.check();
@@ -5340,8 +5337,8 @@ fn headless_modifier_keys_are_not_typing() {
 }
 
 /// A key that opens a list or a dialog never also acts inside it. From the
-/// start screen: ↓ to Recent Folders, ↵ opens the list — it doesn't also
-/// open the first folder in it. And a dialog that comes up in the same frame
+/// start screen: ↵ on Open… opens the list — it doesn't also open the
+/// first folder in it. And a dialog that comes up in the same frame
 /// as an ↵ isn't answered by that ↵.
 #[test]
 #[ignore]
@@ -5351,14 +5348,13 @@ fn headless_opening_key_stays_with_its_opener() {
     let dir = tempfile::tempdir().unwrap();
     let recent = dir.path().canonicalize().unwrap().join("old-project");
     std::fs::create_dir_all(recent.join(".git")).unwrap();
-    crate::recent::record(&recent);
+    crate::recent::record(std::slice::from_ref(&recent));
 
     let mut h = harness(None);
     h.step();
-    press(&mut h, Modifiers::NONE, Key::ArrowDown); // Recent Folders
-    press(&mut h, Modifiers::NONE, Key::Enter);
+    press(&mut h, Modifiers::NONE, Key::Enter); // Open…, the first
     h.step();
-    assert_eq!(app(&h).palette.as_ref().map(|p| p.mode), Some(Mode::Recent), "the list opened");
+    assert_eq!(app(&h).palette.as_ref().map(|p| p.mode), Some(Mode::Open), "the list opened");
     assert!(app(&h).project.is_none(), "and nothing in it was opened");
     shot(&mut h, "k-recent-list");
     // From there, ↵ is the list's: it opens the selected folder.
@@ -5721,7 +5717,7 @@ fn headless_every_key_that_applies_shows() {
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
         OpenProjectSettings, OpenConfigFolder, Todos, ClipboardHistory, ZoomIn, ZoomOut, ResetZoom, FullScreen,
         MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
-        ToggleTerminal, RecentTerminals, OpenTerminalIn, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
+        ToggleTerminal, NewWindow, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
         // A tab's or the tree's right-click menu.
         RenameFile, RevealInFinder, OpenInDefaultApp, OpenInTerminal, CopyPath, CopyRelativePath,
         // On each tab's tooltip (⌘1–8); ⌘9 is "the last".

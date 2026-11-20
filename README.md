@@ -27,8 +27,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 3. Each tab says what its program is doing: printing, running, or gone quiet (maybe stuck, maybe waiting for you).
 4. Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else (a conversation, not a script's `claude -p`).
 5. Closing a terminal that's still running something asks first.
-6. **Alt+R** (**⌥R** on a Mac) lists every folder you've opened a terminal in, newest first (**Ctrl+S** / **⌘S** sorts them by name instead). Select the ones you want, numbered in the order they'll open, and a terminal opens in each, side by side, filling the window. Its last row, **Alt+Shift+O** (**⌥⇧O**), opens a terminal in any other folder: browse to it like Open Folder (**Tab** goes into a folder, **Shift+Tab** up).
-7. **Alt+Shift+N** (**⌥⇧N** on a Mac) opens a new, empty window, with no folder, for terminals that start in your home folder.
+6. **Ctrl+O** (**⌘O** on a Mac) opens one list of every folder you've opened, as a project or with a terminal in it, newest first (**Ctrl+S** / **⌘S** sorts them by name). **Enter** opens the folder; **Ctrl+Enter** (**⌘↵**) opens a terminal in it instead. Select several (numbered in the order they'll open) and **Ctrl+Enter** opens a terminal in each, side by side, filling the window. Type a path, or pick **Browse…**, to go to any other folder (**Tab** goes into a folder, **Shift+Tab** up); its last row is **New Window** (**Alt+Shift+N** / **⌥⇧N**), an empty one with no folder.
 
 **Editor**
 1. Syntax highlighting for 23 languages, tabs, split view, find and replace, go to line, go to file, search across the whole project.
@@ -95,7 +94,7 @@ To keep your settings, keys and themes for later: `curl -fsSL https://raw.github
 
 ## Getting started
 
-1. Open a folder with **Ctrl+O** (**⌘O** on a Mac), or from a terminal: `rox` for the one you're in, or `rox <folder>`. Opened from the app list (Dock, Start Menu, Spotlight), it starts with no folder.
+1. Open a folder with **Ctrl+O** (**⌘O** on a Mac: recent folders, or type a path), or from a terminal: `rox` for the one you're in, or `rox <folder>`. Opened from the app list (Dock, Start Menu, Spotlight), it starts with no folder.
 2. **Alt+T** shows or hides the terminal, **Alt+M** shows it filling the window (opening one if there is none), **Alt+N** opens another one.
 3. **F1** shows every shortcut; the keys for wherever you are are always at the bottom of the screen.
 

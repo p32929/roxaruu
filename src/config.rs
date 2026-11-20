@@ -44,8 +44,8 @@ pub struct Settings {
     pub updates: bool,
     /// Closing a terminal that's still running something asks first.
     pub confirm_close_terminal: bool,
-    /// Recent Terminals lists folders A to Z instead of newest first (its ⌘S).
-    pub recent_terminals_by_name: bool,
+    /// The Open list (⌘O) lists folders A to Z instead of newest first (its ⌘S).
+    pub open_list_by_name: bool,
     /// Earlier builds saved remote access here; it's off at every launch
     /// now. Accepted, so an old file doesn't show an error, and ignored.
     #[serde(rename = "remoteAccess")]
@@ -72,7 +72,7 @@ impl Default for Settings {
             notifications: true,
             updates: true,
             confirm_close_terminal: true,
-            recent_terminals_by_name: false,
+            open_list_by_name: false,
             old_remote_access: serde::de::IgnoredAny,
         }
     }
@@ -524,8 +524,8 @@ pub(crate) fn settings_template() -> String {
            // \"updates\": {},\n\n  \
            // Closing a terminal that's still running something asks first\n  \
            // \"confirmCloseTerminal\": {},\n\n  \
-           // Recent Terminals lists folders A to Z instead of newest first (⌘S there)\n  \
-           // \"recentTerminalsByName\": {},\n\
+           // The Open list (⌘O) lists folders A to Z instead of newest first (⌘S there)\n  \
+           // \"openListByName\": {},\n\
          }}\n",
         quote(themes.into_iter().map(|t| t.name).collect()),
         d.theme,
@@ -548,7 +548,7 @@ pub(crate) fn settings_template() -> String {
         d.notifications,
         d.updates,
         d.confirm_close_terminal,
-        d.recent_terminals_by_name,
+        d.open_list_by_name,
     )
 }
 
