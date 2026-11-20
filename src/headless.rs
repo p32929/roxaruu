@@ -72,6 +72,13 @@ fn press(h: &mut Harness<'static, Root>, modifiers: Modifiers, key: Key) {
     h.step();
 }
 
+/// A command run as the palette would: for the ones with no key (`KEYLESS`).
+fn run_command(h: &mut Harness<'static, Root>, command: crate::keymap::Command) {
+    let ctx = h.ctx.clone();
+    h.state_mut().0.run(command, &ctx);
+    h.run();
+}
+
 fn type_text(h: &mut Harness<'static, Root>, text: &str) {
     h.event(Event::Text(text.into()));
     h.step();
@@ -1199,15 +1206,7 @@ fn headless_files_walkthrough() {
             current.to_string_lossy().into_owned()
         ]]
     );
-    press(
-        &mut h,
-        Modifiers {
-            alt: true,
-            shift: true,
-            ..CMD
-        },
-        Key::C,
-    );
+run_command(&mut h, crate::keymap::Command::CopyRelativePath);
     assert_eq!(
         app(&h).note_text(),
         Some(format!("Copied {}", rel(&h)).as_str())
@@ -2018,11 +2017,11 @@ fn headless_about() {
     click_at(&mut h, line.left_center() - egui::vec2(60.0, 0.0), egui::PointerButton::Primary);
     assert!(!about(&h) && App::take_launched().len() == 1, "the config folder opened");
 
-    // Its key, anywhere; esc closes it and opens nothing.
+    // From the palette, anywhere (it has no key); esc closes it and opens nothing.
     let dir = tempfile::tempdir().unwrap();
     let mut h = harness(Some(dir.path().canonicalize().unwrap()));
     h.run();
-    press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::I);
+    run_command(&mut h, crate::keymap::Command::About);
     assert!(about(&h));
     for want in ["Roxaruu", crate::VERSION, "Source code on GitHub", "Made by p32929"] {
         assert!(h.query_all_by_label_contains(want).next().is_some(), "About shows {want}");
@@ -2073,8 +2072,8 @@ fn headless_updates() {
     h.state_mut().0.open_file(&root.join("a.rs"));
     h.run();
     type_text(&mut h, "x");
-    press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::D);
-    assert!(matches!(app(&h).ask, Some(Ask::Update { .. })), "its key: the update");
+    run_command(&mut h, crate::keymap::Command::CheckForUpdates);
+    assert!(matches!(app(&h).ask, Some(Ask::Update { .. })), "Check for Updates: the update");
     assert!(h.query_all_by_label_contains("unsaved").next().is_some(), "says what a restart closes");
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert!(app(&h).prompt.is_some() && !app(&h).allow_close, "save changes? first");
@@ -2090,7 +2089,7 @@ fn headless_updates() {
     *app(&h).updates.state.lock().unwrap() = Update::ByHand("99.0.0".into());
     h.run();
     App::take_launched();
-    press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::D);
+    run_command(&mut h, crate::keymap::Command::CheckForUpdates);
     assert!(h.query_all_by_label_contains("Open Release Page").next().is_some());
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert_eq!(App::take_launched(), vec![vec![crate::update::RELEASES.to_string()]]);
@@ -2616,9 +2615,9 @@ fn headless_agent_alerts() {
     assert!(app(&h).terminal_open);
     assert!(app(&h).terminals[0].pane.attention && app(&h).terminals[0].pane.notified.is_some(), "cleared unseen");
     press(&mut h, ALT, Key::T);
-    // Its key opens the system's notification settings, for Roxaruu.
+    // Its command opens the system's notification settings, for Roxaruu.
     crate::app::App::take_launched();
-    press(&mut h, Modifiers { alt: true, shift: true, ..CMD }, Key::N);
+    run_command(&mut h, crate::keymap::Command::OpenNotificationSettings);
     let opened = crate::app::App::take_launched();
     assert!(opened.iter().flatten().any(|a| a.contains("com.p32929.roxaruu") || a.contains("notifications")), "{opened:?}");
     let title = crate::sys::NOTIFIED
@@ -4358,7 +4357,7 @@ fn headless_close_keys() {
     h.step();
     // The tab keys are on show where the tabs are.
     let hints = app(&h).tab_hints(false);
-    assert!(hints.contains(&(vec![label("ctrl+alt+["), label("ctrl+alt+]")], "close left / right")), "{hints:?}");
+    assert!(!hints.iter().any(|(_, w)| *w == "close left / right"), "keyless: in the tab's menu");
     assert!(hints.iter().any(|(_, w)| *w == "close others"));
     shot(&mut h, "z0-tab-hints");
     h.set_size(egui::vec2(900.0, 600.0));
@@ -4378,14 +4377,14 @@ fn headless_close_keys() {
     }
     h.state_mut().0.select_tab(4);
     h.set_size(egui::vec2(1280.0, 820.0));
-    press(&mut h, CMD_ALT, Key::CloseBracket);
+run_command(&mut h, crate::keymap::Command::CloseTabsToRight);
     assert_eq!(names(&h), ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"]);
     h.state_mut().0.select_tab(1); // b.rs
     h.step();
-    press(&mut h, CMD_ALT, Key::OpenBracket);
+run_command(&mut h, crate::keymap::Command::CloseTabsToLeft);
     assert_eq!(names(&h), ["b.rs", "c.rs", "d.rs", "e.rs"]);
     h.state_mut().0.tabs[2].buf.modified = true; // d.rs unsaved
-    press(&mut h, CMD_ALT, Key::S);
+run_command(&mut h, crate::keymap::Command::CloseSavedTabs);
     assert_eq!(names(&h), ["d.rs"]);
     h.state_mut().0.tabs[0].buf.modified = false;
     h.state_mut().0.open_file(&root.join("a.rs"));
@@ -4410,7 +4409,7 @@ fn headless_terminal_tab_hints() {
     wait_for(&mut h, "a prompt", screen_has("$ "));
     let hints = app(&h).tab_hints(true);
     assert!(hints.iter().any(|(c, w)| *w == "close" && c == &vec![label("alt+w")]), "{hints:?}");
-    assert!(hints.iter().any(|(_, w)| *w == "close left / right"));
+    assert!(!hints.iter().any(|(_, w)| *w == "close left / right"), "keyless: in the tab's menu");
     shot(&mut h, "z2-terminal-tab-hints");
 }
 
@@ -5703,7 +5702,8 @@ fn headless_remote_frames_in_chrome() {
     }
 }
 
-/// Wherever the keyboard is, every command that can run there shows its key
+/// Wherever the keyboard is, every command that can run there (with a key:
+/// `KEYLESS` ones have none) shows its key
 /// somewhere on screen (the status bar, the tab rows, buttons, the editor's
 /// right-click menu); the rest are app-wide, listed by the palette (⇧⌘P)
 /// and the F1 sheet, whose keys always show, or live in a right-click menu
@@ -5741,7 +5741,8 @@ fn headless_every_key_that_applies_shows() {
         let missing: Vec<_> = crate::keymap::COMMANDS
             .iter()
             .map(|c| c.command)
-            .filter(|c| app(h).available(*c) && !shown.contains(c) && !elsewhere.contains(c))
+            .filter(|c| app(h).available(*c) && app(h).config.keymap.combo_for(*c).is_some())
+            .filter(|c| !shown.contains(c) && !elsewhere.contains(c))
             .collect();
         assert!(missing.is_empty(), "in {place}, these run but show their key nowhere: {missing:?} (status: {:?})", app(h).status_line());
     };

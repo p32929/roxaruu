@@ -46,7 +46,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 3. Also included: a clipboard history, a to-do list, and recent folders.
 
 **Updates by itself**
-1. Now and then Roxaruu checks GitHub for a new release, downloads it in the background, checks it against the release's SHA-256 sums, and installs it when you close the last window. Or restart right away from the version in the status bar (**Ctrl+Alt+Shift+D**, **⌥⇧⌘D** on a Mac).
+1. Now and then Roxaruu checks GitHub for a new release, downloads it in the background, checks it against the release's SHA-256 sums, and installs it when you close the last window. Or restart right away from the version in the status bar (or **Check for Updates** from the command palette).
 2. Installed with the `.deb`, it opens a terminal with the `apt` command, since that needs your password. Built from source or unzipped, it tells you a new version is out.
 3. Turn it off with `"updates": false` in settings. `rox --update` updates from a terminal (on a server, say).
 

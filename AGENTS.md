@@ -6,9 +6,13 @@ keys and themes are JSON in `~/.config/roxaruu/`. Mouse works too, but the
 keyboard comes first: wherever an action can happen, show its shortcut.
 Anything the mouse can do, a key can do: every button, menu item and
 click-only gesture is a named command (so it's in the palette, the F1
-sheet, and remappable), and every command ships with a default key that
-clashes with nothing (`every_command_has_a_default_key`,
-`defaults_never_conflict`, `headless_every_shortcut`). A key shown on
+sheet, and remappable), and every command you use often ships with a
+default key that clashes with nothing (`every_command_has_a_default_key`,
+`defaults_never_conflict`, `headless_every_shortcut`); rare ones (themes,
+fonts, the JSON files, About, close tabs to the left…) have none and are
+listed in `keymap::KEYLESS` (the owner's call: fewer keys to learn — merge
+related actions into one place, like Open… (⌘O) for folders and terminals,
+before adding a key). A key shown on
 screen works from wherever the keyboard is (`visible_keys_work`): never
 gate a command on focus while its key is drawn elsewhere, and never show
 one that can't run now. The keys between the editor, the tree and the
@@ -42,7 +46,9 @@ of "forgot to update X"):
 - `Command` enum + one `COMMANDS` row: id `<section>.<name>` (the section
   — `file`, `folder`, `tab`, `edit`, `search`, `view`, `terminal`, `app` —
   puts it in the right group of the F1 shortcuts sheet), title, default
-  keys (`defaults_never_conflict`, `command_ids_are_unique_and_titled`).
+  keys (`defaults_never_conflict`, `command_ids_are_unique_and_titled`),
+  or none and a line in `KEYLESS` if it's rare. A command merged away
+  keeps its id in `RETIRED`, so a keybindings file naming it still loads.
 - `icon::for_command` in `ui.rs` (the match is exhaustive).
 - `App::available` (when it can run) and `App::run` (what it does) in `app.rs`.
 - Show its key where it applies, next to the area it's about: the editor's

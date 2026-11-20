@@ -131,6 +131,32 @@ pub const OPEN_FOLDER_TITLE: &str = if cfg!(target_os = "macos") {
     "Open in Files"
 };
 
+/// Rare commands with no default key (you can give them one): reached by
+/// name from the palette (⇧⌘P), most also from Settings or a right-click
+/// menu. Keys are for what you do often. (Checked against `COMMANDS` by
+/// `every_command_has_a_default_key`.)
+#[cfg(test)]
+const KEYLESS: &[Command] = &[
+    Command::SelectTheme,
+    Command::SelectUiFont,
+    Command::SelectCodeFont,
+    Command::OpenSettings,
+    Command::OpenKeybindings,
+    Command::OpenProjectSettings,
+    Command::OpenConfigFolder,
+    Command::Keybindings,
+    Command::About,
+    Command::CheckForUpdates,
+    Command::OpenNotificationSettings,
+    Command::ShowRemoteAddress,
+    Command::CloseFolder,
+    Command::CopyRelativePath,
+    Command::CloseTabsToRight,
+    Command::CloseTabsToLeft,
+    Command::CloseSavedTabs,
+    Command::MaximizeWindow,
+];
+
 /// Ids of commands that are gone (merged into Open…): a keybindings file
 /// naming one is quietly ignored, not an error.
 const RETIRED: &[&str] = &["folder.recent", "terminal.recent", "terminal.openInFolder"];
@@ -147,31 +173,31 @@ commands! {
     Palette, "app.commandPalette", "Command Palette", ["ctrl+shift+p"];
     Help, "app.help", "Help: Keyboard Shortcuts", ["f1"];
     NewWindow, "app.newWindow", "New Window", ["alt+shift+n"];
-    About, "app.about", "About Roxaruu", ["ctrl+alt+shift+i"];
-    CheckForUpdates, "app.update", "Check for Updates", ["ctrl+alt+shift+d"];
-    OpenNotificationSettings, "app.notificationSettings", "Open Notification Settings", ["ctrl+alt+shift+n"];
+    About, "app.about", "About Roxaruu", [];
+    CheckForUpdates, "app.update", "Check for Updates", [];
+    OpenNotificationSettings, "app.notificationSettings", "Open Notification Settings", [];
     GoToFile, "file.goTo", "Go to File", ["alt+f", "ctrl+p"];
     OpenFolder, "folder.open", "Open Folder or Terminal…", ["ctrl+o", "alt+o"];
-    CloseFolder, "folder.close", "Close Folder", ["ctrl+alt+shift+w"];
-    SelectTheme, "theme.select", "Select Theme", ["ctrl+alt+shift+t"];
-    SelectUiFont, "font.selectUi", "Select UI Font", ["ctrl+alt+shift+u"];
-    SelectCodeFont, "font.selectCode", "Select Code Font", ["ctrl+alt+shift+f"];
+    CloseFolder, "folder.close", "Close Folder", [];
+    SelectTheme, "theme.select", "Select Theme", [];
+    SelectUiFont, "font.selectUi", "Select UI Font", [];
+    SelectCodeFont, "font.selectCode", "Select Code Font", [];
     Settings, "app.settings", "Settings", ["ctrl+,"];
-    Keybindings, "app.keybindings", "Edit Keyboard Shortcuts", ["ctrl+alt+k"];
-    OpenSettings, "app.openSettings", "Open Settings (JSON)", ["ctrl+alt+,"];
-    OpenKeybindings, "app.openKeybindings", "Open Keyboard Shortcuts (JSON)", ["ctrl+alt+shift+k"];
-    OpenProjectSettings, "app.openProjectSettings", "Open Project Settings (JSON)", ["ctrl+alt+shift+,"];
+    Keybindings, "app.keybindings", "Edit Keyboard Shortcuts", [];
+    OpenSettings, "app.openSettings", "Open Settings (JSON)", [];
+    OpenKeybindings, "app.openKeybindings", "Open Keyboard Shortcuts (JSON)", [];
+    OpenProjectSettings, "app.openProjectSettings", "Open Project Settings (JSON)", [];
     Todos, "todo.open", "To-do List", ["alt+d"];
     ClipboardHistory, "clipboard.history", "Clipboard History", ["alt+v"];
-    OpenConfigFolder, "app.openConfigFolder", "Open Config Folder", ["ctrl+alt+shift+o"];
+    OpenConfigFolder, "app.openConfigFolder", "Open Config Folder", [];
     Save, "file.save", "Save", ["ctrl+s"];
     SaveAll, "file.saveAll", "Save All", ["ctrl+shift+s"];
     CloseTab, "tab.close", "Close Tab", ["ctrl+w"];
     CloseAllTabs, "tab.closeAll", "Close All Tabs", ["ctrl+shift+w"];
     CloseOtherTabs, "tab.closeOthers", "Close Other Tabs", ["ctrl+alt+t"];
-    CloseTabsToRight, "tab.closeRight", "Close Tabs to the Right", ["ctrl+alt+]"];
-    CloseTabsToLeft, "tab.closeLeft", "Close Tabs to the Left", ["ctrl+alt+["];
-    CloseSavedTabs, "tab.closeSaved", "Close Saved Tabs", ["ctrl+alt+s"];
+    CloseTabsToRight, "tab.closeRight", "Close Tabs to the Right", [];
+    CloseTabsToLeft, "tab.closeLeft", "Close Tabs to the Left", [];
+    CloseSavedTabs, "tab.closeSaved", "Close Saved Tabs", [];
     ReopenTab, "tab.reopen", "Reopen Closed Tab", ["ctrl+shift+t"];
     NewFile, "file.new", "New File…", ["ctrl+n"];
     NewFolder, "file.newFolder", "New Folder…", ["ctrl+shift+n"];
@@ -181,7 +207,7 @@ commands! {
     OpenInDefaultApp, "file.openInDefaultApp", "Open in Default App", ["ctrl+alt+o"];
     OpenInTerminal, "file.openInTerminal", "Open in Terminal (a New One, in That Folder)", ["alt+shift+t"];
     CopyPath, "file.copyPath", "Copy Path", ["ctrl+alt+c"];
-    CopyRelativePath, "file.copyRelativePath", "Copy Relative Path", ["ctrl+alt+shift+c"];
+    CopyRelativePath, "file.copyRelativePath", "Copy Relative Path", [];
     ToggleBuildFolders, "search.toggleBuildFolders", "Search: Include / Skip Build Folders", ["alt+h"];
     NextTab, "tab.next", "Next Tab", ["ctrl+tab"];
     PrevTab, "tab.previous", "Previous Tab", ["ctrl+shift+tab"];
@@ -229,7 +255,7 @@ commands! {
     ZoomOut, "view.zoomOut", "Smaller Text", ["ctrl+-"];
     ResetZoom, "view.resetZoom", "Reset Text Size", ["ctrl+0"];
     FullScreen, "view.fullScreen", "Full Screen On / Off", ["f11"];
-    MaximizeWindow, "view.maximize", "Maximize / Restore Window", ["ctrl+alt+enter"];
+    MaximizeWindow, "view.maximize", "Maximize / Restore Window", [];
     MinimizeWindow, "view.minimize", "Minimize Window", ["ctrl+m"];
     SwitchFocus, "view.switchFocus", "Switch Between Editor and Terminal", ["ctrl+j"];
     ToggleTerminal, "terminal.toggle", "Show / Hide Terminal", ["alt+t"];
@@ -241,7 +267,7 @@ commands! {
     SwitchTerminal, "terminal.switch", "Switch to Terminal…", ["alt+k"];
     OpenTerminalLink, "terminal.openLink", "Open a Link from the Terminal…", ["ctrl+shift+o"];
     ToggleRemoteAccess, "remote.toggle", "Remote Access: On / Off", ["ctrl+alt+shift+r"];
-    ShowRemoteAddress, "remote.address", "Remote Access: Show Address", ["ctrl+alt+shift+a"];
+    ShowRemoteAddress, "remote.address", "Remote Access: Show Address", [];
     SwitchWindow, "remote.switchWindow", "Remote Access: Switch Window… (in the Browser)", ["ctrl+alt+shift+s"];
     JumpTerminal(1), "terminal.jump1", "Go to Terminal 1", ["alt+1"];
     JumpTerminal(2), "terminal.jump2", "Go to Terminal 2", ["alt+2"];
@@ -630,11 +656,14 @@ mod tests {
         }
     }
 
-    /// Keyboard first: every command ships with a key (remappable).
+    /// Every command ships with a key (remappable), but the rare ones in
+    /// `KEYLESS`, which the palette (and Settings, a menu) reach: a key left
+    /// out by mistake still fails here.
     #[test]
     fn every_command_has_a_default_key() {
-        let missing: Vec<&str> = COMMANDS.iter().filter(|c| c.keys.is_empty()).map(|c| c.id).collect();
-        assert!(missing.is_empty(), "no default key: {missing:?}");
+        for c in COMMANDS {
+            assert_eq!(c.keys.is_empty(), KEYLESS.contains(&c.command), "{}: a key, unless it's in KEYLESS", c.id);
+        }
     }
 
     #[test]
