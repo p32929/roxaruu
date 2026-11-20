@@ -68,7 +68,7 @@ pub fn process_alive(pid: i32) -> bool {
 
 /// Off macOS, what the system knows of process `pid` (one cross-platform
 /// library: `/proc` on Linux, the process APIs on Windows).
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn with_process<T>(pid: i32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     if pid <= 0 {
@@ -80,14 +80,45 @@ fn with_process<T>(pid: i32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T
         .with_memory()
         .with_cpu()
         .with_cwd(UpdateKind::Always)
-        // For `process_name` (a fork not yet the shell); Windows lists every
-        // process here, where asking each for it would cost.
-        .with_exe(if cfg!(target_os = "linux") { UpdateKind::Always } else { UpdateKind::Never });
-    // Windows lists every process to find one (asking for just one there
-    // found nothing on GitHub's runners); Linux reads /proc/<pid> alone.
-    let which = if cfg!(windows) { ProcessesToUpdate::All } else { ProcessesToUpdate::Some(&[pid]) };
-    sys.refresh_processes_specifics(which, true, kind);
+        // For `process_name` (a fork not yet the shell).
+        .with_exe(UpdateKind::Always);
+    // /proc/<pid> alone.
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), true, kind);
     sys.process(pid).map(f)
+}
+
+#[cfg(windows)]
+fn with_process<T>(pid: i32, f: impl FnOnce(&sysinfo::Process) -> T) -> Option<T> {
+    if pid <= 0 {
+        return None;
+    }
+    with_processes(|sys| sys.process(sysinfo::Pid::from_u32(pid as u32)).map(f)).flatten()
+}
+
+/// Windows: every process, as listed at most a moment ago. Finding one
+/// there means listing them all (asking for just one found nothing on
+/// GitHub's runners), and each terminal asks a few times a second (what's
+/// running, its name, its folder, the memory readout): one listing serves
+/// them all, kept between calls (which also lets CPU use be measured).
+#[cfg(windows)]
+fn with_processes<T>(f: impl FnOnce(&sysinfo::System) -> T) -> Option<T> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    static LISTED: Mutex<Option<(Instant, System)>> = Mutex::new(None);
+    let mut listed = LISTED.lock().ok()?;
+    let stale = listed.as_ref().is_none_or(|(at, _)| at.elapsed() >= Duration::from_millis(250));
+    if stale {
+        let mut sys = match listed.take() {
+            Some((_, sys)) => sys,
+            None => System::new().ok()?,
+        };
+        // Not the program's path: asking every process for it would cost.
+        let kind = ProcessRefreshKind::nothing().with_memory().with_cpu().with_cwd(UpdateKind::Always);
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
+        *listed = Some((Instant::now(), sys));
+    }
+    listed.as_ref().map(|(_, sys)| f(sys))
 }
 
 /// The working directory of process `pid` (a terminal's shell, to follow
@@ -105,9 +136,12 @@ pub fn process_cwd(pid: i32) -> Option<std::path::PathBuf> {
 /// helpers (Claude Code's `rg`, `git`). `None`: just the shell.
 #[cfg(windows)]
 pub fn foreground_process(shell: u32, name: &str) -> Option<i32> {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut sys = System::new().ok()?;
-    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    with_processes(|sys| foreground_in(sys, shell, name)).flatten()
+}
+
+#[cfg(windows)]
+fn foreground_in(sys: &sysinfo::System, shell: u32, name: &str) -> Option<i32> {
+    use sysinfo::Pid;
     let ignore = |p: &sysinfo::Process| {
         let n = p.name().to_string_lossy().to_lowercase();
         n == "conhost.exe" || n == "openconsole.exe"
