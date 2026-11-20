@@ -300,6 +300,7 @@ pub mod icon {
             Command::Help => QUESTION,
             Command::About => INFO,
             Command::NewWindow => WINDOW_RESTORE,
+            Command::InstallRox => TERMINAL,
             Command::CheckForUpdates => DOWNLOAD,
             Command::OpenNotificationSettings => BELL,
             Command::Todos => TASKS,
@@ -2939,12 +2940,13 @@ impl App {
             return self.project_home(ui);
         }
         // (Every command and every shortcut are in the status bar.)
-        let actions: &[Command] = &[
-            Command::OpenFolder,
-            Command::NewTerminal,
-            Command::Settings,
-            Command::Quit,
-        ];
+        // Installing `rox` too, until it is.
+        let rox = (!self.rox_installed).then_some(Command::InstallRox);
+        let actions: &[Command] = &[Command::OpenFolder, Command::NewTerminal, Command::Settings]
+            .into_iter()
+            .chain(rox)
+            .chain([Command::Quit])
+            .collect::<Vec<_>>();
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
         let n = actions.len();

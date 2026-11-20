@@ -3250,6 +3250,31 @@ fn headless_settings_mistake_is_told() {
     }
 }
 
+/// No `rox` yet (a copy dragged from the disk image): the start page
+/// offers to install it; installed, the offer goes, and `rox` is there.
+#[test]
+#[ignore]
+fn headless_install_rox() {
+    use crate::keymap::Command;
+    let mut h = harness(None);
+    h.run();
+    assert!(!app(&h).rox_installed, "a scratch home has none");
+    shot(&mut h, "rox0-offered");
+    // The start card's fourth row, by keys.
+    for _ in 0..3 {
+        press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    }
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    h.run();
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    assert!(home.join(".local/bin/rox").exists());
+    assert!(app(&h).rox_installed);
+    assert!(app(&h).toasts.iter().any(|t| t.msg.starts_with("Installed rox in ~/.local/bin")), "{:?}", app(&h).toasts.iter().map(|t| &t.msg).collect::<Vec<_>>());
+    assert_eq!(app(&h).welcome_selected, 0, "not left on Quit, where the row was");
+    shot(&mut h, "rox1-installed");
+    let _ = Command::InstallRox;
+}
+
 /// New Window: an empty one, from anywhere, its key on Open…'s last row.
 #[test]
 #[ignore]

@@ -15,6 +15,7 @@ use serde::Deserialize;
 pub enum Command {
     Palette,
     NewWindow,
+    InstallRox,
     About,
     CheckForUpdates,
     OpenNotificationSettings,
@@ -155,6 +156,7 @@ const KEYLESS: &[Command] = &[
     Command::CloseTabsToLeft,
     Command::CloseSavedTabs,
     Command::MaximizeWindow,
+    Command::InstallRox,
 ];
 
 /// Ids of commands that are gone (merged into Open…): a keybindings file
@@ -173,6 +175,7 @@ commands! {
     Palette, "app.commandPalette", "Command Palette", ["ctrl+shift+p"];
     Help, "app.help", "Help: Keyboard Shortcuts", ["f1"];
     NewWindow, "app.newWindow", "New Window", ["alt+shift+n"];
+    InstallRox, "app.installRox", "Install the rox Terminal Command", [];
     About, "app.about", "About Roxaruu", [];
     CheckForUpdates, "app.update", "Check for Updates", [];
     OpenNotificationSettings, "app.notificationSettings", "Open Notification Settings", [];

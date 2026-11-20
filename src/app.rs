@@ -21,6 +21,7 @@ use crate::terminal::{self, Terminal, Throttle};
 use crate::ui::icon;
 
 mod extras;
+pub(crate) mod rox;
 mod files;
 mod updates;
 pub use extras::{Setting, Toast};
@@ -227,6 +228,9 @@ pub struct App {
     pub prompt: Option<Prompt>,
     /// The folders to open once this one has closed (`After::Replace`).
     replace_with: Vec<PathBuf>,
+    /// Whether `rox` is where a terminal finds it (else the start page
+    /// offers to install it).
+    pub rox_installed: bool,
     /// The frame a dialog came up in: it doesn't take that frame's keys,
     /// which opened it (egui may run a frame twice; both passes count).
     pub(crate) modal_since: std::cell::Cell<Option<u64>>,
@@ -322,6 +326,7 @@ impl App {
             closed: Vec::new(),
             prompt: None,
             replace_with: Vec::new(),
+            rox_installed: crate::app::rox::installed(),
             modal_since: std::cell::Cell::new(None),
             conflict: None,
             ask: None,
@@ -707,6 +712,7 @@ impl App {
             // server and opens out of sight of a browser using remote access.
             Command::OpenFolder => self.open_palette(Mode::Open, ctx),
             // An empty one: no folder, its terminals start at home.
+            Command::InstallRox => self.install_rox(),
             Command::NewWindow => {
                 if let Err(e) = files::spawn_empty_window() {
                     self.warn(format!("Couldn't open a new window: {e}"));
