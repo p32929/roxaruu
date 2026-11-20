@@ -899,6 +899,12 @@ impl TerminalPane {
         self.scroll
     }
 
+    /// The scrollback offset and all the history there is (a scrollbar's).
+    pub fn scroll_extent(&self) -> (usize, usize) {
+        let mut p = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        (self.scroll, Self::history_total(&mut p))
+    }
+
     /// Whether a full-screen program (vim, less, htop, …) owns the alternate
     /// screen. When it does, PageUp/PageDown belong to that program, not our
     /// scrollback — there's no scrollback on the alt screen anyway.

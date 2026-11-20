@@ -515,6 +515,20 @@ fn headless_terminal_walkthrough() {
         h.state().0.terminal().unwrap().pane.scroll_offset() > 0,
         "wheel scrolls history"
     );
+    // Scrolled up, it says how much is below; a click goes back down.
+    h.step();
+    h.get_by_label_contains("lines below").click();
+    h.run();
+    assert_eq!(h.state().0.terminal().unwrap().pane.scroll_offset(), 0, "the pill goes back down");
+    assert!(h.query_by_label_contains("lines below").is_none(), "and goes");
+    h.event(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 400.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: Modifiers::NONE,
+    });
+    h.step();
     type_text(&mut h, " "); // typing snaps back to the live bottom
     press(&mut h, Modifiers::NONE, Key::Backspace);
     assert_eq!(h.state().0.terminal().unwrap().pane.scroll_offset(), 0);

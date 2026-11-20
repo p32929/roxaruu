@@ -4866,6 +4866,34 @@ impl App {
         if let Some(url) = link {
             self.offer_url(url);
         }
+        // Scrolled up: where in the history (a thin bar at the edge), and how
+        // much is below, which a click goes back to (as typing does).
+        if let Some(t) = self.terminals.get_mut(i)
+            && t.pane.scroll_offset() > 0
+        {
+            let (below, history) = t.pane.scroll_extent();
+            let (h, all) = (inner.height(), (history + rows as usize).max(1) as f32);
+            let thumb_h = (h * rows as f32 / all).max(16.0 * s);
+            let top = inner.top() + (h - thumb_h) * (history - below.min(history)) as f32 / history.max(1) as f32;
+            let bar = Rect::from_min_size(pos2(rect.right() - 5.0 * s, top), vec2(3.0 * s, thumb_h));
+            p.rect_filled(bar, 1.5 * s, c.text_subtle.gamma_multiply(0.6));
+            let text = format!("↓  {below} line{} below", if below == 1 { "" } else { "s" });
+            let g = ui.fonts_mut(|f| f.layout_no_wrap(text.clone(), FontId::proportional(12.0 * s), c.text));
+            // In the corner, where lines are seldom long.
+            let size = g.size() + vec2(20.0 * s, 10.0 * s);
+            let pill = Rect::from_min_size(inner.right_bottom() - size - vec2(8.0 * s, 4.0 * s), size);
+            let r = ui.interact(pill, ui.scope_id().with(("terminal-below", i)), Sense::click());
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &text));
+            let fill = if r.hovered() { c.hover } else { c.elevated };
+            p.rect(pill, pill.height() / 2.0, fill, Stroke::new(1.0, c.border), StrokeKind::Inside);
+            p.galley(pill.center() - g.size() / 2.0, g, c.text);
+            if r.hovered() {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            if r.on_hover_text("Back to the bottom (typing goes there too)").clicked() {
+                t.pane.scroll_to_bottom();
+            }
+        }
         // Right-click: copy what's selected, or paste. Each with its key
         // only where that key gets past the shell (off macOS ^C is the
         // shell's interrupt, so Copy shows none there).
