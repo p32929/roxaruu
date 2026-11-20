@@ -41,6 +41,9 @@ pub enum Ask {
     /// Several terminals to open (the Open list's ⌘↵) in a window that has
     /// things open: here, or in a new window?
     OpenTerminals { dirs: Vec<PathBuf> },
+    /// Folders to open in a window that has things open: here (in place of
+    /// its folder; the rest in new windows), or in new windows?
+    OpenFolders { dirs: Vec<PathBuf> },
 }
 
 /// Where Git for Windows (and its Git Bash) comes from.
@@ -183,6 +186,11 @@ impl App {
             // ↵ is "this window"; "new window" answers apart (`ui`).
             Ask::OpenTerminals { dirs } => {
                 self.terminals_here(dirs, ctx);
+                Ok(())
+            }
+            // ↵ is "this window"; "new window" answers apart (`ui`).
+            Ask::OpenFolders { dirs } => {
+                self.open_folders_answered(dirs, true, ctx);
                 Ok(())
             }
             // ↵ is "GitHub"; "Portfolio" answers apart (`ui`).
@@ -349,14 +357,12 @@ impl App {
             }
             return;
         }
-        for path in dropped {
-            if path.is_dir() {
-                self.open_folder(path, ctx);
-            } else {
-                self.open_file(&path);
-                self.focus = Focus::Editor;
-            }
+        let (folders, files): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| p.is_dir());
+        for path in files {
+            self.open_file(&path);
+            self.focus = Focus::Editor;
         }
+        self.open_folders(folders, ctx);
     }
 
     /// The terminal under the pointer during a drag from Finder, if any.

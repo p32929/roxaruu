@@ -2911,16 +2911,32 @@ fn headless_open_folder_every_case() {
     assert!(App::take_launched().is_empty(), "the same folder, however spelt, isn't opened again");
     assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(base.join("one")));
 
-    // Another folder: a new window (one folder per window).
+    // Another folder: it asks where (one folder per window): N, a new one.
+    let asked = |h: &Harness<'static, Root>| matches!(app(h).ask, Some(crate::app::Ask::OpenFolders { .. }));
     open_through_list(&mut h, &path("two"));
+    assert!(asked(&h), "asked where");
+    shot(&mut h, "o2-where");
+    press(&mut h, Modifiers::NONE, Key::N);
     assert_eq!(App::take_launched(), new_window(&base.join("two")));
     assert!(toast(&h, "Opened two in a new window"));
 
     // Names with a space and an accent; a link to a folder.
     open_through_list(&mut h, &path("with space é"));
+    press(&mut h, Modifiers::NONE, Key::N);
     assert_eq!(App::take_launched(), new_window(&base.join("with space é")));
     open_through_list(&mut h, &path("link"));
+    press(&mut h, Modifiers::NONE, Key::N);
     assert_eq!(App::take_launched(), new_window(&base.join("link")));
+
+    // ↵, this window: in place of the folder open (its tabs closed first).
+    open_through_list(&mut h, &path("two"));
+    assert!(asked(&h));
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(App::take_launched().is_empty(), "no new window");
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(base.join("two")), "here");
+    open_through_list(&mut h, &path("one"));
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(base.join("one")), "and back");
 
     // Already open in another window: switched to, not opened twice.
     let other = OtherWindow::with(&base.join("elsewhere"), &base);
@@ -2940,6 +2956,7 @@ fn headless_open_folder_every_case() {
     let labels: Vec<String> = app(&h).palette.as_ref().unwrap().items.iter().map(|i| i.label.clone()).collect();
     assert_eq!(labels, ["Open This Folder"], "nothing to list in it, and no error");
     press(&mut h, Modifiers::NONE, Key::Enter);
+    press(&mut h, Modifiers::NONE, Key::N);
     assert_eq!(App::take_launched(), new_window(&base.join("locked")));
     std::fs::set_permissions(base.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -2964,8 +2981,7 @@ fn headless_open_folder_every_case() {
     press(&mut h, Modifiers::NONE, Key::Escape);
     drop(h);
 
-    // Terminals but no folder: the folder goes to a new window; this one
-    // keeps its terminals.
+    // Terminals but no folder: it asks where the folder goes.
     let home = PathBuf::from(std::env::var("HOME").unwrap());
     std::fs::write(home.join(".zshrc"), "PROMPT='%~ $ '\n").unwrap();
     let mut h = harness(None);
@@ -2975,10 +2991,17 @@ fn headless_open_folder_every_case() {
     // while a terminal has the keyboard.
     press(&mut h, Modifiers::CTRL, Key::J);
     assert!(!app(&h).terminal_focused(), "⌃J leaves the terminal");
+    // It asks: N, a new window; this one keeps its terminals.
     open_through_list(&mut h, &path("one"));
+    press(&mut h, Modifiers::NONE, Key::N);
     assert_eq!(App::take_launched(), new_window(&base.join("one")));
-    assert!(toast(&h, "this one keeps its terminals"), "{:?}", app(&h).toasts.iter().map(|t| t.msg.clone()).collect::<Vec<_>>());
     assert!(app(&h).project.is_none() && app(&h).terminals.len() == 1);
+    // ↵: here, beside its terminals.
+    open_through_list(&mut h, &path("one"));
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(App::take_launched().is_empty());
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(base.join("one")));
+    assert_eq!(app(&h).terminals.len(), 1, "the terminal stays");
 }
 
 /// Recent Folders, several at once: space / ⇥ tick one, ⇧↓ ticks a run,
@@ -4613,6 +4636,14 @@ fn headless_remote_access() {
     }
     send(&mut ws, r#"{"t":"key","k":"Enter","code":"Enter","down":true}"#);
     send(&mut ws, r#"{"t":"key","k":"Enter","code":"Enter","down":false}"#);
+    // This window has a folder: it asks where; N, a new window.
+    let stuck = Stuck::new(r##"!matches!(app(&h).ask, Some(crate::app::Ask::OpenFolders { .. }))"##);
+    while !matches!(app(&h).ask, Some(crate::app::Ask::OpenFolders { .. })) {
+        stuck.check();
+        h.step();
+    }
+    send(&mut ws, r#"{"t":"key","k":"n","code":"KeyN","down":true}"#);
+    send(&mut ws, r#"{"t":"key","k":"n","code":"KeyN","down":false}"#);
     let follow = format!(r#""path":"{}""#, crate::ui::tilde(&other.to_string_lossy()));
     let stuck = Stuck::new(r##"!texts.iter().any(|t| t.contains(r#""t":"follow""#) && t.contains(&follow))"##);
     while !texts.iter().any(|t| t.contains(r#""t":"follow""#) && t.contains(&follow)) {

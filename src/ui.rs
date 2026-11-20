@@ -1843,6 +1843,26 @@ impl App {
                 ];
                 self.modal(ctx, icon::TERMINAL, &title, &body, &buttons, None, None, None)
             }
+            Ask::OpenFolders { dirs } => {
+                let names: Vec<String> = dirs.iter().map(|d| crate::app::display_name(d)).collect();
+                let here = match (&self.project, dirs.len()) {
+                    (Some(p), 1) => format!("Here: in place of {} (its tabs close; unsaved ones are asked about first).", p.name),
+                    (Some(p), _) => format!("Here: {} in place of {}, the others each in a new window.", names.first().cloned().unwrap_or_default(), p.name),
+                    (None, 1) => "Here: beside this window's terminals.".to_string(),
+                    (None, _) => format!("Here: {} beside this window's terminals, the others each in a new window.", names.first().cloned().unwrap_or_default()),
+                };
+                let title = match dirs.len() {
+                    1 => format!("Open {} here?", names.join("")),
+                    n => format!("Open {n} folders here?"),
+                };
+                let body = if dirs.len() > 1 { format!("{}\n\n{here} Or each in a new window.", names.join(", ")) } else { format!("{here} Or in a new window.") };
+                let buttons = [
+                    CANCEL,
+                    Btn { label: if dirs.len() > 1 { "New Windows" } else { "New Window" }, hint: "N", keys: &[Key::N], primary: false },
+                    ok("This Window"),
+                ];
+                self.modal(ctx, icon::FOLDER_OPEN, &title, &body, &buttons, None, None, None)
+            }
             Ask::OpenUrl(url) => {
                 let body = url.clone();
                 self.modal(
@@ -1898,6 +1918,13 @@ impl App {
                 }
             }
             Some(i) if matches!(self.ask, Some(crate::app::Ask::OpenTerminals { .. })) => self.answer_ask(i == 2, ctx),
+            // New Window(s) (This Window is "yes").
+            Some(1) if matches!(self.ask, Some(crate::app::Ask::OpenFolders { .. })) => {
+                if let Some(crate::app::Ask::OpenFolders { dirs }) = self.ask.take() {
+                    self.open_folders_answered(dirs, false, ctx);
+                }
+            }
+            Some(i) if matches!(self.ask, Some(crate::app::Ask::OpenFolders { .. })) => self.answer_ask(i == 2, ctx),
             Some(i) => self.answer_ask(i == 1, ctx),
             None => {}
         }

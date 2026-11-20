@@ -87,6 +87,9 @@ pub struct Prompt {
 pub enum After {
     Nothing,
     CloseFolder,
+    /// Close the folder, then open `App::replace_with` here (the first; any
+    /// others each in a new window).
+    Replace,
     Quit,
     /// Quit, then start again on the update (`update::on_close`).
     Restart,
@@ -224,6 +227,8 @@ pub struct App {
     /// Recently closed files, newest last, for Reopen Closed Tab.
     closed: Vec<PathBuf>,
     pub prompt: Option<Prompt>,
+    /// The folders to open once this one has closed (`After::Replace`).
+    replace_with: Vec<PathBuf>,
     /// The frame a dialog came up in: it doesn't take that frame's keys,
     /// which opened it (egui may run a frame twice; both passes count).
     pub(crate) modal_since: std::cell::Cell<Option<u64>>,
@@ -318,6 +323,7 @@ impl App {
             active: None,
             closed: Vec::new(),
             prompt: None,
+            replace_with: Vec::new(),
             modal_since: std::cell::Cell::new(None),
             conflict: None,
             ask: None,
@@ -1010,15 +1016,24 @@ impl App {
         }
         if self.project.is_some() || !self.terminals.is_empty() {
             let why = if self.project.is_some() { "" } else { " (this one keeps its terminals)" };
-            match files::spawn_window(&dir) {
-                Ok(_) => {
-                    self.follow_in_browser(&dir);
-                    self.notify(format!("Opened {} in a new window{why}", display_name(&dir)));
-                }
-                Err(e) => self.warn(format!("Couldn't open a new window: {e}")),
-            }
-            return;
+            return self.folder_in_new_window(&dir, why);
         }
+        self.folder_here(dir, ctx);
+    }
+
+    /// `dir` in a window of its own; `why` ends the note.
+    fn folder_in_new_window(&mut self, dir: &Path, why: &str) {
+        match files::spawn_window(dir) {
+            Ok(_) => {
+                self.follow_in_browser(dir);
+                self.notify(format!("Opened {} in a new window{why}", display_name(dir)));
+            }
+            Err(e) => self.warn(format!("Couldn't open a new window: {e}")),
+        }
+    }
+
+    /// `dir` as this window's folder (none open now; terminals stay).
+    fn folder_here(&mut self, dir: PathBuf, ctx: &egui::Context) {
         crate::recent::record(std::slice::from_ref(&dir));
         crate::instances::register(&dir);
         self.project = Some(Project {
@@ -1050,19 +1065,66 @@ impl App {
         }
     }
 
-    /// Several folders at once (ticked in Recent Folders, or picked together
-    /// in Finder): the first here if this window has none (and no
-    /// terminals), each of the others in its own window. One toast for them all.
+    /// Folders you chose (the Open list, dropped on the window): those open
+    /// already are gone to; the rest open here if this window has nothing
+    /// open, else it asks: here (in place of its folder, beside its
+    /// terminals), or in new windows (`Ask::OpenFolders`).
     pub fn open_folders(&mut self, dirs: Vec<PathBuf>, ctx: &egui::Context) {
-        let n = dirs.len();
-        let before: Vec<String> = self.toasts.iter().map(|t| t.msg.clone()).collect();
+        let mut fresh: Vec<PathBuf> = Vec::new();
         for dir in dirs {
-            self.open_folder(dir, ctx);
+            let dir: PathBuf = dir.components().collect();
+            let open = self.project.as_ref().is_some_and(|p| p.root == dir) || self.open_elsewhere(&dir).is_some();
+            if open {
+                self.open_folder(dir, ctx); // says so, or goes there
+            } else if !fresh.contains(&dir) {
+                fresh.push(dir);
+            }
+        }
+        if fresh.is_empty() {
+            return;
+        }
+        if self.project.is_some() || !self.terminals.is_empty() {
+            self.ask = Some(Ask::OpenFolders { dirs: fresh });
+        } else {
+            self.open_each(fresh, ctx);
+        }
+    }
+
+    /// `Ask::OpenFolders`' answer: here (the first, in place of this
+    /// window's folder once its tabs are closed — unsaved ones asked about —
+    /// the others each in a new window), or all in new windows.
+    pub(crate) fn open_folders_answered(&mut self, dirs: Vec<PathBuf>, here: bool, ctx: &egui::Context) {
+        if !here {
+            for dir in &dirs {
+                self.folder_in_new_window(dir, "");
+            }
+            if dirs.len() > 1 {
+                self.toasts.retain(|t| t.error);
+                self.notify(format!("Opened {} folders, each in its own window", dirs.len()));
+            }
+        } else if self.project.is_some() {
+            self.replace_with = dirs;
+            self.begin_close(self.tab_paths(), After::Replace, ctx);
+        } else {
+            self.open_each(dirs, ctx);
+        }
+    }
+
+    /// The first of `dirs` here, the rest each in a window of its own. One
+    /// toast for them all.
+    fn open_each(&mut self, dirs: Vec<PathBuf>, ctx: &egui::Context) {
+        let n = dirs.len();
+        let mut dirs = dirs.into_iter();
+        let Some(first) = dirs.next() else { return };
+        let before: Vec<String> = self.toasts.iter().map(|t| t.msg.clone()).collect();
+        self.folder_here(first, ctx);
+        for dir in dirs {
+            self.folder_in_new_window(&dir, "");
         }
         if n > 1 {
             // What went wrong still shows.
             self.toasts.retain(|t| t.error || before.contains(&t.msg));
-            self.notify(format!("Opened {n} folders, each in its own window"));
+            self.notify(format!("Opened {n} folders: the first here, the others each in its own window"));
         }
     }
 
@@ -1996,7 +2058,7 @@ impl App {
         };
         match prompt.after {
             After::Nothing => {}
-            After::CloseFolder => {
+            After::CloseFolder | After::Replace => {
                 self.save_session();
                 self.tabs.clear();
                 self.active = None;
@@ -2008,6 +2070,10 @@ impl App {
                 self.closed.clear();
                 crate::instances::unregister();
                 self.reload_config(ctx); // without the project's settings
+                if prompt.after == After::Replace {
+                    let dirs = std::mem::take(&mut self.replace_with);
+                    self.open_each(dirs, ctx);
+                }
             }
             After::Quit | After::Restart => {
                 if prompt.after == After::Restart {
