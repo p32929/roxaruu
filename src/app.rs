@@ -178,7 +178,7 @@ pub struct App {
     /// window saved a setting), which also wakes this window right away.
     config_changed: Arc<AtomicBool>,
     /// The (UI, code) fonts installed in egui, and any errors loading them.
-    applied_fonts: Option<(String, String)>,
+    applied_fonts: Option<(String, String, bool)>,
     font_errors: Vec<String>,
     /// Notifications, oldest first.
     pub toasts: Vec<Toast>,
@@ -383,10 +383,10 @@ impl App {
         let ctx = &self.main_ctx.clone();
         let s = &self.config.settings;
         crate::buffer::set_indent_settings(s.tab_size, s.insert_spaces);
-        let wanted = (s.ui_font.clone(), s.code_font.clone());
+        let wanted = (s.ui_font.clone(), s.code_font.clone(), self.font_picker_open());
         if self.applied_fonts.as_ref() != Some(&wanted) {
             fonts::unpack(&wanted.0, &wanted.1);
-            self.font_errors = fonts::install(ctx, &wanted.0, &wanted.1);
+            self.font_errors = fonts::install(ctx, &wanted.0, &wanted.1, wanted.2);
             self.applied_fonts = Some(wanted);
         }
         let c = &self.config.theme.colors;
@@ -450,6 +450,11 @@ impl App {
             tracing::warn!(error = %e, "config");
         }
         self.apply(ctx);
+    }
+
+    /// A font picker is up: every font is installed, to show itself.
+    pub(crate) fn font_picker_open(&self) -> bool {
+        self.palette.as_ref().is_some_and(|p| matches!(p.mode, Mode::UiFonts | Mode::CodeFonts))
     }
 
     /// The open project's folder.
@@ -2195,6 +2200,9 @@ impl App {
             }
         }
         self.palette = Some(p);
+        if self.font_picker_open() {
+            self.apply(ctx); // each font, to draw its name in
+        }
         self.refresh_items();
         // Start the pickers on the current choice.
         let current = match mode {
@@ -2214,6 +2222,9 @@ impl App {
     pub fn close_palette(&mut self, keep: bool, ctx: &egui::Context) {
         let Some(p) = self.palette.take() else { return };
         if keep {
+            if matches!(p.mode, Mode::UiFonts | Mode::CodeFonts) {
+                self.apply(ctx); // the fonts not chosen go
+            }
             return;
         }
         match p.revert {

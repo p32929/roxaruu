@@ -3360,6 +3360,28 @@ fn headless_tab_size_and_spaces() {
     h.state_mut().0.reload_config(&ctx);
 }
 
+/// A font picker draws each name in its own font: every bundled font is
+/// installed while it's up, and let go when it closes (memory).
+#[test]
+#[ignore]
+fn headless_font_picker_shows_each_font() {
+    use crate::keymap::Command;
+    let mut h = harness(None);
+    h.run();
+    let has = |h: &Harness<'static, Root>, name: &str| {
+        h.ctx.fonts(|f| f.definitions().families.contains_key(&crate::fonts::preview_family(name)))
+    };
+    assert!(!has(&h, "Fira Code"));
+    run_command(&mut h, Command::SelectCodeFont);
+    h.run();
+    assert!(has(&h, "Fira Code") && has(&h, "Geist"), "every font, to show itself");
+    shot(&mut h, "font-picker");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    h.run();
+    assert!(app(&h).palette.is_none());
+    assert!(!has(&h, "Fira Code"), "let go once it's closed");
+}
+
 /// New Window: an empty one, from anywhere, its key on Open…'s last row.
 #[test]
 #[ignore]

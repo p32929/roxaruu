@@ -631,7 +631,11 @@ impl Paint {
 
     /// A label with the `matched` chars picked out in the accent.
     fn label(&self, label: &str, matched: &[usize], color: Color32) -> LayoutJob {
-        let font = self.font(14.0, Weight::Medium);
+        self.label_in(label, matched, color, self.font(14.0, Weight::Medium))
+    }
+
+    /// `label`, in `font`.
+    fn label_in(&self, label: &str, matched: &[usize], color: Color32, font: FontId) -> LayoutJob {
         let mut job = LayoutJob::default();
         for (i, ch) in label.chars().enumerate() {
             let fmt = egui::TextFormat::simple(
@@ -5866,11 +5870,18 @@ impl App {
                 for (n, idx) in (pal.scroll..pal.scroll + shown).enumerate() {
                     let Some(item) = pal.items.get(idx) else { break };
                     let t = if idx == pal.selected { 1.0 } else { 0.0 };
-                    let label = pt.label(
-                        &item.label,
-                        &item.matched,
-                        if item.dim { c.text_subtle } else { c.text },
-                    );
+                    let color = if item.dim { c.text_subtle } else { c.text };
+                    // A font picker's row: the name in that font, once it's
+                    // installed (`fonts::install`'s previews).
+                    let preview = match &item.pick {
+                        Pick::UiFont(n) | Pick::CodeFont(n) => Some(crate::fonts::preview_family(n)),
+                        _ => None,
+                    }
+                    .filter(|f| ui.fonts(|x| x.definitions().families.contains_key(f)));
+                    let label = match preview {
+                        Some(f) => pt.label_in(&item.label, &item.matched, color, FontId::new(15.0 * s, f)),
+                        None => pt.label(&item.label, &item.matched, color),
+                    };
                     // A ticked row (lists of several) shows its place in the
                     // order they're done in.
                     let number = pal.tick_number(idx).map(|n| n.to_string());

@@ -27,6 +27,20 @@ impl Packed {
     fn data(&self) -> FontData {
         FontData::from_static(self.bytes())
     }
+
+    /// For a moment (a picker's preview): the kept bytes if it's in use,
+    /// else inflated now and let go with the fonts that hold them.
+    fn passing(&self) -> FontData {
+        match self.bytes.get() {
+            Some(b) => FontData::from_static(b),
+            None => {
+                use std::io::Read;
+                let mut out = Vec::new();
+                let _ = flate2::read::ZlibDecoder::new(self.deflated).read_to_end(&mut out);
+                FontData::from_owned(out)
+            }
+        }
+    }
 }
 
 macro_rules! font {
@@ -128,9 +142,17 @@ pub fn keycap(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("keycap".into()))
 }
 
+/// The family that draws font `name` itself (a picker's row), while
+/// `install` has `previews` on.
+pub fn preview_family(name: &str) -> FontFamily {
+    FontFamily::Name(format!("preview:{name}").into())
+}
+
 /// Install the chosen fonts into egui. Unknown names or unreadable files fall
-/// back to the defaults; the returned messages say why.
-pub fn install(ctx: &egui::Context, ui_font: &str, code_font: &str) -> Vec<String> {
+/// back to the defaults; the returned messages say why. `previews`: every
+/// bundled font too, for a font picker to draw each name in its own; let
+/// go once it's installed without (memory).
+pub fn install(ctx: &egui::Context, ui_font: &str, code_font: &str, previews: bool) -> Vec<String> {
     let mut errors = Vec::new();
     let mut defs = FontDefinitions::empty();
     let mut add = |name: &str, data: FontData| {
@@ -190,6 +212,14 @@ pub fn install(ctx: &egui::Context, ui_font: &str, code_font: &str) -> Vec<Strin
     defs.families.insert(FontFamily::Monospace, chain("code"));
     defs.families
         .insert(FontFamily::Name("keycap".into()), chain("keycap"));
+    if previews {
+        let all = UI_FONTS.iter().map(|f| (f.name, &f.regular)).chain(CODE_FONTS.iter().map(|f| (f.0, &f.1)));
+        for (name, packed) in all {
+            let key = format!("preview:{name}");
+            defs.font_data.insert(key.clone(), packed.passing().into());
+            defs.families.insert(preview_family(name), chain(&key));
+        }
+    }
     ctx.set_fonts(defs);
     errors
 }

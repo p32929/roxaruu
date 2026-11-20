@@ -155,7 +155,7 @@ pub struct Remote {
     /// The browser's copy of the window.
     ctx: egui::Context,
     started: Instant,
-    fonts: Option<(String, String)>,
+    fonts: Option<(String, String, bool)>,
     /// The browser's room for the window: CSS width, height, pixel ratio.
     size: Option<(f32, f32, f32)>,
     visible: bool,
@@ -621,9 +621,9 @@ impl Remote {
         self.last_pass = Some(now);
         // Lay out at the browser's size; keep big screens' frames sensible.
         let ppp = dpr.min(MAX_SIDE / w).min(MAX_SIDE / h).max(0.5);
-        let fonts = (app.config.settings.ui_font.clone(), app.config.settings.code_font.clone());
+        let fonts = (app.config.settings.ui_font.clone(), app.config.settings.code_font.clone(), app.font_picker_open());
         if self.fonts.as_ref() != Some(&fonts) {
-            crate::fonts::install(&self.ctx, &fonts.0, &fonts.1);
+            crate::fonts::install(&self.ctx, &fonts.0, &fonts.1, fonts.2);
             self.fonts = Some(fonts);
         }
         self.ctx.set_theme(main.theme());
