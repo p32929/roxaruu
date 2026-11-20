@@ -622,6 +622,29 @@ impl TerminalPane {
         url_span_at(&joined, at)
     }
 
+    /// A `file:line[:col]` at a visible cell (a compiler's error, a stack
+    /// trace) naming a file that exists, relative to the terminal's folder:
+    /// the file, its line and column (from 1), and the cells it covers on
+    /// that row.
+    pub fn file_at(&self, row: u16, col: u16) -> Option<(PathBuf, usize, usize, std::ops::Range<u16>)> {
+        let screen = self.screen();
+        let (rows, cols) = screen.size();
+        if row >= rows || col >= cols {
+            return None;
+        }
+        let (joined, row_ranges) = wrapped_line(&screen, row);
+        let range = row_ranges.into_iter().find(|(r, _)| *r == row)?.1;
+        let (span, path, line, column) = file_span_at(&joined, range.start + col as usize)?;
+        let path = crate::config::expand_home(&path);
+        let path = if path.is_absolute() { path } else { self.dir.join(path) };
+        if !path.is_file() {
+            return None;
+        }
+        let start = span.start.max(range.start) - range.start;
+        let end = span.end.min(range.end) - range.start;
+        Some((path, line, column, start as u16..end as u16))
+    }
+
     /// The tab label: the folder, plus the running command when one is active.
     pub fn display_name(&self) -> String {
         if self.proc.is_empty() {
@@ -1732,6 +1755,35 @@ pub fn url_cols_in_row(screen: &vt100::Screen, row: u16) -> Vec<std::ops::Range<
         .collect()
 }
 
+/// The `path:line[:col]` covering char `at` in `line`: its char span, the
+/// path as written, the line, and the column (1 when none). Whatever's
+/// around it — quotes, brackets, a trailing `:` or `.` — is left out.
+pub fn file_span_at(line: &str, at: usize) -> Option<(std::ops::Range<usize>, String, usize, usize)> {
+    let chars: Vec<char> = line.chars().collect();
+    let edge = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '<' | '>' | '{' | '}' | ',' | ';' | '|');
+    if chars.get(at).is_none_or(|&c| edge(c)) {
+        return None;
+    }
+    let start = chars.get(..at)?.iter().rposition(|&c| edge(c)).map_or(0, |i| i + 1);
+    let end = chars.get(at..)?.iter().position(|&c| edge(c)).map_or(chars.len(), |i| at + i);
+    let mut token: String = chars.get(start..end)?.iter().collect();
+    while token.ends_with([':', '.']) {
+        token.pop();
+    }
+    // path:line or path:line:col (the path may itself hold a `:`, as C:\ does).
+    let mut parts = token.rsplitn(3, ':');
+    let (a, b, c) = (parts.next()?, parts.next(), parts.next());
+    let number = |s: &str| s.parse::<usize>().ok().filter(|n| *n > 0);
+    let (path, line, col) = match (number(a), b.and_then(number), c) {
+        (Some(col), Some(line), Some(path)) => (path.to_string(), line, col),
+        (Some(line), _, _) => (token.rsplit_once(':')?.0.to_string(), line, 1),
+        _ => return None,
+    };
+    // A name, not a time (12:30) or a URL's port.
+    let has_name = path.chars().any(char::is_alphabetic) && !path.contains("://");
+    has_name.then(|| (start..start + token.chars().count(), path, line, col))
+}
+
 /// Find the URL covering character index `at` in `line`, if any.
 ///
 /// Only `http://` and `https://` are recognised. That's a security choice, not
@@ -1983,6 +2035,23 @@ fn settle(term: &mut TerminalPane, last: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_positions_are_found_in_what_tools_print() {
+        let at = |line: &str, word: &str| file_span_at(line, line.find(word).unwrap()).map(|(_, p, l, c)| (p, l, c));
+        assert_eq!(at("  --> src/app.rs:42:7", "app"), Some(("src/app.rs".into(), 42, 7)));
+        assert_eq!(at("error at main.go:9.", "main"), Some(("main.go".into(), 9, 1)));
+        assert_eq!(at("at Object.<anonymous> (/home/me/x.js:3:15)", "home"), Some(("/home/me/x.js".into(), 3, 15)));
+        assert_eq!(at(r"C:\code\a.rs:5:2 oops", "code"), Some((r"C:\code\a.rs".into(), 5, 2)));
+        assert_eq!(at("see https://x.org:8080/a", "x.org"), None, "a URL's port isn't a line");
+        assert_eq!(at("12:30 done", "30"), None, "a time isn't a file");
+        assert_eq!(at("main.rs and more", "main"), None, "a name without a line");
+        assert_eq!(at("Makefile:12: *** missing separator", "Make"), Some(("Makefile".into(), 12, 1)));
+        // The span is the token, not its brackets or trailing colon.
+        let line = "(src/a.rs:3):";
+        let (span, ..) = file_span_at(line, 3).unwrap();
+        assert_eq!(&line[span], "src/a.rs:3");
+    }
 
     /// "Where's the cursor?" gets an answer (Windows' console waits for one
     /// before it shows anything; programs ask it everywhere): bash asks, reads

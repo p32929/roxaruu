@@ -4647,10 +4647,18 @@ impl App {
         let mut link = None;
         let mut hover_link = None;
         let mut plain_link = None; // over a link without ⌘: say how to open it
+        // A `file:line` under the pointer (a compiler's error): opened in
+        // the editor, at that line.
+        let mut file_link = None;
+        let mut file_here = None;
         if let Some(ptr) = ptr {
             let (r, col) = cell_at(ptr);
             let pane = &mut term.pane;
-            if resp.hovered() && pane.url_at(r, col).is_some() {
+            let url_here = resp.hovered() && pane.url_at(r, col).is_some();
+            if resp.hovered() && !url_here {
+                file_here = pane.file_at(r, col);
+            }
+            if url_here || file_here.is_some() {
                 if link_mod {
                     ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                     hover_link = Some((r, col));
@@ -4659,8 +4667,10 @@ impl App {
                 }
             }
             if pressed && resp.hovered() && hover_link.is_some() {
-                clicked = true;
                 link = pane.url_at(r, col);
+                file_link = file_here.clone().filter(|_| link.is_none());
+                // A file opens in the editor, which keeps the keyboard.
+                clicked = file_link.is_none();
             } else if pressed && resp.hovered() {
                 clicked = true;
                 term.mouse_forward = pane.wants_mouse() && !shift;
@@ -4836,11 +4846,20 @@ impl App {
             .into_iter()
             .filter_map(|(at, held)| Some((at?, held)))
         {
+            let file_span = file_here.as_ref().map(|f| f.3.clone());
             let Some(span) = crate::terminalpane::url_cols_in_row(&screen, r)
                 .into_iter()
                 .find(|s| s.contains(&col))
+                .or(file_span)
             else {
                 continue;
+            };
+            let what = match &file_here {
+                Some((path, line, ..)) => format!(
+                    "{link_mod_key}-click to open {} at line {line}",
+                    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                ),
+                None => format!("{link_mod_key}-click to open this link{all_links}"),
             };
             let y = inner.top() + (r + 1) as f32 * row_h - 2.0;
             let xs =
@@ -4856,7 +4875,7 @@ impl App {
                         ui.scope_id().with("link-hint"),
                         egui::PopupAnchor::Pointer,
                     )
-                    .show(|ui| ui.label(format!("{link_mod_key}-click to open this link{all_links}")));
+                    .show(|ui| ui.label(what));
                 } else {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(450));
                 }
@@ -4865,6 +4884,16 @@ impl App {
         drop(screen);
         if let Some(url) = link {
             self.offer_url(url);
+        }
+        if let Some((path, line, col, _)) = file_link {
+            self.open_file(&path);
+            if let Some(a) = self.active {
+                self.load_tab(a);
+            }
+            if let Some(t) = self.active_tab_mut() {
+                t.go_to(line - 1, col - 1..col - 1);
+            }
+            self.focus = Focus::Editor;
         }
         // Scrolled up: where in the history (a thin bar at the edge), and how
         // much is below, which a click goes back to (as typing does).

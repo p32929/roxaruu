@@ -26,7 +26,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 2. On macOS, a script that opens new Terminal windows opens tabs in Roxaruu instead (exactly my problem above).
 3. Each tab says what its program is doing: printing, running, or gone quiet (maybe stuck, maybe waiting for you).
 4. Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else (a conversation, not a script's `claude -p`).
-5. Closing a terminal that's still running something asks first.
+5. Closing a terminal that's still running something asks first. **Ctrl+click** (**⌘-click**) a link to open it, or a `file:line` in an error to open that file at that line.
 6. **Ctrl+O** (**⌘O** on a Mac) opens one list of every folder you've opened, as a project or with a terminal in it, newest first (**Ctrl+S** / **⌘S** sorts them by name). **Enter** opens the folder (in a window that already has one, or terminals, it asks: here in its place, or a new window); **Ctrl+Enter** (**⌘↵**) opens a terminal in it instead. Select several (numbered in the order they'll open) and **Ctrl+Enter** opens a terminal in each, side by side, filling the window; in a window that already has things open, it asks whether to open them there or in a new window. Type a path, or pick **Browse…**, to go to any other folder (**Tab** goes into a folder, **Shift+Tab** up); its last row is **New Window** (**Alt+Shift+N** / **⌥⇧N**), an empty one with no folder.
 
 **Editor**

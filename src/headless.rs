@@ -1340,6 +1340,38 @@ run_command(&mut h, crate::keymap::Command::CopyRelativePath);
         App::take_launched(),
         [vec!["https://example.com/PICKME".to_string()]]
     );
+
+    // A compiler's `file:line:col`: ⌘+click opens the file there.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().canonicalize().unwrap().join("x.rs");
+    std::fs::write(&file, "fn a() {}\nfn b() {}\nfn c() { oops }\n").unwrap();
+    run(&mut h, &format!("printf '  --> {}:3:10\\n'", file.display()));
+    let err_row = |a: &App| {
+        a.terminal().and_then(|t| {
+            let screen = t.pane.screen();
+            screen.rows(0, screen.size().1).position(|l| l.starts_with("  --> "))
+        })
+    };
+    wait_for(&mut h, "the error", |a| err_row(a).is_some());
+    let row = err_row(app(&h)).unwrap();
+    let at = egui::pos2(
+        term.left() + 10.0 * s + 10.5 * char_w,
+        term.top() + 6.0 * s + (row as f32 + 0.5) * row_h,
+    );
+    h.event(Event::ModifiersChanged(CMD));
+    h.event(Event::PointerMoved(at));
+    h.step();
+    shot(&mut h, "a10-file-link");
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: CMD });
+        h.step();
+    }
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.step();
+    let tab = app(&h).active_tab().unwrap();
+    assert_eq!(tab.path(), Some(&file), "the file opened");
+    assert_eq!(tab.caret(), (2, 9), "at line 3, column 10");
+    assert_eq!(app(&h).focus, crate::app::Focus::Editor);
 }
 
 /// Step 9: to-do list, clipboard history, settings, shortcuts, F1 help,
