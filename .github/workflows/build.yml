@@ -226,6 +226,30 @@ jobs:
           pattern: mac-*
       - name: Version
         run: echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_ENV"
+      # The same key signs every release, so macOS keeps what people allowed
+      # Roxaruu (files, the network…) across updates: it knows an app by its
+      # signature, and the linker's placeholder changed with every build.
+      # Our own key, free: no Apple account, and Gatekeeper treats the app
+      # as it did (allowed once, by hand). Without the secrets: the
+      # placeholder, as before.
+      - name: Signing key
+        env:
+          P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "No signing key: the placeholder signature"; exit 0; fi
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kcpw="$(openssl rand -base64 24)"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/id.p12"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          security import "$RUNNER_TEMP/id.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc" >/dev/null
+          # codesign finds a key only in a keychain on the search list.
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          echo "SIGN_KC=$kc" >> "$GITHUB_ENV"
       - name: Package (macOS, a disk image per chip)
         run: |
           mkdir -p dist
@@ -237,7 +261,13 @@ jobs:
             done
             cp assets/AppIcon.icns dmg/Roxaruu.app/Contents/Resources/AppIcon.icns
             sed "s/@VERSION@/$VERSION/g" packaging/Info.plist > dmg/Roxaruu.app/Contents/Info.plist
-            codesign --force --deep -s - dmg/Roxaruu.app
+            if [ -n "${SIGN_KC:-}" ]; then
+              codesign --force --deep --keychain "$SIGN_KC" -s "Roxaruu Release Signing" dmg/Roxaruu.app
+            else
+              codesign --force --deep -s - dmg/Roxaruu.app
+            fi
+            codesign --verify --deep --strict dmg/Roxaruu.app
+            codesign -d -r- dmg/Roxaruu.app
             ln -s /Applications dmg/Applications
             # Sized by hand: hdiutil's own guess runs out of room for big apps.
             size=$(( $(du -sm dmg | cut -f1) + 64 ))

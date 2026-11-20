@@ -267,7 +267,12 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   machine installs each package and opens the app (it must still run with
   its window drawn; screenshots kept with the run) (`packaging/`: the macOS
   Info.plist and Linux menu entry `install-local.sh` uses too, the Windows
-  installer). It must stay green
+  installer). The macOS app is signed with the project's own key (repo
+  secrets `MACOS_SIGNING_P12` / `MACOS_SIGNING_PASSWORD`), the same every
+  release: macOS knows an app by its signature, so what people allowed it
+  stays allowed across updates (free: no Apple account; Gatekeeper treats
+  it as before). This Mac's updates are signed again with its own key
+  (`update::sign_with_own_key`, `install-local.sh`). It must stay green
   on all three; a test that needs a Unix shell is marked
   `#[cfg_attr(not(unix), ignore = "needs a Unix shell")]` and gets a Windows
   counterpart where the feature matters there.
