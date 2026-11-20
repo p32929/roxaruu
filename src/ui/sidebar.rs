@@ -733,7 +733,7 @@ impl App {
                     s.format.font_id.size = pt.font(13.0, Weight::Regular).size;
                 }
                 // The chosen match says what ↵ does.
-                let open: Vec<Hint> = if chosen && focused { vec![(vec!["↵".into()], "open")] } else { Vec::new() };
+                let open: Vec<Hint> = if chosen && focused { vec![(vec!["↵".into()], "open file")] } else { Vec::new() };
                 pt.row(ui, ui.painter(), bg, 0.0, (glyph, tint), label, dir, &[], &open, -4.0 * s);
                 if resp.hovered() {
                     ui.ctx().set_cursor_icon(CursorIcon::PointingHand);

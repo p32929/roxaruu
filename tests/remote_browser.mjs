@@ -289,9 +289,9 @@ async function inputScenario() {
   await chord(["meta"], "j", "KeyJ");                // ⌘J: back to the editor
   await mark("editor-again");
   await chord(["meta"], "p", "KeyP");                // ⌘P: Go to File, the tree's search (Chrome's Print otherwise)
-  await mark("palette");
+  await goAhead("palette");
   await press("Escape", "Escape");
-  await mark("palette-closed");
+  await goAhead("palette-closed");
   await shot("w5-input-desktop.png");
 
   // The window list: Switch Window's key (shown on the name) opens it; while

@@ -162,7 +162,7 @@ impl App {
                     .config
                     .keymap
                     .combo_for(Command::SwitchTerminal)
-                    .map(|k| format!(" — {} to switch", k.label()))
+                    .map(|k| format!(" — {} to switch terminals", k.label()))
                     .unwrap_or_default();
                 self.missed.push(format!("{name}: {message}{key}"));
             }

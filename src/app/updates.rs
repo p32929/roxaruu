@@ -100,7 +100,7 @@ impl App {
             Update::Ready(v) => {
                 self.notify(format!("Roxaruu {v} is ready: it installs when you close the last window{key} to restart now"));
             }
-            Update::Installed(v) => self.notify(format!("Roxaruu {v} is installed: restart to use it{key}")),
+            Update::Installed(v) => self.notify(format!("Roxaruu {v} is installed{key} to restart and use it")),
             Update::ByHand(_) if asked => self.ask_about_update(),
             Update::ByHand(v) => self.notify(format!("Roxaruu {v} is out{key} to get it")),
             Update::UpToDate if asked => self.notify(format!("Roxaruu {} is up to date", crate::VERSION)),

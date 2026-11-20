@@ -19,6 +19,8 @@ pub enum Mode {
     /// Open Folder: browse to any folder, by typing its path.
     Folders,
     Terminals,
+    /// Recent Terminals: each window's terminals, then every folder.
+    RecentTerminals,
     Search,
     Todos,
     Clipboard,
@@ -38,6 +40,7 @@ impl Mode {
             Mode::Recent => "Open a recent folder…",
             Mode::Folders => "Type a folder's path…",
             Mode::Terminals => "Switch to a terminal…",
+            Mode::RecentTerminals => "Open recent terminals…",
             Mode::Line => "Line number — or line:column",
             Mode::Search => "Search in files…",
             Mode::Todos => "Add a task…",
@@ -49,9 +52,9 @@ impl Mode {
     }
 
     /// Lists where several rows can be ticked and done at once: paste
-    /// several clips, open several folders.
+    /// several clips, open several folders or terminals.
     pub fn multi(self) -> bool {
-        matches!(self, Mode::Clipboard | Mode::Recent)
+        matches!(self, Mode::Clipboard | Mode::Recent | Mode::RecentTerminals)
     }
 }
 
@@ -64,6 +67,11 @@ pub enum Pick {
     CodeFont(String),
     Folder(PathBuf),
     Terminal(usize),
+    /// Recent Terminals: a window's row, opening all of its terminals.
+    Terminals(Vec<PathBuf>),
+    /// Recent Terminals: one folder; in a window's group (which, and which
+    /// row of it) or the list of every folder (`None`).
+    TerminalIn(PathBuf, Option<(usize, usize)>),
     /// A search hit: file, line, and the match's char columns.
     Hit(PathBuf, usize, usize, usize),
     /// An entry of the to-do list (index into `App::todos`).
@@ -168,6 +176,12 @@ impl Palette {
         self.items.get(self.selected).map(|i| &i.pick)
     }
 
+    /// Where row `i` is in the ticking order, from 1 (what it's done in).
+    pub fn tick_number(&self, i: usize) -> Option<usize> {
+        let pick = &self.items.get(i)?.pick;
+        self.ticked.iter().position(|t| t == pick).map(|n| n + 1)
+    }
+
     /// Whether row `i` is ticked.
     pub fn is_ticked(&self, i: usize) -> bool {
         self.items.get(i).is_some_and(|it| self.ticked.contains(&it.pick))
@@ -177,7 +191,7 @@ impl Palette {
     /// Folder…").
     pub fn set_tick(&mut self, i: usize, on: bool) {
         let Some(pick) = self.items.get(i).map(|it| it.pick.clone()) else { return };
-        if !matches!(pick, Pick::Clip(_) | Pick::Folder(_)) {
+        if !matches!(pick, Pick::Clip(_) | Pick::Folder(_) | Pick::TerminalIn(..)) {
             return;
         }
         self.ticked.retain(|t| *t != pick);
@@ -331,8 +345,9 @@ mod tests {
             it.pick = Pick::Folder(PathBuf::from(i.to_string()));
         }
         p.items[5].pick = Pick::Command(Command::OpenFolder);
-        p.toggle_tick(1);
         p.toggle_tick(3);
+        p.toggle_tick(1);
+        assert_eq!((p.tick_number(3), p.tick_number(1)), (Some(1), Some(2)), "numbered in ticking order");
         p.toggle_tick(1);
         assert!(!p.is_ticked(1) && p.is_ticked(3));
         // ⇧-click: from the last one ticked or unticked (1) to here.

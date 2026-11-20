@@ -539,23 +539,32 @@ pub fn os_reveal(path: &Path) -> bool {
 
 /// Open `dir` in a new window (its own process). Tests only record it.
 pub fn spawn_window(dir: &Path) -> std::io::Result<()> {
+    spawn_window_with(vec![dir.into()])
+}
+
+/// A new window with a terminal in each of `dirs`, in that order (Recent
+/// Terminals).
+pub fn spawn_terminals_window(dirs: &[PathBuf]) -> std::io::Result<()> {
+    spawn_window_with(dirs.iter().flat_map(|d| ["--terminal".into(), d.into()]).collect())
+}
+
+fn spawn_window_with(args: Vec<std::ffi::OsString>) -> std::io::Result<()> {
     #[cfg(test)]
     {
         LAUNCHED.with(|l| {
-            l.borrow_mut().push(vec![
-                "new window".into(),
-                dir.to_string_lossy().into_owned(),
-            ])
+            let mut v = vec!["new window".to_string()];
+            v.extend(args.iter().map(|a| a.to_string_lossy().into_owned()));
+            l.borrow_mut().push(v)
         });
         Ok(())
     }
     #[cfg(not(test))]
     {
-        tracing::info!(dir = %dir.display(), "new window");
+        tracing::info!(?args, "new window");
         // On a virtual screen, so is the new one: seen only through a browser.
         let virtual_screen = std::env::args().any(|a| a == "--virtual-screen");
         std::process::Command::new(std::env::current_exe()?)
-            .arg(dir)
+            .args(args)
             .args(virtual_screen.then_some("--virtual-screen"))
             .spawn()
             .map(|_| ())

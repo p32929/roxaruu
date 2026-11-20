@@ -353,6 +353,9 @@ impl std::ops::Deref for ScreenGuard<'_> {
 pub struct TerminalPane {
     /// The base label (project folder), e.g. `server_nestjs`.
     pub folder: String,
+    /// The folder it's in, as last read (see `refresh_folder`): Recent
+    /// Terminals keeps it.
+    pub dir: PathBuf,
     /// The live foreground process name, e.g. `node` (empty when only the
     /// shell is running).
     proc: String,
@@ -476,6 +479,7 @@ impl TerminalPane {
         if let Some(name) = shell {
             pane.shell_name = name; // what "nothing running" looks like
         }
+        pane.dir = cwd.to_path_buf();
         Ok(pane)
     }
 
@@ -761,6 +765,7 @@ impl TerminalPane {
 
         Ok(TerminalPane {
             folder: folder.into(),
+            dir: PathBuf::new(),
             proc: String::new(),
             shell_name,
             last_proc_check: Instant::now() - PROC_POLL,
@@ -1318,10 +1323,12 @@ impl TerminalPane {
         }
         self.last_cwd_check = Instant::now();
         self.cwd_dirty = false;
-        if let Some(name) = self.current_dir().map(|d| folder_name(&d))
-            && name != self.folder
-        {
-            self.folder = name;
+        if let Some(dir) = self.current_dir() {
+            let name = folder_name(&dir);
+            if name != self.folder {
+                self.folder = name;
+            }
+            self.dir = dir;
         }
     }
 

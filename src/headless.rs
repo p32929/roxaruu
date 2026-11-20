@@ -607,8 +607,12 @@ fn headless_terminals_walkthrough() {
     std::fs::create_dir_all(root.join(".git")).unwrap();
 
     let mut h = harness(Some(root.clone()));
-    press(&mut h, ALT, Key::T);
+    // ⌥M with no terminal yet: one opens, maximized; again: its own size.
+    press(&mut h, ALT, Key::M);
     wait_for(&mut h, "first prompt", screen_has("$ "));
+    assert!(app(&h).terminal_max && app(&h).terminal_focused());
+    press(&mut h, ALT, Key::M);
+    assert!(!app(&h).terminal_max && app(&h).terminal_open);
     for _ in 0..4 {
         press(&mut h, ALT, Key::N);
         wait_for(&mut h, "new prompt", screen_has("$ "));
@@ -760,6 +764,11 @@ fn headless_terminals_walkthrough() {
         press(&mut h, CMD, Key::J); // back into the terminal
         assert!(h.state().0.terminal_focused());
     }
+    // Hidden, ⌥M shows it maximized.
+    press(&mut h, ALT, Key::T);
+    assert!(!app(&h).terminal_open);
+    press(&mut h, ALT, Key::M);
+    assert!(app(&h).terminal_open && app(&h).terminal_max && app(&h).terminal_focused());
 }
 
 /// Step 6: a script that opens OS terminal windows gets tabs here instead.
@@ -3075,6 +3084,81 @@ fn headless_open_several_folders() {
     shot(&mut h, "o3-opened");
 }
 
+/// Recent Terminals: each window's terminals (its row, then its folders A to
+/// Z), then every folder; ticks are numbered and open in that order, side by
+/// side and maximized, here when this window has nothing open; a window's
+/// row opens all of its terminals, in a new window once this one has some.
+#[test]
+#[ignore]
+fn headless_recent_terminals() {
+    use crate::palette::Pick;
+    use crate::recent::{Group, record_terminals, terminal_groups};
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    let [api, infra, web, scripts] = ["api", "infra", "web", "scripts"].map(|n| base.join(n));
+    for d in [&api, &infra, &web, &scripts] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let _ = std::fs::remove_file(crate::config::state_dir().unwrap().join("terminals.json"));
+    let now = crate::update::now();
+    let group = |window: &str, name: &str, at, dirs: &[&std::path::PathBuf]| Group {
+        window: window.into(),
+        name: name.into(),
+        at,
+        dirs: dirs.iter().map(|d| d.to_path_buf()).collect(),
+    };
+    record_terminals(group("old", "", now - 90_000, &[&scripts]));
+    record_terminals(group("shop", "shop", now - 600, &[&web, &api, &infra]));
+
+    let mut h = harness(None);
+    press(&mut h, ALT, Key::R);
+    let rows = |h: &Harness<'static, Root>| -> Vec<(String, String)> {
+        app(h).palette.as_ref().unwrap().items.iter().map(|i| (i.label.clone(), i.detail.clone())).collect()
+    };
+    let labels: Vec<String> = rows(&h).into_iter().map(|r| r.0).collect();
+    assert_eq!(labels, ["shop", "api", "infra", "web", "(no project)", "scripts", "web", "api", "infra", "scripts"]);
+    assert_eq!(rows(&h)[0].1, "3 terminals · 10 min ago");
+    assert!(rows(&h)[9].1.ends_with("yesterday"), "{:?}", rows(&h)[9]);
+
+    // Ticked: numbered in that order, whatever the rows' order.
+    for row in [3, 1, 5] {
+        h.state_mut().0.palette.as_mut().unwrap().selected = row;
+        press(&mut h, Modifiers::NONE, Key::Space);
+    }
+    let p = app(&h).palette.as_ref().unwrap();
+    assert_eq!([3, 1, 5].map(|r| p.tick_number(r)), [Some(1), Some(2), Some(3)]);
+    assert!(!p.is_ticked(0), "a window's row isn't ticked");
+    shot(&mut h, "rt1-ticked");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(app(&h).palette.is_none());
+    let dirs: Vec<_> = app(&h).terminals.iter().map(|t| t.pane.dir.clone()).collect();
+    assert_eq!(dirs, [web.clone(), api.clone(), scripts.clone()], "here, in the ticked order");
+    assert!(app(&h).terminal_grid && app(&h).terminal_max && app(&h).terminal_focused());
+    shot(&mut h, "rt2-opened");
+    // This window's terminals are kept, first.
+    h.step();
+    let saved = terminal_groups();
+    assert_eq!((saved[0].name.as_str(), &saved[0].dirs), ("", &dirs));
+
+    // From the terminal: its key opens the list; this window first now. A
+    // window's row: all of its terminals, A to Z, in a new window (this
+    // one has some).
+    press(&mut h, ALT, Key::R);
+    assert_eq!(rows(&h)[0].1, "3 terminals · this window");
+    let shop = rows(&h).iter().position(|r| r.0 == "shop").unwrap();
+    h.state_mut().0.palette.as_mut().unwrap().selected = shop;
+    assert!(matches!(app(&h).palette.as_ref().unwrap().selected_pick(), Some(Pick::Terminals(_))));
+    App::take_launched();
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let s = |p: &std::path::PathBuf| p.to_string_lossy().into_owned();
+    assert_eq!(
+        App::take_launched(),
+        [vec!["new window".to_string(), "--terminal".into(), s(&api), "--terminal".into(), s(&infra), "--terminal".into(), s(&web)]]
+    );
+    assert!(app(&h).toasts.iter().any(|t| t.msg == "Opened 3 terminals in a new window"));
+    assert_eq!(app(&h).terminals.len(), 3, "this window keeps its own");
+}
+
 /// Many tabs: the strip scrolls (wheel, the "‹ N" end), keeps the active
 /// tab in view, and a tab drags to a new place; terminals' tabs too.
 #[test]
@@ -3726,6 +3810,7 @@ fn headless_dialogs_fit() {
     let opens = [
         Command::Palette,
         Command::RecentFolders,
+        Command::RecentTerminals,
         Command::SearchInFiles,
         Command::GoToLine,
         Command::Settings,
@@ -4847,9 +4932,12 @@ fn headless_remote_input_in_chrome() {
             // machine got the step before the key).
             "dragged" => row_with(h, "A").is_some(),
             "flicked" => row_with(h, "F").is_some(),
+            // ⌘P and esc reached the window (a loaded machine got the step first).
+            "palette" => app(h).focus == crate::app::Focus::Sidebar,
+            "palette-closed" => app(h).focus == crate::app::Focus::Editor,
             _ => true,
         };
-        if matches!(step, "link-printed" | "links-listed" | "dragged" | "flicked") {
+        if matches!(step, "link-printed" | "links-listed" | "dragged" | "flicked" | "palette" | "palette-closed") {
             // What it's waiting on, every few seconds, in a file (a waiting
             // test's output is held back): a wait that never ends says why.
             let note = shots.join("input-waiting.log");
@@ -5583,7 +5671,7 @@ fn headless_every_key_that_applies_shows() {
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
         OpenProjectSettings, OpenConfigFolder, Todos, ClipboardHistory, ZoomIn, ZoomOut, ResetZoom, FullScreen,
         MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
-        ToggleTerminal, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
+        ToggleTerminal, RecentTerminals, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
         // A tab's or the tree's right-click menu.
         RenameFile, RevealInFinder, OpenInDefaultApp, OpenInTerminal, CopyPath, CopyRelativePath,
         // On each tab's tooltip (⌘1–8); ⌘9 is "the last".

@@ -95,6 +95,7 @@ pub mod icon {
     pub const GITHUB: &str = "\u{ea84}";
     pub const GLOBE: &str = "\u{eb01}";
     pub const DOWNLOAD: &str = "\u{eac2}";
+    pub const TABS: &str = "\u{f04e9}";
 
     /// A file's type icon and its colour (Seti's, as VS Code shows them).
     /// `None`: no known type, the plain page in the caller's colour.
@@ -357,7 +358,7 @@ pub mod icon {
             Command::SwitchFocus => TERMINAL,
             Command::ClearTerminal => CLEAR,
             Command::FocusSidebar => FILE,
-            Command::ToggleTerminal | Command::SwitchTerminal | Command::JumpTerminal(_) => {
+            Command::ToggleTerminal | Command::SwitchTerminal | Command::RecentTerminals | Command::JumpTerminal(_) => {
                 TERMINAL
             }
             Command::NewTerminal => ADD,
@@ -465,6 +466,33 @@ fn drawn(ui: &egui::Ui, keys: impl IntoIterator<Item = String>, click: Option<(R
         d.keys.extend(keys);
         d.clickable.extend(click);
     });
+}
+
+/// A group's icon in the status bar, before its keys (whose they are: the
+/// tree's, the terminal's), so their labels needn't say.
+fn mark(glyph: &'static str) -> Option<StatusHint> {
+    Some((String::new(), glyph, None))
+}
+
+/// A group's icon in a row of keys (`key_hints`), before its keys.
+fn hint_mark(glyph: &'static str) -> Option<Hint> {
+    Some((Vec::new(), glyph))
+}
+
+/// Whether a hint is a group's icon (`hint_mark`) rather than a key.
+fn is_mark(caps: &[String], what: &str) -> bool {
+    caps.is_empty() && what.chars().count() == 1
+}
+
+/// The hints that apply, without an icon left with no keys after it.
+fn tidy(list: Vec<Option<StatusHint>>) -> Vec<StatusHint> {
+    let list: Vec<StatusHint> = list.into_iter().flatten().collect();
+    let real = |h: Option<&StatusHint>| h.is_some_and(|h| !h.0.is_empty());
+    list.iter()
+        .enumerate()
+        .filter(|(i, h)| !h.0.is_empty() || real(list.get(i + 1)))
+        .map(|(_, h)| h.clone())
+        .collect()
 }
 
 /// The keycaps drawn in rows of keys in the last pass, for tests.
@@ -586,9 +614,9 @@ impl Paint {
         // Their keys, once: one row, centred.
         ui.add_space(10.0 * s);
         let hints: [Hint; 4] = [
-            (vec!["U".into()], "update"),
-            (vec!["G".into()], "GitHub"),
-            (vec!["P".into()], "portfolio"),
+            (vec!["U".into()], "update now"),
+            (vec!["G".into()], "open on GitHub"),
+            (vec!["P".into()], "open portfolio"),
             (vec!["esc".into()], "close"),
         ];
         let w = self.key_hints(ui, None, &hints, 11.0, Pos2::ZERO);
@@ -792,7 +820,7 @@ impl Paint {
 
     /// The row under a tab strip: the keys for those tabs. Always there (so
     /// nothing jumps as focus moves), faded while the keyboard is elsewhere.
-    fn tab_hint_row(&self, ui: &mut egui::Ui, hints: &[Hint], here: bool, go: Option<Hint>) {
+    fn tab_hint_row(&self, ui: &mut egui::Ui, glyph: &'static str, hints: &[Hint], here: bool, go: Option<Hint>) {
         let (c, s) = (&self.c, self.s);
         if ui.ctx().content_rect().height() < SHORT_HEIGHT * s {
             return;
@@ -805,11 +833,12 @@ impl Paint {
             pos2(row.left() + 12.0 * s, row.top()),
             pos2(row.right() - 12.0 * s, row.bottom()),
         );
-        // How to get the keyboard here, at full strength: the rest apply
-        // once it is.
+        // How to get the keyboard here (in the group of where it goes:
+        // `glyph`), at full strength: the rest apply once it is.
         if let Some(go) = go {
-            let w = self.key_hints(ui, Some(&p), std::slice::from_ref(&go), 11.0, room.left_center());
-            room.min.x += w + 14.0 * s;
+            let go: Vec<Hint> = [hint_mark(glyph), Some(go)].into_iter().flatten().collect();
+            let w = self.key_hints(ui, Some(&p), &go, 11.0, room.left_center());
+            room.min.x += w + 8.0 * s;
         }
         if !here {
             p.multiply_opacity(0.45);
@@ -835,10 +864,49 @@ impl Paint {
         if p.is_some() {
             drawn(ui, hints.iter().flat_map(|(caps, _)| caps.iter().cloned()), None);
         }
+        // A group (`hint_mark`: its icon, then its keys) sits in a faint box,
+        // like the status bar's (`hints_strip`); the box goes in under them
+        // once its width is known.
+        let pad = 6.0 * s;
+        let mut group: Option<(Option<egui::layers::ShapeIdx>, f32)> = None;
+        let close = |group: &mut Option<(Option<egui::layers::ShapeIdx>, f32)>, end: f32| {
+            if let (Some(p), Some((Some(idx), start))) = (p, group.take()) {
+                let r = Rect::from_min_max(pos2(start, left_center.y - h / 2.0 - 3.0 * s), pos2(end + pad, left_center.y + h / 2.0 + 3.0 * s));
+                p.set(idx, egui::epaint::RectShape::new(r, 6.0 * s, c.hover, Stroke::new(1.0, c.border), StrokeKind::Inside));
+            }
+        };
+        let mut first = true;
+        let mut after_mark = false;
         for (n, (caps, what)) in hints.iter().enumerate() {
-            if n > 0 {
+            if is_mark(caps, what) {
+                // Only with a key after it.
+                let next = hints.get(n + 1).filter(|(c2, w2)| !is_mark(c2, w2));
+                if next.is_none() {
+                    continue;
+                }
+                close(&mut group, x);
+                if group.is_none() && !first {
+                    x += 2.0 * pad + 8.0 * s;
+                } else if !first {
+                    x += 14.0 * s;
+                }
+                let start = x;
+                let g = ui.fonts_mut(|f| f.layout_no_wrap(what.to_string(), self.font(size + 1.0, Weight::Regular), c.text_subtle));
+                x += pad;
+                if let Some(p) = p {
+                    p.galley(pos2(x, left_center.y - g.size().y / 2.0), g.clone(), c.text_subtle);
+                }
+                x += g.size().x + 7.0 * s;
+                group = Some((p.map(|p| p.add(egui::Shape::Noop)), start));
+                first = false;
+                after_mark = true;
+                continue;
+            }
+            if !first && !after_mark {
                 x += 14.0 * s;
             }
+            first = false;
+            after_mark = false;
             for cap in caps {
                 let g = ui.fonts_mut(|f| {
                     f.layout_no_wrap(cap.clone(), fonts::keycap((size - 0.5) * s), c.text_muted)
@@ -877,6 +945,10 @@ impl Paint {
             } else {
                 x -= 3.0 * s;
             }
+        }
+        if group.is_some() {
+            close(&mut group, x);
+            x += pad;
         }
         x - left_center.x
     }
@@ -1252,8 +1324,8 @@ impl App {
                     String::new()
                 };
                 match jump {
-                    Some(k) => format!("{path}{gone}\n{k} to switch here · drag to move · right-click for more"),
-                    None => format!("{path}{gone}\ndrag to move · right-click for more"),
+                    Some(k) => format!("{path}{gone}\n{k} switch to this tab · drag to move it · right-click for more actions"),
+                    None => format!("{path}{gone}\ndrag to move it · right-click for more actions"),
                 }
             };
             let resp = if dragged.is_some() { resp } else { resp.on_hover_text(tip) };
@@ -1345,7 +1417,7 @@ impl App {
         }
         // The tab keys, on their own row below.
         let here = matches!(self.focus, Focus::Editor | Focus::Find) && self.palette.is_none();
-        pt.tab_hint_row(ui, &self.editor_hints(), here, self.go_hint(Focus::Editor));
+        pt.tab_hint_row(ui, icon::FILE, &self.editor_hints(), here, self.go_hint(Focus::Editor));
         if let Some(i) = select {
             self.select_tab(i);
         }
@@ -2282,7 +2354,7 @@ impl App {
         let cmd = |c, what| self.hint(c, what);
         let raw = |keys: &str, what: &'static str| Some((keys.to_string(), what, None));
         let back = if self.sidebar.from_tree { "back to files" } else { "back to editor" };
-        let list = if self.palette.is_some() || self.modal_open() || !self.sidebar_shown() {
+        let mut list = if self.palette.is_some() || self.modal_open() || !self.sidebar_shown() {
             vec![]
         } else if self.focus != Focus::Sidebar {
             vec![
@@ -2290,15 +2362,15 @@ impl App {
                 cmd(Command::ToggleSidebar, "hide"),
             ]
         } else if self.sidebar.searching && self.sidebar.query.is_empty() {
-            vec![raw("type", "search files"), raw("↓", "browse files"), raw("esc", back)]
+            vec![raw("type", "search"), raw("↓", "browse"), raw("esc", back)]
         } else if !self.sidebar.query.is_empty() {
             let build = self.project.as_ref().is_some_and(|p| p.build);
             vec![
                 raw("↑↓", "choose"),
-                raw("↵", "open file"),
+                raw("↵", "open"),
                 cmd(Command::RenameFile, "rename"),
                 cmd(Command::DeleteFile, "move to trash"),
-                cmd(Command::ToggleBuildFolders, if build { "skip build folders" } else { "include build folders" }),
+                cmd(Command::ToggleBuildFolders, if build { "hide build folders" } else { "show build folders" }),
                 raw("esc", back),
             ]
         } else {
@@ -2313,11 +2385,12 @@ impl App {
                 raw("space", "preview"),
                 cmd(Command::CollapseFolders, "collapse all"),
                 cmd(Command::ToggleSidebar, "hide"),
-                cmd(Command::GoToFile, "search"),
-                raw("↑↓←→", "browse"),
+                cmd(Command::GoToFile, "find by name"),
+                raw("↑↓←→", "move around"),
             ]
         };
-        list.into_iter().flatten().collect()
+        list.insert(0, mark(icon::FOLDER));
+        tidy(list)
     }
 
     /// The rest of the status bar: the terminal's keys, then the two that
@@ -2333,32 +2406,39 @@ impl App {
         let editor_row = !self.tabs.is_empty() && !self.terminal_max && !self.view().short;
         let mut list = if self.terminal_focused() {
             vec![
-                cmd(Command::SwitchFocus, "back to editor").filter(|_| !editor_row),
-                cmd(Command::ToggleTerminal, "hide terminal"),
-                cmd(Command::MaximizeTerminal, if self.terminal_max { "restore" } else { "maximize" }),
-                cmd(Command::SwitchTerminal, "switch terminal"),
+                mark(icon::FILE),
+                cmd(Command::SwitchFocus, "go to").filter(|_| !editor_row),
+                mark(icon::TERMINAL),
+                cmd(Command::ToggleTerminal, "hide"),
+                cmd(Command::MaximizeTerminal, if self.terminal_max { "restore size" } else { "maximize" }),
+                cmd(Command::SwitchTerminal, "switch"),
+                cmd(Command::RecentTerminals, "recent"),
                 cmd(Command::ClearTerminal, "clear"),
                 cmd(Command::OpenTerminalLink, "open a link"),
             ]
         } else if self.terminals.is_empty() {
             vec![
+                mark(icon::TERMINAL),
                 self.focus_hint(Focus::Terminal)
                     .and_then(|(c, what)| cmd(c, what))
-                    .or_else(|| cmd(Command::ToggleTerminal, "open terminal")),
+                    .or_else(|| cmd(Command::ToggleTerminal, "open")),
+                cmd(Command::MaximizeTerminal, "open maximized"),
             ]
         } else {
             vec![
+                mark(icon::TERMINAL),
                 self.focus_hint(Focus::Terminal).and_then(|(c, what)| cmd(c, what)),
-                cmd(Command::ToggleTerminal, if shown { "hide terminal" } else { "show terminal" }),
-                cmd(Command::NewTerminal, "new terminal").filter(|_| !shown || self.view().short),
+                cmd(Command::ToggleTerminal, if shown { "hide" } else { "show" }),
+                cmd(Command::MaximizeTerminal, if shown { "maximize" } else { "show maximized" }).filter(|_| !self.terminal_max),
+                cmd(Command::NewTerminal, "new").filter(|_| !shown || self.view().short),
             ]
         };
         // The tree hidden: the bar starts with the way back to it.
         if !self.sidebar_shown() && self.project.is_some() {
-            list.insert(0, cmd(Command::ToggleSidebar, "show file tree"));
+            list.splice(0..0, [mark(icon::FOLDER), cmd(Command::ToggleSidebar, "show")]);
         }
-        list.extend([cmd(Command::Palette, "all commands"), cmd(Command::Help, "all shortcuts")]);
-        list.into_iter().flatten().collect()
+        list.extend([mark(icon::KEYBOARD), cmd(Command::Palette, "all commands"), cmd(Command::Help, "all shortcuts")]);
+        tidy(list)
     }
 
     /// The row under the editor's tabs: the editor's keys (saving first,
@@ -2368,17 +2448,18 @@ impl App {
         let raw = |keys: &str, what: &'static str| Some((vec![keys.to_string()], what));
         let unsaved = self.active_tab().is_some_and(|t| t.buf.modified);
         let others = self.tabs.iter().enumerate().any(|(i, t)| t.buf.modified && Some(i) != self.active);
-        let mut list = if self.focus == Focus::Find {
-            vec![
+        let mut list = vec![hint_mark(icon::FILE)];
+        if self.focus == Focus::Find {
+            list.extend([
                 raw("↵", "next match"),
-                raw("⇧↵", "previous"),
+                raw("⇧↵", "previous match"),
                 // A huge file is read-only: nothing to replace.
                 if self.editable() { raw("⇥", "replace") } else { None },
                 raw("esc", "close find"),
-            ]
-        } else {
-            vec![if self.editable() { None } else { cmd(Command::EditWholeFile, "edit whole file") }]
-        };
+            ]);
+        } else if !self.editable() {
+            list.push(cmd(Command::EditWholeFile, "edit the whole file"));
+        }
         list.extend([
             cmd(Command::Save, "save").filter(|_| unsaved),
             cmd(Command::SaveAll, "save all").filter(|_| others),
@@ -2388,13 +2469,15 @@ impl App {
                 cmd(Command::Find, "find"),
                 cmd(Command::Replace, "replace"),
                 cmd(Command::GoToLine, "go to line"),
-                cmd(Command::GoToFile, "go to file"),
-                cmd(Command::SearchInFiles, "search in files"),
+                raw("right-click", "more actions"),
+                hint_mark(icon::SEARCH),
+                cmd(Command::GoToFile, "find file by name"),
+                cmd(Command::SearchInFiles, "search all files"),
             ]);
         }
         let mut out: Vec<Hint> = list.into_iter().flatten().collect();
+        out.extend(hint_mark(icon::TABS));
         out.extend(self.tab_hints(false));
-        out.push((vec!["right-click".into()], "more"));
         out
     }
 
@@ -2415,9 +2498,9 @@ impl App {
         match to {
             _ if to == here => None,
             // ⇧⌘E goes into the tree, and back out of it.
-            Focus::Editor if here == Focus::Sidebar => Some((Command::FocusSidebar, "focus editor")),
-            Focus::Editor => Some((Command::SwitchFocus, "focus editor")),
-            Focus::Sidebar => self.project.as_ref().map(|_| (Command::FocusSidebar, "focus file tree")),
+            Focus::Editor if here == Focus::Sidebar => Some((Command::FocusSidebar, "go to")),
+            Focus::Editor => Some((Command::SwitchFocus, "go to")),
+            Focus::Sidebar => self.project.as_ref().map(|_| (Command::FocusSidebar, "go to")),
             _ => Some((Command::SwitchFocus, self.terminal_verb())),
         }
     }
@@ -2431,9 +2514,9 @@ impl App {
     /// What ⌘J does from outside the terminal: shows it if need be.
     fn terminal_verb(&self) -> &'static str {
         if self.terminal_open && !self.terminals.is_empty() {
-            "focus terminal"
+            "go to"
         } else {
-            "open terminal"
+            "open"
         }
     }
 
@@ -2630,12 +2713,41 @@ impl App {
         let cap_font = fonts::keycap(10.5 * s);
         let mut picked = None;
         let mut x = x0;
-        for (i, (keys, what, command)) in hints.into_iter().enumerate() {
+        // Each group (`mark`: its icon, then its keys) sits in a faint box of
+        // its own, so which keys are the terminal's, say, shows at a glance.
+        // The box goes in under them once its width is known.
+        let pad = 6.0 * s;
+        let mut group: Option<(egui::layers::ShapeIdx, f32)> = None;
+        let mut end = x0;
+        let close = |group: &mut Option<(egui::layers::ShapeIdx, f32)>, end: f32| {
+            if let Some((idx, start)) = group.take() {
+                let r = Rect::from_min_max(pos2(start, rect.center().y - 11.0 * s), pos2(end + pad, rect.center().y + 11.0 * s));
+                ui.painter().set(idx, egui::epaint::RectShape::new(r, 6.0 * s, c.hover, Stroke::new(1.0, c.border), StrokeKind::Inside));
+            }
+        };
+        let mut hints = hints.into_iter().enumerate().peekable();
+        while let Some((i, (keys, what, command))) = hints.next() {
+            // A group's icon: drawn only with its first key beside it.
+            if keys.is_empty() {
+                let g = ui.fonts_mut(|f| f.layout_no_wrap(what.to_string(), pt.font(12.5, Weight::Regular), c.text_subtle));
+                let next = hints.peek().map_or(f32::INFINITY, |(_, (k, w, _))| {
+                    ui.fonts_mut(|f| f.layout_no_wrap(k.clone(), cap_font.clone(), c.text_muted).size().x + f.layout_no_wrap(w.to_string(), pt.font(11.5, Weight::Regular), c.text_subtle).size().x) + 15.0 * s
+                });
+                let at = if group.is_some() { x + 2.0 * pad - 14.0 * s + 14.0 * s } else { x + pad };
+                if at + g.size().x + 7.0 * s + next + pad > x1 {
+                    break;
+                }
+                close(&mut group, end);
+                group = Some((ui.painter().add(egui::Shape::Noop), at - pad));
+                ui.painter().galley(pos2(at, rect.center().y - g.size().y / 2.0), g.clone(), c.text_subtle);
+                x = at + g.size().x + 7.0 * s;
+                continue;
+            }
             let kg = ui.fonts_mut(|f| f.layout_no_wrap(keys, cap_font.clone(), c.text_muted));
             let wg = ui.fonts_mut(|f| f.layout_no_wrap(what.to_string(), pt.font(11.5, Weight::Regular), c.text_subtle));
             let cap_w = kg.size().x + 10.0 * s;
             let w = cap_w + 5.0 * s + wg.size().x;
-            if x + w > x1 {
+            if x + w + if group.is_some() { pad } else { 0.0 } > x1 {
                 break;
             }
             let item = Rect::from_min_size(pos2(x - 4.0 * s, rect.top() + 3.0 * s), vec2(w + 8.0 * s, rect.height() - 6.0 * s));
@@ -2655,8 +2767,10 @@ impl App {
             if r.clicked() {
                 picked = command;
             }
+            end = x + w;
             x += w + 14.0 * s;
         }
+        close(&mut group, end);
         picked
     }
 
@@ -2695,15 +2809,21 @@ impl App {
         // One row, like every other row of keys, with only what no other
         // row shows (the status bar has the tree, the terminal, every
         // command and every shortcut; the tree's search box, Go to File).
+        // Grouped like every row of keys: searching, then the folder.
         let actions = [
-            (Command::GoToFile, "go to file", !self.sidebar_shown()),
-            (Command::SearchInFiles, "search in files", true),
-            (Command::CloseFolder, "close folder", true),
+            (None, icon::SEARCH, true),
+            (Some(Command::GoToFile), "find file by name", !self.sidebar_shown()),
+            (Some(Command::SearchInFiles), "search all files", true),
+            (None, icon::FOLDER, true),
+            (Some(Command::CloseFolder), "close folder", true),
         ];
-        let row: Vec<(Command, Hint)> = actions
+        let row: Vec<(Option<Command>, Hint)> = actions
             .into_iter()
             .filter(|(_, _, shown)| *shown)
-            .filter_map(|(c, what, _)| Some((c, (vec![self.shortcut(c)?], what))))
+            .filter_map(|(c, what, _)| match c {
+                Some(c) => Some((Some(c), (vec![self.shortcut(c)?], what))),
+                None => Some((None, (Vec::new(), what))),
+            })
             .collect();
         let area = ui.max_rect();
         let p = ui.painter().clone();
@@ -2737,23 +2857,28 @@ impl App {
             c.text_subtle,
         );
         y += path.size().y + 24.0 * s;
-        // Each hint is clickable, like the status bar's.
-        let gap = 14.0 * s;
-        let widths: Vec<f32> = row.iter().map(|(_, h)| pt.key_hints(ui, None, std::slice::from_ref(h), 12.0, Pos2::ZERO)).collect();
-        let mut x = cx - (widths.iter().sum::<f32>() + gap * row.len().saturating_sub(1) as f32) / 2.0;
+        // Each hint is clickable, like the status bar's: where it is, from
+        // the width of the row up to it.
+        let mut hints: Vec<Hint> = row.iter().map(|(_, h)| h.clone()).collect();
+        let upto = |hints: &[Hint], n: usize| pt.key_hints(ui, None, hints.get(..n).unwrap_or(hints), 12.0, Pos2::ZERO);
+        // As many as fit (a phone), like every row of keys.
+        let fit = (0..=hints.len()).rev().find(|&n| upto(&hints, n) <= room).unwrap_or(0);
+        hints.truncate(fit);
+        let upto = |n: usize| upto(&hints, n);
+        let x0 = cx - upto(hints.len()) / 2.0;
         let mut chosen = None;
-        for ((command, hint), w) in row.into_iter().zip(widths) {
-            let hit = Rect::from_min_size(pos2(x, y), vec2(w, row_h));
+        for (i, (command, hint)) in row.iter().enumerate().take(hints.len()) {
+            let Some(command) = command else { continue };
+            let hit = Rect::from_x_y_ranges(x0 + upto(i)..=x0 + upto(i + 1), y..=y + row_h);
             let resp = ui.interact(hit, ui.scope_id().with(("home", hint.1)), Sense::click());
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
             if resp.clicked() {
-                chosen = Some(command);
+                chosen = Some(*command);
             }
-            pt.key_hints(ui, Some(&p), &[hint], 12.0, pos2(x, y + row_h / 2.0));
-            x += w + gap;
         }
+        pt.key_hints(ui, Some(&p), &hints, 12.0, pos2(x0, y + row_h / 2.0));
         chosen
     }
 
@@ -2765,6 +2890,7 @@ impl App {
         let actions: &[Command] = &[
             Command::OpenFolder,
             Command::RecentFolders,
+            Command::RecentTerminals,
             Command::Settings,
             Command::Quit,
         ];
@@ -3348,7 +3474,7 @@ impl App {
         let rows = ((rect.height() / row_h) as usize).max(1);
         let show_current_line = self.config.settings.current_line;
         let note = match self.shortcut(Command::EditWholeFile) {
-            Some(k) => format!("Read-only: too big to edit here  ·  {k}  load it whole to edit"),
+            Some(k) => format!("Read-only: too big to edit here  ·  {k}  load the whole file to edit it"),
             None => "Read-only: too big to edit here".to_string(),
         };
         let query = match &self.find {
@@ -3528,26 +3654,29 @@ impl App {
         let n = if terminal { self.terminals.len() } else { self.tabs.len() };
         let caps = |cs: &[Command]| -> Vec<String> { cs.iter().filter_map(|c| self.shortcut(*c)).collect() };
         let close: &[Command] = if terminal { &[Command::CloseTerminal] } else { &[Command::CloseTab] };
+        // The row's icon says whose tabs (`tab_hint_row`).
         let mut v: Vec<(&[Command], &'static str, bool)> = vec![
             (close, "close", n > 0),
             (&[Command::CloseTabsToLeft, Command::CloseTabsToRight], "close left / right", n > 1),
             (&[Command::CloseOtherTabs], "close others", n > 1),
         ];
         if terminal {
+            let grid = if self.terminal_grid { "show as tabs" } else { "side by side" };
             v.extend([
                 (&[Command::NewTerminal][..], "new", true),
                 (&[Command::NextTab, Command::PrevTab], "next / previous", n > 1),
                 (&[Command::MoveTabLeft, Command::MoveTabRight], "move", n > 1),
-                (&[Command::ToggleTerminalGrid], "side by side", n > 1),
+                (&[Command::ToggleTerminalGrid], grid, n > 1),
             ]);
         } else {
+            let split = if self.editor_grid { "show as tabs" } else { "side by side" };
             v.extend([
                 (&[Command::CloseAllTabs][..], "close all", n > 1),
                 (&[Command::CloseSavedTabs], "close saved", self.available(Command::CloseSavedTabs) && n > 1),
                 (&[Command::NextTab, Command::PrevTab], "next / previous", n > 1),
                 (&[Command::MoveTabLeft, Command::MoveTabRight], "move", n > 1),
-                (&[Command::ToggleSplit], "side by side", n > 1),
-                (&[Command::ReopenTab], "reopen", self.available(Command::ReopenTab)),
+                (&[Command::ToggleSplit], split, n > 1),
+                (&[Command::ReopenTab], "reopen closed", self.available(Command::ReopenTab)),
             ]);
         }
         // Only the keys that apply are looked up (and so shown).
@@ -4181,9 +4310,9 @@ impl App {
                     .available(Command::SwitchTerminal)
                     .then(|| key(Command::SwitchTerminal))
                     .flatten()
-                    .map(|k| format!(" · {k} for all"))
+                    .map(|k| format!(" · {k} list all terminals"))
                     .unwrap_or_default();
-                let drag = if labels.len() > 1 { " · drag to move" } else { "" };
+                let drag = if labels.len() > 1 { " · drag to move it" } else { "" };
                 // How its notification went, and the way to its settings.
                 let notified = self.terminals.get(i).and_then(|t| t.pane.notified.as_ref()).map_or(String::new(), |(at, d)| {
                     let ago = match at.elapsed().as_secs() / 60 {
@@ -4192,12 +4321,12 @@ impl App {
                         m => format!("{m} minutes ago"),
                     };
                     let settings = key(Command::OpenNotificationSettings)
-                        .map(|k| format!("\n{k} notification settings"))
+                        .map(|k| format!("\n{k} open notification settings"))
                         .unwrap_or_default();
                     format!("\n\nNotification, {ago}: {}{settings}", d.note)
                 });
                 match jump {
-                    Some(k) => format!("{label} · {status}\n{k} to jump here{all}{drag}{notified}"),
+                    Some(k) => format!("{label} · {status}\n{k} switch to this terminal{all}{drag}{notified}"),
                     None => format!("{label} · {status}{drag}{notified}"),
                 }
             };
@@ -4295,7 +4424,8 @@ impl App {
         // Its tab keys, on their own row below.
         // (The way in, ⌘J, is in the status bar below, with the terminal's
         // other keys.)
-        pt.tab_hint_row(ui, &self.tab_hints(true), focused && self.palette.is_none(), None);
+        let hints: Vec<Hint> = hint_mark(icon::TERMINAL).into_iter().chain(self.tab_hints(true)).collect();
+        pt.tab_hint_row(ui, icon::TERMINAL, &hints, focused && self.palette.is_none(), None);
 
         // Body.
         let (body, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
@@ -4403,7 +4533,7 @@ impl App {
         // For the hint on a link: the key that lists them all.
         let all_links = self
             .shortcut(Command::OpenTerminalLink)
-            .map(|k| format!("\n{k} lists every link here"))
+            .map(|k| format!("\n{k} list every link in this terminal"))
             .unwrap_or_default();
         let Some(term) = self.terminals.get_mut(i) else {
             return (false, None);
@@ -5183,10 +5313,10 @@ impl App {
             Some(Mode::Clipboard) => (
                 "Clipboard history",
                 vec![
-                    ("↵", "Paste where you were (the ticked ones, if any)"),
-                    ("space  ⇥", "Tick entries to paste several"),
-                    ("⇧↑  ⇧↓", "Tick a run of them"),
-                    ("⌘-click  ⇧-click", "Tick one, or a run"),
+                    ("↵", "Paste where you were (the selected ones, if any)"),
+                    ("space  ⇥", "Select entries to paste several"),
+                    ("⇧↑  ⇧↓", "Select a range of them"),
+                    ("⌘-click  ⇧-click", "Select one, or a range"),
                     ("⌘⌫", "Clear the history"),
                 ],
                 vec![],
@@ -5194,10 +5324,20 @@ impl App {
             Some(Mode::Recent) => (
                 "Recent folders",
                 vec![
-                    ("↵", "Open it (the ticked ones, if any, each in its own window)"),
-                    ("space  ⇥", "Tick folders to open several"),
-                    ("⇧↑  ⇧↓", "Tick a run of them"),
-                    ("⌘-click  ⇧-click", "Tick one, or a run"),
+                    ("↵", "Open it (the selected ones, if any, each in its own window)"),
+                    ("space  ⇥", "Select folders to open several"),
+                    ("⇧↑  ⇧↓", "Select a range of them"),
+                    ("⌘-click  ⇧-click", "Select one, or a range"),
+                ],
+                vec![],
+            ),
+            Some(Mode::RecentTerminals) => (
+                "Recent terminals",
+                vec![
+                    ("↵", "Open side by side: the selected ones in their order, else this row (a window's row opens all its terminals)"),
+                    ("space  ⇥", "Select terminals, numbered in the order they'll open"),
+                    ("⇧↑  ⇧↓", "Select a range of them"),
+                    ("⌘-click  ⇧-click", "Select one, or a range"),
                 ],
                 vec![],
             ),
@@ -5473,7 +5613,7 @@ impl App {
                     }
                     Mode::Todos => todo_summary.clone(),
                     m if m.multi() && !pal.ticked.is_empty() => {
-                        format!("{} ticked", pal.ticked.len())
+                        format!("{} selected", pal.ticked.len())
                     }
                     Mode::Settings => "saved to settings.json".into(),
                     Mode::Keybindings if conflicts > 0 => format!("{conflicts} clashing"),
@@ -5624,9 +5764,11 @@ impl App {
                         &item.matched,
                         if item.dim { c.text_subtle } else { c.text },
                     );
-                    // A ticked row (lists of several) shows a check.
-                    let glyph = if pal.is_ticked(idx) {
-                        (icon::PASS, Some(c.accent))
+                    // A ticked row (lists of several) shows its place in the
+                    // order they're done in.
+                    let number = pal.tick_number(idx).map(|n| n.to_string());
+                    let glyph = if let Some(n) = &number {
+                        (n.as_str(), Some(c.accent))
                     } else {
                         (
                             item.icon,
@@ -5649,7 +5791,8 @@ impl App {
                         &item.detail,
                         caps,
                         &[],
-                        0.0,
+                        // A window's terminals sit under its row.
+                        if matches!(item.pick, Pick::TerminalIn(_, Some(_))) { 22.0 * s } else { 0.0 },
                     );
                 }
 
@@ -5709,28 +5852,28 @@ impl App {
         match mode {
             Mode::Themes | Mode::UiFonts | Mode::CodeFonts => {
                 vec![
-                    (k("↑ ↓"), "preview"),
-                    (k("↵"), "save"),
+                    (k("↑ ↓"), "try each one"),
+                    (k("↵"), "keep this one"),
                     (k("esc"), "cancel"),
                 ]
             }
             Mode::Todos => vec![
-                (k("↵"), "add · tick"),
-                (k("⌘⌫"), "delete"),
-                (k("⇧⌘⌫"), "clear finished"),
-                (k("⌘E"), "edit as text"),
+                (k("↵"), "add task · mark done"),
+                (k("⌘⌫"), "delete task"),
+                (k("⇧⌘⌫"), "remove finished tasks"),
+                (k("⌘E"), "edit the list as text"),
                 esc,
             ],
             Mode::Clipboard => vec![
-                (k("↵"), if self.ticked().is_empty() { "paste" } else { "paste ticked" }),
-                (k("space ⇥"), "tick to paste several"),
-                (k("⇧↑ ⇧↓"), "tick a run"),
+                (k("↵"), if self.ticked().is_empty() { "paste" } else { "paste selected" }),
+                (k("space ⇥"), "select several to paste"),
+                (k("⇧↑ ⇧↓"), "select a range"),
                 (k("⌘⌫"), "clear history"),
                 esc,
             ],
             Mode::Settings => vec![
-                (k("← →"), "change"),
-                (k("↵"), "next value · open picker"),
+                (k("← →"), "change value"),
+                (k("↵"), "next value · open its list"),
                 esc,
             ],
             Mode::Keybindings if self.capturing() => {
@@ -5741,17 +5884,17 @@ impl App {
             }
             Mode::Keybindings => vec![
                 (k("↵"), "change shortcut"),
-                (k("⌘⌫"), "back to default"),
+                (k("⌘⌫"), "reset to default"),
                 esc,
             ],
-            Mode::Commands => vec![(k("↑ ↓"), "move"), (k("↵"), "run"), esc],
+            Mode::Commands => vec![(k("↑ ↓"), "move"), (k("↵"), "run command"), esc],
             Mode::Recent => {
                 let ticked = self.ticked().len();
                 let mut v = vec![
                     (k("↑ ↓"), "move"),
-                    (k("↵"), if ticked > 0 { "open ticked" } else { "open folder" }),
-                    (k("space ⇥"), "tick to open several"),
-                    (k("⇧↑ ⇧↓"), "tick a run"),
+                    (k("↵"), if ticked > 0 { "open selected folders" } else { "open folder" }),
+                    (k("space ⇥"), "select several to open"),
+                    (k("⇧↑ ⇧↓"), "select a range"),
                 ];
                 if let Some(key) = self.config.keymap.combo_for(Command::OpenFolder) {
                     v.push((vec![key.label()], "open another folder…"));
@@ -5762,14 +5905,21 @@ impl App {
             Mode::Folders => vec![
                 (k("↑ ↓"), "move"),
                 (k("↵"), "open folder"),
-                (k("⇥"), "into folder"),
-                (k("⇧⇥"), "up a folder"),
+                (k("⇥"), "go into folder"),
+                (k("⇧⇥"), "go up a folder"),
                 esc,
             ],
-            Mode::Search => vec![(k("↑ ↓"), "move"), (k("↵"), "open at match"), esc],
-            Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to it"), esc],
+            Mode::Search => vec![(k("↑ ↓"), "move"), (k("↵"), "open file at match"), esc],
+            Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to terminal"), esc],
+            Mode::RecentTerminals => vec![
+                (k("↑ ↓"), "move"),
+                (k("↵"), if self.ticked().is_empty() { "open terminals" } else { "open selected, in order" }),
+                (k("space ⇥"), "select (numbered in opening order)"),
+                (k("⇧↑ ⇧↓"), "select a range"),
+                esc,
+            ],
             Mode::Links => vec![(k("↑ ↓"), "move"), (k("↵"), "open in browser"), esc],
-            Mode::Line => vec![(k("↵"), "go"), esc],
+            Mode::Line => vec![(k("↵"), "go to line"), esc],
         }
     }
 }
@@ -5874,7 +6024,7 @@ impl App {
                 .unwrap_or_default()
         };
         Some(format!(
-            "Folder open in this window:\n{}\n\n{}  recent folders   {}  open another (new window)",
+            "Folder open in this window:\n{}\n\n{}  recent folders   {}  open another folder (in a new window)",
             tilde(&p.root.to_string_lossy()),
             key(Command::RecentFolders),
             key(Command::OpenFolder),
@@ -6005,4 +6155,17 @@ fn xterm_256(i: u8) -> Color32 {
     let i = i - 16;
     let level = |n: u8| if n == 0 { 0 } else { 55 + n * 40 };
     Color32::from_rgb(level(i / 36), level((i / 6) % 6), level(i % 6))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_group_icon_needs_a_key_after_it() {
+        let key = |w: &'static str| Some(("⌥T".to_string(), w, None));
+        let shown = tidy(vec![mark(icon::FILE), None, mark(icon::TERMINAL), key("hide"), None, mark(icon::KEYBOARD)]);
+        let what: Vec<&str> = shown.iter().map(|h| h.1).collect();
+        assert_eq!(what, [icon::TERMINAL, "hide"]);
+    }
 }

@@ -221,7 +221,7 @@ pub(crate) fn dir() -> Option<PathBuf> {
     crate::log_path().and_then(|l| l.parent().map(|d| d.join("update")))
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 

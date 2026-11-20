@@ -155,7 +155,7 @@ fn main() -> eframe::Result {
             eprintln!("roxaruu: there's no screen here to open a window on; on a server, install Xvfb (sudo apt install xvfb)");
             std::process::exit(1);
         }
-        if let Some(window) = detach(&launch.target, password.as_deref()) {
+        if let Some(window) = detach(&launch, password.as_deref()) {
             if password.is_some() {
                 say_where_remote_is(window);
             }
@@ -163,6 +163,7 @@ fn main() -> eframe::Result {
         }
     }
     let (target, virtual_screen) = (launch.target.clone(), launch.virtual_screen);
+    let terminals = launch.terminals.clone();
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Roxaruu")
@@ -255,6 +256,7 @@ fn main() -> eframe::Result {
                 cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             let mut root = Root::new(app::App::new(&cc.egui_ctx, target));
+            root.0.open_terminals(terminals, &cc.egui_ctx);
             root.2 = virtual_screen.then_some(false);
             root.1.virtual_screen = virtual_screen;
             // Once per install, on a real screen opened by you (not a
@@ -488,12 +490,15 @@ struct Launch {
     /// `roxaruu [folder | file]`. Bare, it's decided in `main` (`opens_here`):
     /// typed in a terminal, the folder you're in; else nothing.
     target: Option<std::path::PathBuf>,
+    /// `--terminal <folder>`, again for each: a terminal in each, side by
+    /// side (Recent Terminals opening them in a new window).
+    terminals: Vec<std::path::PathBuf>,
 }
 
 impl Launch {
     fn parse(args: impl Iterator<Item = std::ffi::OsString>) -> Launch {
         let (mut info, mut foreground, mut remote, mut password, mut target) = (None, false, None, None, None);
-        let (mut virtual_screen, mut after_update) = (false, false);
+        let (mut virtual_screen, mut after_update, mut terminals) = (false, false, Vec::new());
         let mut args = args.peekable();
         while let Some(a) = args.next() {
             match a.to_str() {
@@ -509,6 +514,7 @@ impl Launch {
                     _ => info = info.or(Some(Info::Unknown("--remote (say on or off)".into()))),
                 },
                 Some("--password") => password = args.next().and_then(|v| v.into_string().ok()),
+                Some("--terminal") => terminals.extend(args.next().map(std::path::PathBuf::from)),
                 Some(f) if f.starts_with('-') && f != "-" => info = info.or(Some(Info::Unknown(f.to_string()))),
                 _ if target.is_none() => target = Some(std::path::PathBuf::from(a)),
                 _ => {}
@@ -517,7 +523,8 @@ impl Launch {
         // Absolute, so the copy opens the same thing wherever it starts.
         let target = target.map(|t| std::path::absolute(&t).unwrap_or(t));
         let remote = remote.map(|on| if on { RemoteArg::On(password) } else { RemoteArg::Off });
-        Launch { info, foreground, remote, virtual_screen, after_update, target }
+        let terminals = terminals.into_iter().map(|t| std::path::absolute(&t).unwrap_or(t)).collect();
+        Launch { info, foreground, remote, virtual_screen, after_update, target, terminals }
     }
 }
 
@@ -548,13 +555,16 @@ fn no_screen() -> bool {
 /// for input or output (on a virtual screen if there's no real one), the
 /// password for remote access, if any, on its stdin. Returns it, if it
 /// started.
-fn detach(target: &Option<std::path::PathBuf>, password: Option<&str>) -> Option<std::process::Child> {
+fn detach(launch: &Launch, password: Option<&str>) -> Option<std::process::Child> {
     let exe = std::env::current_exe().ok()?;
     let mut args: Vec<std::ffi::OsString> = Vec::new();
     if password.is_some() {
         args.extend(["--remote".into(), "on".into()]);
     }
-    args.extend(target.iter().map(|t| t.clone().into_os_string()));
+    args.extend(launch.target.iter().map(|t| t.clone().into_os_string()));
+    for t in &launch.terminals {
+        args.extend(["--terminal".into(), t.clone().into_os_string()]);
+    }
     let xvfb = no_screen().then(|| which::which("xvfb-run").ok()).flatten();
     if xvfb.is_some() {
         args.push("--virtual-screen".into());
@@ -751,6 +761,10 @@ mod tests {
         assert_eq!(parse(&["--update"]).info, Some(Info::Update));
         assert!(parse(&["--after-update"]).after_update);
         assert!(!parse(&["src"]).after_update);
+        let l = parse(&["--terminal", "/a", "--terminal", "/b"]);
+        let names: Vec<_> = l.terminals.iter().map(|t| t.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["a", "b"], "in order");
+        assert_eq!((l.target, l.info), (None, None), "terminals only: no folder, nothing to print");
         assert_eq!(parse(&["--foreground"]).info, None);
         let h = help();
         for flag in ["--help", "--version", "--foreground", "--update", "rox <folder>"] {

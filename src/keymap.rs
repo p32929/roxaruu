@@ -100,6 +100,7 @@ pub enum Command {
     ToggleTerminalGrid,
     MaximizeTerminal,
     SwitchTerminal,
+    RecentTerminals,
     OpenTerminalLink,
     ToggleRemoteAccess,
     ShowRemoteAddress,
@@ -235,6 +236,7 @@ commands! {
     ToggleTerminalGrid, "terminal.grid", "Terminals Side by Side / as Tabs", ["alt+g"];
     MaximizeTerminal, "terminal.maximize", "Maximize / Restore Terminal", ["alt+m"];
     SwitchTerminal, "terminal.switch", "Switch to Terminal…", ["alt+k"];
+    RecentTerminals, "terminal.recent", "Recent Terminals", ["alt+r"];
     OpenTerminalLink, "terminal.openLink", "Open a Link from the Terminal…", ["ctrl+shift+o"];
     ToggleRemoteAccess, "remote.toggle", "Remote Access: On / Off", ["ctrl+alt+shift+r"];
     ShowRemoteAddress, "remote.address", "Remote Access: Show Address", ["ctrl+alt+shift+a"];
