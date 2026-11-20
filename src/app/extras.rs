@@ -161,6 +161,9 @@ impl App {
         for i in 0..self.terminals.len() {
             let shown = self.terminal_open && (self.terminal_grid || i == self.active_terminal);
             let Some(t) = self.terminals.get_mut(i) else { continue };
+            if own {
+                t.pane.in_sight = focused && shown;
+            }
             t.pane.refresh_foreground();
             if own {
                 t.pane.watch.looking.store(focused && shown, Relaxed);

@@ -16,8 +16,15 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 
-/// How often to re-check the foreground process for the tab label.
+/// How often to re-check the foreground process for the tab label, for a
+/// terminal you're looking at.
 const PROC_POLL: Duration = Duration::from_millis(400);
+
+/// The same for one out of sight (another tab, or the window in the
+/// background): it still notices a command ending (the tab's "finished"
+/// mark, agent alerts), just less often. Asking the system costs: on
+/// Windows it lists every process there is.
+const PROC_POLL_UNSEEN: Duration = Duration::from_secs(2);
 
 /// Floor between working-directory reads for one pane. Slower than
 /// [`PROC_POLL`] because each read forks `lsof`, and it only fires at all after
@@ -363,6 +370,9 @@ pub struct TerminalPane {
     /// running command.
     shell_name: String,
     last_proc_check: Instant,
+    /// On screen in the window you're at: checked at `PROC_POLL`, else
+    /// `PROC_POLL_UNSEEN` (set each frame, `App::poll_attention`).
+    pub in_sight: bool,
     /// Set whenever the pane produces output, cleared once the working
     /// directory has been re-read. A shell that printed something is a shell
     /// that may have just `cd`'d; one sitting silent cannot have moved, so it
@@ -792,6 +802,7 @@ impl TerminalPane {
             proc: String::new(),
             shell_name,
             last_proc_check: Instant::now() - PROC_POLL,
+            in_sight: true,
             // Check once as soon as the shell first prints its prompt.
             cwd_dirty: true,
             last_cwd_check: Instant::now() - CWD_POLL,
@@ -1310,7 +1321,8 @@ impl TerminalPane {
     /// Update the foreground-process label (throttled). Shows the running
     /// command, or nothing when only the shell is at the prompt.
     pub fn refresh_foreground(&mut self) {
-        if self.last_proc_check.elapsed() < PROC_POLL {
+        let every = if self.in_sight { PROC_POLL } else { PROC_POLL_UNSEEN };
+        if self.last_proc_check.elapsed() < every {
             return;
         }
         self.last_proc_check = Instant::now();
@@ -1330,6 +1342,13 @@ impl TerminalPane {
             trimmed.to_string()
         };
         self.set_proc(proc);
+    }
+
+    /// What runs in it now, asked this moment (closing it: is something
+    /// still running?), however recently it was.
+    pub fn refresh_foreground_now(&mut self) {
+        self.last_proc_check = Instant::now() - PROC_POLL_UNSEEN;
+        self.refresh_foreground();
     }
 
     /// Re-read the shell's working directory so the tab follows `cd`.
@@ -2035,6 +2054,28 @@ fn settle(term: &mut TerminalPane, last: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Out of sight, a terminal is asked what runs in it every
+    /// `PROC_POLL_UNSEEN`, in sight every `PROC_POLL`; closing asks now.
+    #[cfg(unix)]
+    #[test]
+    fn terminals_out_of_sight_are_asked_less_often() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = TerminalPane::new("t", 24, 80, dir.path(), None).unwrap();
+        let just_after = |t: &mut TerminalPane| t.last_proc_check = Instant::now() - PROC_POLL * 2;
+        t.in_sight = false;
+        just_after(&mut t);
+        let before = t.last_proc_check;
+        t.refresh_foreground();
+        assert_eq!(t.last_proc_check, before, "out of sight: not yet");
+        t.in_sight = true;
+        t.refresh_foreground();
+        assert!(t.last_proc_check > before, "in sight: asked");
+        t.in_sight = false;
+        let asked = t.last_proc_check;
+        t.refresh_foreground_now();
+        assert!(t.last_proc_check > asked, "closing asks now, whatever");
+    }
 
     #[test]
     fn file_positions_are_found_in_what_tools_print() {

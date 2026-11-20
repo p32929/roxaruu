@@ -1874,6 +1874,9 @@ impl App {
     /// Close these terminals; first, if one still runs something, ask
     /// whether to stop it (unless `confirmCloseTerminal` is off).
     pub(crate) fn begin_close_terminals(&mut self, ids: Vec<u64>) {
+        for t in self.terminals.iter_mut().filter(|t| ids.contains(&t.id)) {
+            t.pane.refresh_foreground_now();
+        }
         let running = self.terminals.iter().any(|t| ids.contains(&t.id) && t.pane.is_running());
         if running && self.config.settings.confirm_close_terminal {
             self.ask = Some(Ask::CloseTerminals { ids });
