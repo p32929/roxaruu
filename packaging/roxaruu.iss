@@ -35,7 +35,7 @@ CloseApplications=force
 
 [Tasks]
 Name: "addtopath"; Description: "Add the ""rox"" command to PATH (open a folder from a terminal: rox .)"
-Name: "contextmenu"; Description: "Add ""Open with Roxaruu"" to File Explorer's right-click menu"
+Name: "contextmenu"; Description: "Add ""Open with Roxaruu"" to File Explorer's right-click menu for folders"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]
@@ -55,16 +55,16 @@ Name: "{autodesktop}\Roxaruu"; Filename: "{app}\roxaruu.exe"; IconFilename: "{ap
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\p32929.Roxaruu"; Flags: uninsdeletekey dontcreatekey
 ; `rox` on PATH, for this user.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath(ExpandConstant('{app}'))
-; Right-click a folder, the inside of one, or a file: Open with Roxaruu.
+; Right-click a folder, or the inside of one: Open with Roxaruu.
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\Roxaruu"; ValueType: string; ValueData: "Open with Roxaruu"; Flags: uninsdeletekey; Tasks: contextmenu
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\Roxaruu"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\roxaruu.exe"; Tasks: contextmenu
 Root: HKCU; Subkey: "Software\Classes\Directory\shell\Roxaruu\command"; ValueType: string; ValueData: """{app}\roxaruu.exe"" ""%V"""; Tasks: contextmenu
 Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Roxaruu"; ValueType: string; ValueData: "Open with Roxaruu"; Flags: uninsdeletekey; Tasks: contextmenu
 Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Roxaruu"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\roxaruu.exe"; Tasks: contextmenu
 Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\Roxaruu\command"; ValueType: string; ValueData: """{app}\roxaruu.exe"" ""%V"""; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\*\shell\Roxaruu"; ValueType: string; ValueData: "Open with Roxaruu"; Flags: uninsdeletekey; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\*\shell\Roxaruu"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\roxaruu.exe"; Tasks: contextmenu
-Root: HKCU; Subkey: "Software\Classes\*\shell\Roxaruu\command"; ValueType: string; ValueData: """{app}\roxaruu.exe"" ""%1"""; Tasks: contextmenu
+; Folders only: the files' item earlier versions added goes (an update
+; doesn't run the old uninstaller, which would have taken it).
+Root: HKCU; Subkey: "Software\Classes\*\shell\Roxaruu"; ValueType: none; Flags: deletekey
 
 [Run]
 Filename: "{app}\roxaruu.exe"; Description: "Open Roxaruu"; Flags: nowait postinstall skipifsilent

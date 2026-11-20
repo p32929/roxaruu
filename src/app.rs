@@ -803,7 +803,10 @@ impl App {
             }
             Command::ToggleTerminal => self.toggle_terminal(ctx),
             Command::NewTerminal => self.new_terminal(ctx),
-            Command::CloseTerminal => self.close_terminal(self.active_terminal),
+            Command::CloseTerminal => {
+                let ids = self.terminals.get(self.active_terminal).map(|t| t.id);
+                self.begin_close_terminals(ids.into_iter().collect());
+            }
             Command::ToggleTerminalGrid => {
                 self.terminal_grid = !self.terminal_grid;
                 self.show_terminals(ctx);
@@ -832,6 +835,7 @@ impl App {
             | Command::RenameFile
             | Command::DeleteFile
             | Command::RevealInFinder
+            | Command::OpenInDefaultApp
             | Command::OpenInTerminal
             | Command::CopyPath
             | Command::CopyRelativePath
@@ -876,6 +880,9 @@ impl App {
             | Command::OpenInTerminal
             | Command::CopyPath
             | Command::CopyRelativePath => self.file_target().is_some(),
+            // A file, and on this computer: a browser's copy would open it
+            // on the computer Roxaruu runs on, out of sight.
+            Command::OpenInDefaultApp => !self.remote_pass && self.file_target().is_some_and(|p| p.is_file()),
             // Only with a list open: in the editor ⌘⌫ deletes to the line start.
             Command::DeleteFile => {
                 (self.palette.is_some() || self.focus == Focus::Sidebar)
@@ -1064,6 +1071,15 @@ impl App {
 
     /// Open `path` in a tab, or switch to it if it's already open.
     pub fn open_file(&mut self, path: &Path) {
+        // An image, a PDF, a program: its own app opens it (here, on this
+        // computer; a browser's copy can't show it).
+        if crate::buffer::is_binary_file(path) {
+            if self.remote_pass {
+                return self.warn(crate::buffer::unsupported_reason(path).unwrap_or_default());
+            }
+            tracing::debug!(path = %path.display(), "open in its own app");
+            return self.open_external(path);
+        }
         self.mru.retain(|p| p != path);
         self.mru.insert(0, path.to_path_buf());
         if let Some(i) = self
@@ -1745,6 +1761,39 @@ impl App {
     }
 
     /// Close (kill) terminal `i`.
+    /// Close these terminals; first, if one still runs something, ask
+    /// whether to stop it (unless `confirmCloseTerminal` is off).
+    pub(crate) fn begin_close_terminals(&mut self, ids: Vec<u64>) {
+        let running = self.terminals.iter().any(|t| ids.contains(&t.id) && t.pane.is_running());
+        if running && self.config.settings.confirm_close_terminal {
+            self.ask = Some(Ask::CloseTerminals { ids });
+        } else {
+            self.close_terminals(&ids);
+        }
+    }
+
+    /// Those still here (one may have exited meanwhile).
+    pub(crate) fn close_terminals(&mut self, ids: &[u64]) {
+        while let Some(i) = self.terminals.iter().position(|t| ids.contains(&t.id)) {
+            self.close_terminal(i);
+        }
+    }
+
+    /// "A terminal is still running (…): it will be stopped." for these.
+    pub(crate) fn running_line(&self, ids: Option<&[u64]>) -> Option<String> {
+        let running: Vec<String> = self
+            .terminals
+            .iter()
+            .filter(|t| t.pane.is_running() && ids.is_none_or(|ids| ids.contains(&t.id)))
+            .map(|t| t.pane.display_name())
+            .collect();
+        match running.as_slice() {
+            [] => None,
+            [one] => Some(format!("A terminal is still running ({one}): it will be stopped.")),
+            many => Some(format!("{} terminals are still running ({}): they will be stopped.", many.len(), running.join(", "))),
+        }
+    }
+
     pub fn close_terminal(&mut self, i: usize) {
         if i < self.terminals.len() {
             self.terminals.remove(i);
@@ -1766,10 +1815,8 @@ impl App {
         };
         if self.terminal_focused() && command != Command::CloseSavedTabs {
             let a = self.active_terminal;
-            for i in (0..self.terminals.len()).rev().filter(|&i| hit(i, a)) {
-                self.close_terminal(i);
-            }
-            return;
+            let ids = self.terminals.iter().enumerate().filter(|&(i, _)| hit(i, a)).map(|(_, t)| t.id).collect();
+            return self.begin_close_terminals(ids);
         }
         let a = self.active.unwrap_or(0);
         let paths = self
@@ -1855,20 +1902,12 @@ impl App {
 
     /// What closing this window would stop, one line each, for its dialog.
     pub(crate) fn quit_losses(&self) -> Vec<String> {
-        let mut v = Vec::new();
-        let running: Vec<String> =
-            self.terminals.iter().filter(|t| t.pane.is_running()).map(|t| t.pane.display_name()).collect();
-        let idle = self.terminals.len() - running.len();
-        match running.as_slice() {
-            [] => {}
-            [one] => v.push(format!("A terminal is still running ({one}): it will be stopped.")),
-            many => v.push(format!("{} terminals are still running ({}): they will be stopped.", many.len(), running.join(", "))),
-        }
-        match idle {
+        let mut v: Vec<String> = self.running_line(None).into_iter().collect();
+        match self.terminals.len() {
+            _ if !v.is_empty() => {}
             0 => {}
-            1 if running.is_empty() => v.push("Its terminal closes.".into()),
-            n if running.is_empty() => v.push(format!("Its {n} terminals close.")),
-            _ => {}
+            1 => v.push("Its terminal closes.".into()),
+            n => v.push(format!("Its {n} terminals close.")),
         }
         match self.tabs.iter().filter(|t| t.buf.modified).count() {
             0 => {}

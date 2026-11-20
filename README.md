@@ -25,7 +25,8 @@ I looked for something that already solved this, didn't like what I found, so I 
 1. Built in, as tabs, or all of a project's terminals at once in a grid.
 2. On macOS, a script that opens new Terminal windows opens tabs in Roxaruu instead (exactly my problem above).
 3. Each tab says what its program is doing: printing, running, or gone quiet (maybe stuck, maybe waiting for you).
-4. Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else.
+4. Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else (a conversation, not a script's `claude -p`).
+5. Closing a terminal that's still running something asks first.
 
 **Editor**
 1. Syntax highlighting for 23 languages, tabs, split view, find and replace, go to line, go to file, search across the whole project.
@@ -62,10 +63,11 @@ Or download the file for your system from the [latest release](https://github.co
 
 1. Open `roxaruu_v<version>_macos_apple-silicon.dmg` (M1 and later) or `roxaruu_v<version>_macos_intel.dmg` (older Macs; Apple menu → About This Mac says which), and drag **Roxaruu** into **Applications**.
 2. The first time, right-click Roxaruu in Applications and choose **Open**, then **Open** again. It isn't notarized by Apple yet, so a plain double-click is refused. Or, in a terminal: `xattr -cr /Applications/Roxaruu.app`.
+3. Once it has run, right-click a folder in Finder: **Quick Actions → Open in Roxaruu**.
 
 ### Windows (10 and 11, 64-bit)
 
-1. Run `roxaruu_v<version>_windows_x64_setup.exe`. It installs for you only (no admin password) and adds Roxaruu to the Start Menu, the `rox` command, and **Open with Roxaruu** to File Explorer's right-click menu.
+1. Run `roxaruu_v<version>_windows_x64_setup.exe`. It installs for you only (no admin password) and adds Roxaruu to the Start Menu, the `rox` command, and **Open with Roxaruu** to File Explorer's right-click menu for folders.
 2. If Windows says "Windows protected your PC", choose **More info → Run anyway** (the installer isn't signed yet).
 
 Or unzip `roxaruu_v<version>_windows_x64.zip` anywhere and run `roxaruu.exe`.
@@ -77,6 +79,7 @@ Terminals on Windows run **Git Bash** (or WSL), so install [Git for Windows](htt
 1. Debian, Ubuntu, Mint, Pop!_OS: `sudo apt install ./roxaruu_v<version>_linux_x64.deb`
 2. Anything else: unpack `roxaruu_v<version>_linux_x64.tar.xz`; the program is `bin/roxaruu` (copy `share/` into `~/.local/share/` for the app-menu entry).
 3. On a server with no screen, install Xvfb as well (`sudo apt install xvfb`) to use it through remote access.
+4. Once it has run, Dolphin and Nemo have **Open in Roxaruu** when you right-click a folder. (Not Files/Nautilus: its only menu for this, Scripts, shows on files too.)
 
 ### Uninstall
 

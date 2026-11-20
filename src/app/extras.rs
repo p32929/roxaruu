@@ -51,10 +51,11 @@ pub enum Setting {
     Sidebar,
     Notifications,
     Updates,
+    ConfirmCloseTerminal,
 }
 
 impl Setting {
-    pub const ALL: [Setting; 13] = [
+    pub const ALL: [Setting; 14] = [
         Setting::Theme,
         Setting::UiFont,
         Setting::CodeFont,
@@ -68,6 +69,7 @@ impl Setting {
         Setting::Sidebar,
         Setting::Notifications,
         Setting::Updates,
+        Setting::ConfirmCloseTerminal,
     ];
 
     /// Its key in `settings.json`.
@@ -86,6 +88,7 @@ impl Setting {
             Setting::Sidebar => "sidebar",
             Setting::Notifications => "notifications",
             Setting::Updates => "updates",
+            Setting::ConfirmCloseTerminal => "confirmCloseTerminal",
         }
     }
 
@@ -104,6 +107,7 @@ impl Setting {
             Setting::Sidebar => "Show file tree",
             Setting::Notifications => "Notify when an agent finishes",
             Setting::Updates => "Install updates when you quit",
+            Setting::ConfirmCloseTerminal => "Ask before closing a running terminal",
         }
     }
 
@@ -114,7 +118,7 @@ impl Setting {
                 icon::FONT
             }
             Setting::TerminalFps => icon::PULSE,
-            Setting::TerminalShell => icon::TERMINAL,
+            Setting::TerminalShell | Setting::ConfirmCloseTerminal => icon::TERMINAL,
             Setting::WordWrap => icon::WRAP,
             Setting::CurrentLine | Setting::IndentGuides => icon::EDIT,
             Setting::Sidebar => icon::SIDEBAR,
@@ -477,6 +481,7 @@ impl App {
             Setting::Sidebar => on(st.sidebar),
             Setting::Notifications => on(st.notifications),
             Setting::Updates => on(st.updates),
+            Setting::ConfirmCloseTerminal => on(st.confirm_close_terminal),
         }
     }
 
@@ -528,6 +533,7 @@ impl App {
             Setting::Sidebar => (!st.sidebar).into(),
             Setting::Notifications => (!st.notifications).into(),
             Setting::Updates => (!st.updates).into(),
+            Setting::ConfirmCloseTerminal => (!st.confirm_close_terminal).into(),
         };
         // Turned on: the system may want to be asked (macOS's prompt).
         let ask = s == Setting::Notifications && value == serde_json::Value::Bool(true);

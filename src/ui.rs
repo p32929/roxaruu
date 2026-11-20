@@ -317,6 +317,7 @@ pub mod icon {
             Command::RenameFile => EDIT,
             Command::DeleteFile => TRASH,
             Command::RevealInFinder => FOLDER_OPEN,
+            Command::OpenInDefaultApp => LINK,
             Command::OpenInTerminal => TERMINAL,
             Command::CopyPath | Command::CopyRelativePath => COPY,
             Command::ToggleBuildFolders => EYE,
@@ -1739,6 +1740,23 @@ impl App {
                 };
                 self.modal(ctx, icon::DOWNLOAD, &title, &body, buttons, None, None, None)
             }
+            Ask::CloseTerminals { ids } => {
+                let title = match ids.len() {
+                    1 => "Close this terminal?".to_string(),
+                    n => format!("Close {n} terminals?"),
+                };
+                let body = format!(
+                    "{}\n\nDon't Ask Again closes terminals without asking from now on (Settings turns it back on).",
+                    // It may have finished while this was up.
+                    self.running_line(Some(ids)).unwrap_or_else(|| "Nothing runs in it any more.".into())
+                );
+                let buttons = [
+                    CANCEL,
+                    Btn { label: "Don't Ask Again", hint: "D", keys: &[Key::D], primary: false },
+                    ok("Close"),
+                ];
+                self.modal(ctx, icon::TERMINAL, &title, &body, &buttons, None, None, None)
+            }
             Ask::OpenUrl(url) => {
                 let body = url.clone();
                 self.modal(
@@ -1781,6 +1799,12 @@ impl App {
                 self.run(Command::CheckForUpdates, ctx);
             }
             Some(i) if matches!(self.ask, Some(crate::app::Ask::About)) => self.answer_ask(i == 2, ctx),
+            // Don't Ask Again: the setting off (every window), then close.
+            Some(1) if matches!(self.ask, Some(crate::app::Ask::CloseTerminals { .. })) => {
+                self.save_choice_quietly(crate::app::Setting::ConfirmCloseTerminal.key(), false, ctx);
+                self.answer_ask(true, ctx);
+            }
+            Some(i) if matches!(self.ask, Some(crate::app::Ask::CloseTerminals { .. })) => self.answer_ask(i == 2, ctx),
             Some(i) => self.answer_ask(i == 1, ctx),
             None => {}
         }
@@ -3566,6 +3590,7 @@ impl App {
                 (Command::CopyPath, "Copy Path", has_path),
                 (Command::CopyRelativePath, "Copy Relative Path", has_path),
                 (Command::RevealInFinder, crate::keymap::REVEAL_TITLE, has_path),
+                (Command::OpenInDefaultApp, "Open in Default App", has_path && !self.remote_pass),
                 (Command::OpenInTerminal, "Open in Terminal", has_path),
                 (Command::FocusSidebar, "Show in File Tree", has_path),
             ],
@@ -4351,8 +4376,8 @@ impl App {
             self.active_terminal = i;
             self.focus = Focus::Terminal;
         }
-        if let Some(i) = close {
-            self.close_terminal(i);
+        if let Some(t) = close.and_then(|i| self.terminals.get(i)) {
+            self.begin_close_terminals(vec![t.id]);
         }
         if let Some(command) = run {
             self.run(command, &ctx);

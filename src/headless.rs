@@ -738,6 +738,10 @@ fn headless_terminals_walkthrough() {
     shot(&mut h, "74-maximized");
     assert!(h.state().0.terminal_max);
     press(&mut h, ALT, Key::W);
+    // It runs something: asked first (`headless_close_running_terminal_asks`).
+    if matches!(app(&h).ask, Some(crate::app::Ask::CloseTerminals { .. })) {
+        press(&mut h, Modifiers::NONE, Key::Enter);
+    }
     assert_eq!(h.state().0.terminals.len(), 4);
     press(&mut h, ALT, Key::G);
     press(&mut h, ALT, Key::M);
@@ -3263,6 +3267,77 @@ fn headless_quit_asks_first() {
     assert!(app(&h).allow_close, "and it closes");
 }
 
+/// Open in Default App (⌥⌘O, the tree's and a tab's menus), and an image
+/// or other file that isn't text opening in its own app, not a tab.
+#[test]
+#[ignore]
+fn headless_open_in_default_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("a.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(root.join("pic.png"), [0x89, b'P', b'N', b'G', 0]).unwrap();
+    let mut h = harness(Some(root.join("a.rs")));
+    let opened = |p: &str| vec![vec![root.join(p).to_string_lossy().into_owned()]];
+    App::take_launched();
+    press(&mut h, Modifiers { alt: true, ..CMD }, Key::O);
+    assert_eq!(App::take_launched(), opened("a.rs"), "the open file, in its own app");
+    // Picked in the tree: no tab, its own app.
+    press(&mut h, ALT, Key::F);
+    type_text(&mut h, "pic.png");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(App::take_launched(), opened("pic.png"));
+    assert_eq!(app(&h).tabs.len(), 1, "no tab for an image");
+    assert!(app(&h).toasts.iter().all(|t| !t.msg.contains("not a text file")), "no refusal");
+}
+
+/// Closing a terminal that still runs something asks first (⌥W, a tab's ×,
+/// Close Others): Cancel keeps it, Close stops it, Don't Ask Again stops it
+/// and turns the question off. One at its prompt closes without asking.
+#[test]
+#[ignore]
+fn headless_close_running_terminal_asks() {
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    let mut h = harness(Some(root));
+    let count = |h: &Harness<'static, Root>| app(h).terminals.len();
+    let asking = |h: &Harness<'static, Root>| matches!(app(h).ask, Some(crate::app::Ask::CloseTerminals { .. }));
+    let start_sleep = |h: &mut Harness<'static, Root>| {
+        wait_for(h, "the prompt", screen_has("$ "));
+        run(h, "sleep 30");
+        wait_for(h, "sleep to start", |app| app.terminal().is_some_and(|t| t.pane.is_running()));
+    };
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "the prompt", screen_has("$ "));
+    press(&mut h, ALT, Key::N);
+    start_sleep(&mut h);
+    assert_eq!(count(&h), 2);
+
+    press(&mut h, ALT, Key::W);
+    assert!(asking(&h), "sleep runs: it asks");
+    shot(&mut h, "close-running-terminal");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(!asking(&h) && count(&h) == 2, "Cancel keeps it");
+    press(&mut h, ALT, Key::W);
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(!asking(&h) && count(&h) == 1, "Close stops it");
+
+    start_sleep(&mut h);
+    press(&mut h, ALT, Key::W);
+    press(&mut h, Modifiers::NONE, Key::D);
+    assert!(!asking(&h) && count(&h) == 0, "Don't Ask Again closes it");
+    assert!(!app(&h).config.settings.confirm_close_terminal, "and saves the setting");
+
+    press(&mut h, ALT, Key::T);
+    start_sleep(&mut h);
+    press(&mut h, ALT, Key::W);
+    assert!(!asking(&h) && count(&h) == 0, "no longer asked");
+    crate::config::save_setting(None, "confirmCloseTerminal", true).unwrap();
+}
+
 /// A file reopens where you were in it: the caret's line and column, and the
 /// scroll; after closing its tab (⇧⌘T) and after a restart.
 #[test]
@@ -3508,6 +3583,10 @@ fn headless_claude_hooks_say_when_it_is_done() {
     assert!(screen.contains("args: --settings … --resume abc"), "the hooks added, the rest passed on: {screen}");
     wait_for(&mut h, "the toast", |a| a.toasts.iter().any(|t| t.msg.contains("Claude Code: finished")));
     assert!(app(&h).terminals[0].pane.attention, "a bell on its tab");
+    // A script's run (`-p`) gets no hooks: nothing to be told about.
+    let line = format!("PATH=\"$OXRU_BRIDGE_DIR:{}:$PATH\" claude -p hi\r", bin.display());
+    h.state_mut().0.terminals[0].pane.send_input(line.as_bytes());
+    wait_for(&mut h, "the stand-in, unhooked", screen_has("args: -p hi"));
 }
 
 /// Right-click a tab: close others / to the right / to the left / saved,
@@ -3699,6 +3778,10 @@ fn headless_dialogs_fit() {
         let ctx = h.ctx.clone();
         h.state_mut().0.ask = Some(crate::app::Ask::Quit);
         check(&mut h, "quit", size);
+        h.state_mut().0.ask = None;
+        ctx.memory_mut(|m| *m.areas_mut() = Default::default());
+        h.state_mut().0.ask = Some(crate::app::Ask::CloseTerminals { ids: vec![0, 1] });
+        check(&mut h, "close terminals", size);
         h.state_mut().0.ask = None;
         ctx.memory_mut(|m| *m.areas_mut() = Default::default());
         h.state_mut().0.ask = Some(crate::app::Ask::Delete { path: root.join(&long) });
@@ -5502,7 +5585,7 @@ fn headless_every_key_that_applies_shows() {
         MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
         ToggleTerminal, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
         // A tab's or the tree's right-click menu.
-        RenameFile, RevealInFinder, OpenInTerminal, CopyPath, CopyRelativePath,
+        RenameFile, RevealInFinder, OpenInDefaultApp, OpenInTerminal, CopyPath, CopyRelativePath,
         // On each tab's tooltip (⌘1–8); ⌘9 is "the last".
         GoToTab(9),
         // ⌘S always saves; its hint shows while there's something to save.

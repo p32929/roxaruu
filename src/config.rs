@@ -42,6 +42,8 @@ pub struct Settings {
     /// Check for updates now and then, download them, and install them
     /// when the last window closes (Check for Updates works either way).
     pub updates: bool,
+    /// Closing a terminal that's still running something asks first.
+    pub confirm_close_terminal: bool,
     /// Earlier builds saved remote access here; it's off at every launch
     /// now. Accepted, so an old file doesn't show an error, and ignored.
     #[serde(rename = "remoteAccess")]
@@ -67,6 +69,7 @@ impl Default for Settings {
             sidebar: true,
             notifications: true,
             updates: true,
+            confirm_close_terminal: true,
             old_remote_access: serde::de::IgnoredAny,
         }
     }
@@ -515,7 +518,9 @@ pub(crate) fn settings_template() -> String {
            // A notification when a terminal's agent finishes or needs you, while you're in another app\n  \
            // \"notifications\": {},\n\n  \
            // Download updates from GitHub and install them when you close the last window\n  \
-           // \"updates\": {},\n\
+           // \"updates\": {},\n\n  \
+           // Closing a terminal that's still running something asks first\n  \
+           // \"confirmCloseTerminal\": {},\n\
          }}\n",
         quote(themes.into_iter().map(|t| t.name).collect()),
         d.theme,
@@ -537,6 +542,7 @@ pub(crate) fn settings_template() -> String {
         d.sidebar,
         d.notifications,
         d.updates,
+        d.confirm_close_terminal,
     )
 }
 

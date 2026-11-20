@@ -456,6 +456,9 @@ impl TerminalPane {
         cmd.env("CHERE_INVOKING", "1");
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
+        // A fresh terminal, even in a Roxaruu started from inside Claude
+        // Code: a `claude` here is no other Claude's (`roxaruu-hook`).
+        cmd.env_remove("CLAUDECODE");
         // Route scripts that try to open new OS Terminal windows back into the app.
         for (k, v) in crate::termbridge::child_env() {
             cmd.env(k, v);

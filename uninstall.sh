@@ -99,6 +99,8 @@ mac)
     found "$LIB/Saved Application State/com.p32929.roxaruu.savedState"
     found "$LIB/Caches/com.p32929.roxaruu"
     found "$LIB/HTTPStorages/com.p32929.roxaruu"
+    # Finder's "Open in Roxaruu" (src/foldermenu.rs).
+    found "$LIB/Services/Open in Roxaruu.workflow"
     ;;
 linux)
     DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -111,6 +113,10 @@ the roxaruu package (apt)"
     found "$DATA/applications/roxaruu.desktop"
     found "$DATA/icons/hicolor/512x512/apps/roxaruu.png"
     found "$DATA/icons/hicolor/scalable/apps/roxaruu.svg"
+    # Dolphin's and Nemo's "Open in Roxaruu" (src/foldermenu.rs).
+    found "$DATA/kio/servicemenus/roxaruu.desktop"
+    found "$DATA/kservices5/ServiceMenus/roxaruu.desktop"
+    found "$DATA/nemo/actions/roxaruu.nemo_action"
     found "$DATA/Roxaruu"
     found "$CONFIG/roxaruu"
     ;;

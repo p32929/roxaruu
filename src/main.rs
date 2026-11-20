@@ -18,6 +18,7 @@ mod buffer;
 mod config;
 mod editor;
 mod find;
+mod foldermenu;
 mod fonts;
 mod fstree;
 mod fuzzy;
@@ -231,6 +232,8 @@ fn main() -> eframe::Result {
     let renderer = eframe::Renderer::Wgpu;
     tracing::info!(safe, "opening the window");
     instances::register_window();
+    // The file manager's "Open in Roxaruu", for an installed copy.
+    foldermenu::install();
     let result = eframe::run_native(
         "Roxaruu",
         eframe::NativeOptions {

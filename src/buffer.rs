@@ -2232,21 +2232,27 @@ pub fn unsupported_reason(path: &Path) -> Option<String> {
     if path.is_dir() {
         return Some(format!("{name} is a folder, not a file"));
     }
-    if is_binary(&name) {
-        return Some(format!("Can't open {name} — not a text file"));
-    }
-    match std::fs::File::open(path) {
-        Ok(mut f) => {
-            use std::io::Read;
-            let mut head = [0u8; 8192];
-            let read = f.read(&mut head).unwrap_or(0);
-            if head.get(..read).is_some_and(|b| b.contains(&0)) {
-                return Some(format!("Can't open {name} — not a text file"));
-            }
-            None
-        }
+    let binary = if is_binary(&name) { Ok(true) } else { has_nul(path) };
+    match binary {
+        Ok(true) => Some(format!("Can't open {name} — not a text file")),
+        Ok(false) => None,
         Err(e) => Some(format!("Can't open {name} — {e}")),
     }
+}
+
+/// A file that isn't text (an image, a PDF, a program): it opens in its own
+/// app rather than a tab.
+pub fn is_binary_file(path: &Path) -> bool {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.is_file() && (is_binary(&name) || has_nul(path).unwrap_or(false))
+}
+
+/// A NUL byte in the first 8 KB: how `git` and `grep` call a file binary.
+fn has_nul(path: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut head = [0u8; 8192];
+    let read = std::fs::File::open(path)?.read(&mut head).unwrap_or(0);
+    Ok(head.get(..read).is_some_and(|b| b.contains(&0)))
 }
 
 /// Known binary formats, by extension (ported from Oxru's `icons::is_binary`).
@@ -2363,6 +2369,17 @@ mod support_tests {
         let f = dir.path().join("shot.png");
         std::fs::write(&f, "not really a png").unwrap();
         assert!(unsupported_reason(&f).is_some());
+    }
+
+    #[test]
+    fn binary_files_are_told_from_text_by_name_or_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let (png, elf, txt) = (dir.path().join("shot.png"), dir.path().join("tool"), dir.path().join("a.txt"));
+        std::fs::write(&png, "not really a png").unwrap();
+        std::fs::write(&elf, [0x7f, b'E', b'L', b'F', 0x00]).unwrap();
+        std::fs::write(&txt, "hello").unwrap();
+        assert!(is_binary_file(&png) && is_binary_file(&elf));
+        assert!(!is_binary_file(&txt) && !is_binary_file(dir.path()) && !is_binary_file(&dir.path().join("gone.png")));
     }
 
     #[test]

@@ -305,6 +305,7 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 | `palette.rs`, `fuzzy.rs`, `search.rs`, `fstree.rs` | lists, matching, search in files, the tree |
 | `remote/` | remote access: lifecycle (`mod`), in-memory password + sessions (`auth`), HTTPS server for all windows, run by the window that turned it on (`hub`), a window's private link and its flow control (`endpoint`), browser input (`input`), what to draw — egui's meshes and textures, drawn by the page with WebGL (`meshes`), compressed and sent on their own thread (`frames`), waking the window at full rate even hidden (`clock`), the page (`page.html`: its window list is the name's button, or Switch Window's key; `login.html`) |
 | `sys.rs` | all `unsafe` and OS calls, for macOS, Windows and Linux |
+| `foldermenu.rs` | the file manager's "Open in Roxaruu" on folders: Finder's Quick Action, Dolphin, Nemo; written by an installed copy as it starts (Windows': the installer's) |
 | `update.rs` / `app/updates.rs` | updates from GitHub's releases: check, download, verify (`SHA256SUMS`, which `build.yml` publishes), install when the last window closes (`main` → `update::on_close`) or Restart Now; `rox --update`. Tests use `Source::Folder`, never GitHub / what a window shows of it: the toast, About's row, the status bar's version, the update dialog |
 | `packaging/`, `.github/workflows/` | what the release builds package; `build.yml`: build, test and release; `tests.yml`: every system's tests (alone, and in `build.yml`) |
 | `headless.rs` | headless UI walkthroughs |

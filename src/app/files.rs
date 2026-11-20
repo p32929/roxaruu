@@ -36,6 +36,8 @@ pub enum Ask {
     /// An update: restart into it, install it, or where to get it.
     /// `others`: other Roxaruu windows open, as it opened.
     Update { others: usize },
+    /// Closing terminals (by id) that still run something: stop them?
+    CloseTerminals { ids: Vec<u64> },
 }
 
 /// Where Git for Windows (and its Git Bash) comes from.
@@ -101,6 +103,7 @@ impl App {
                 })
             }
             Command::DeleteFile => self.ask = Some(Ask::Delete { path }),
+            Command::OpenInDefaultApp => self.open_external(&path),
             Command::RevealInFinder => {
                 // The file manager opens its folder with it selected.
                 if !os_reveal(&path) {
@@ -168,6 +171,10 @@ impl App {
             }
             Ask::Update { .. } => {
                 self.answer_update(ctx);
+                Ok(())
+            }
+            Ask::CloseTerminals { ids } => {
+                self.close_terminals(&ids);
                 Ok(())
             }
             // ↵ is "GitHub"; "Portfolio" answers apart (`ui`).

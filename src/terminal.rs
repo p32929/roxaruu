@@ -3,7 +3,7 @@
 //! emulator, scrollback and selection — is [`TerminalPane`].
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,6 +51,8 @@ impl Throttle {
 }
 
 pub struct Terminal {
+    /// Which terminal this is, while others come and go (a dialog about it).
+    pub id: u64,
     pub pane: TerminalPane,
     throttle: Arc<Throttle>,
     /// Whether this terminal is on screen; output from hidden ones doesn't
@@ -94,7 +96,9 @@ impl Terminal {
             cwd,
             Some(waker),
         )?;
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         Ok(Terminal {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             pane,
             throttle,
             visible,

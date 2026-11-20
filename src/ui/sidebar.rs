@@ -814,6 +814,9 @@ impl App {
                     crate::keymap::REVEAL_TITLE
                 },
             );
+            if !dir && !self.remote_pass {
+                item(ui, Command::OpenInDefaultApp, "Open in Default App");
+            }
             item(ui, Command::OpenInTerminal, "Open in Terminal");
             item(ui, Command::CopyPath, "Copy Path");
             item(ui, Command::CopyRelativePath, "Copy Relative Path");

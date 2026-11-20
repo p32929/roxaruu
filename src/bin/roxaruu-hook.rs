@@ -76,7 +76,12 @@ fn run_claude(args: &[OsString]) -> i32 {
         return 127;
     };
     let mut cmd = Command::new(&real);
+    use std::io::IsTerminal;
+    let terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    // Claude Code sets it in what it runs: a Claude another one started.
+    let nested = std::env::var_os("CLAUDECODE").is_some();
     if std::env::var_os("ROXARUU_TERM").is_some()
+        && interactive(args, terminal, nested)
         && let Some(h) = helper()
     {
         cmd.arg("--settings").arg(hooks(&h));
@@ -102,6 +107,20 @@ fn run_claude(args: &[OsString]) -> i32 {
             }
         }
     }
+}
+
+/// Claude Code's commands that aren't a conversation.
+const SUBCOMMANDS: &[&str] =
+    &["mcp", "config", "update", "upgrade", "doctor", "install", "setup-token", "migrate-installer", "plugin", "auth"];
+
+/// A conversation you're in gets the hooks; a script's run doesn't (`-p`, a
+/// subcommand, piped, or started by another Claude): its "finished" would
+/// be an alert nobody waits for.
+fn interactive(args: &[OsString], terminal: bool, nested: bool) -> bool {
+    let args: Vec<_> = args.iter().map(|a| a.to_string_lossy()).collect();
+    let once = |a: &str| matches!(a, "-p" | "--print" | "-v" | "--version" | "-h" | "--help");
+    let subcommand = args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| SUBCOMMANDS.contains(&a.as_ref()));
+    terminal && !nested && !subcommand && !args.iter().any(|a| once(a))
 }
 
 /// Safety: `SetConsoleCtrlHandler(None, TRUE)` only sets a flag for this
@@ -152,6 +171,16 @@ mod tests {
         assert_eq!(json["hooks"]["Stop"][0]["hooks"][0]["command"], "\"C:/Users/a b/roxaruu-hook.exe\" stop");
         assert_eq!(json["hooks"]["Notification"][0]["hooks"][0]["command"], "\"C:/Users/a b/roxaruu-hook.exe\" notification");
         assert_eq!(json["hooks"]["Stop"][0]["hooks"][0]["type"], "command");
+    }
+
+    #[test]
+    fn only_a_conversation_gets_the_hooks() {
+        let yes = |a: &[&str]| interactive(&a.iter().map(OsString::from).collect::<Vec<_>>(), true, false);
+        assert!(yes(&[]) && yes(&["--continue"]) && yes(&["fix the bug"]) && yes(&["--model", "opus", "hi"]));
+        assert!(!yes(&["-p", "hi"]) && !yes(&["--print", "hi"]) && !yes(&["--version"]));
+        assert!(!yes(&["mcp", "list"]) && !yes(&["--debug", "doctor"]) && !yes(&["update"]));
+        assert!(!interactive(&[], false, false), "piped");
+        assert!(!interactive(&[], true, true), "started by another Claude");
     }
 
     #[test]
