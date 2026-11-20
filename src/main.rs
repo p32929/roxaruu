@@ -55,8 +55,8 @@ pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const REPO: &str = "https://github.com/p32929/roxaruu";
 pub(crate) const PORTFOLIO: &str = "https://p32929.github.io/";
 
-/// The app icon (`assets/icon.svg`, rendered) at 256 px: the window's icon
-/// off macOS, the mark on the start page and About, the browser's tab. As
+/// The app icon (`assets/icon.svg`, rendered) at 256 px: the window's and
+/// the Dock's icon, the mark on the start page and About, the browser's tab. As
 /// big as it's ever drawn; the 1024 px original took 4 MB a copy, decoded.
 pub(crate) const ICON: &[u8] = include_bytes!("../assets/icon-256.png");
 
@@ -188,10 +188,10 @@ fn main() -> eframe::Result {
     } else {
         viewport = viewport.with_decorations(false);
     }
-    // macOS takes the bundle's icon and ignores this one: not decoded there.
-    if !cfg!(target_os = "macos")
-        && let Ok(icon) = eframe::icon_data::from_png_bytes(ICON)
-    {
+    // macOS too: the bundle's icon alone gets put in a grey tile in the Dock
+    // (macOS 26 does that to icons not made in its new format); this one is
+    // drawn as it is. 256 px decoded is 256 KB.
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(ICON) {
         viewport = viewport.with_icon(icon);
     }
     // Linux: who this window is (Wayland's app id, X11's WM_CLASS), so the
