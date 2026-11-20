@@ -67,11 +67,8 @@ pub enum Pick {
     CodeFont(String),
     Folder(PathBuf),
     Terminal(usize),
-    /// Recent Terminals: a window's row, opening all of its terminals.
-    Terminals(Vec<PathBuf>),
-    /// Recent Terminals: one folder; in a window's group (which, and which
-    /// row of it) or the list of every folder (`None`).
-    TerminalIn(PathBuf, Option<(usize, usize)>),
+    /// Recent Terminals: one folder.
+    TerminalIn(PathBuf),
     /// A search hit: file, line, and the match's char columns.
     Hit(PathBuf, usize, usize, usize),
     /// An entry of the to-do list (index into `App::todos`).
@@ -191,7 +188,7 @@ impl Palette {
     /// Folder…").
     pub fn set_tick(&mut self, i: usize, on: bool) {
         let Some(pick) = self.items.get(i).map(|it| it.pick.clone()) else { return };
-        if !matches!(pick, Pick::Clip(_) | Pick::Folder(_) | Pick::TerminalIn(..)) {
+        if !matches!(pick, Pick::Clip(_) | Pick::Folder(_) | Pick::TerminalIn(_)) {
             return;
         }
         self.ticked.retain(|t| *t != pick);

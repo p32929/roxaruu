@@ -3084,78 +3084,81 @@ fn headless_open_several_folders() {
     shot(&mut h, "o3-opened");
 }
 
-/// Recent Terminals: each window's terminals (its row, then its folders A to
-/// Z), then every folder; ticks are numbered and open in that order, side by
-/// side and maximized, here when this window has nothing open; a window's
-/// row opens all of its terminals, in a new window once this one has some.
+/// Recent Terminals: every folder a terminal was in, once, newest first or
+/// A to Z (⌘S, remembered). Ticks are numbered and open in that order, side
+/// by side and maximized, here when this window has nothing open, else in a
+/// new window.
 #[test]
 #[ignore]
 fn headless_recent_terminals() {
     use crate::palette::Pick;
-    use crate::recent::{Group, record_terminals, terminal_groups};
+    use crate::recent::{record_terminals, terminal_folders};
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().canonicalize().unwrap();
     let [api, infra, web, scripts] = ["api", "infra", "web", "scripts"].map(|n| base.join(n));
     for d in [&api, &infra, &web, &scripts] {
         std::fs::create_dir_all(d).unwrap();
     }
-    let _ = std::fs::remove_file(crate::config::state_dir().unwrap().join("terminals.json"));
-    let now = crate::update::now();
-    let group = |window: &str, name: &str, at, dirs: &[&std::path::PathBuf]| Group {
-        window: window.into(),
-        name: name.into(),
-        at,
-        dirs: dirs.iter().map(|d| d.to_path_buf()).collect(),
-    };
-    record_terminals(group("old", "", now - 90_000, &[&scripts]));
-    record_terminals(group("shop", "shop", now - 600, &[&web, &api, &infra]));
+    let _ = std::fs::remove_file(crate::config::state_dir().unwrap().join("terminal-folders.json"));
+    // Before any: its key is in the status bar with no terminal open, and
+    // the list says what it's for, with the way to start.
+    {
+        let mut h = harness(None);
+        assert!(app(&h).status_hints().iter().any(|(_, _, c)| *c == Some(crate::keymap::Command::RecentTerminals)));
+        press(&mut h, ALT, Key::R);
+        let items = &app(&h).palette.as_ref().unwrap().items;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].pick, Pick::Command(crate::keymap::Command::NewTerminal));
+        shot(&mut h, "rt0-empty");
+    }
+    record_terminals(std::slice::from_ref(&scripts));
+    record_terminals(&[web.clone(), api.clone(), infra.clone(), web.clone()]);
 
     let mut h = harness(None);
     press(&mut h, ALT, Key::R);
-    let rows = |h: &Harness<'static, Root>| -> Vec<(String, String)> {
-        app(h).palette.as_ref().unwrap().items.iter().map(|i| (i.label.clone(), i.detail.clone())).collect()
+    let labels = |h: &Harness<'static, Root>| -> Vec<String> {
+        app(h).palette.as_ref().unwrap().items.iter().map(|i| i.label.clone()).collect()
     };
-    let labels: Vec<String> = rows(&h).into_iter().map(|r| r.0).collect();
-    assert_eq!(labels, ["shop", "api", "infra", "web", "(no project)", "scripts", "web", "api", "infra", "scripts"]);
-    assert_eq!(rows(&h)[0].1, "3 terminals · 10 min ago");
-    assert!(rows(&h)[9].1.ends_with("yesterday"), "{:?}", rows(&h)[9]);
+    assert_eq!(labels(&h), ["web", "api", "infra", "scripts"], "newest first, each once");
+    assert!(app(&h).palette.as_ref().unwrap().items[0].detail.ends_with("just now"));
+    // ⌘S: A to Z, and it stays so.
+    press(&mut h, Modifiers::COMMAND, Key::S);
+    assert_eq!(labels(&h), ["api", "infra", "scripts", "web"]);
+    assert!(app(&h).config.settings.recent_terminals_by_name);
+    assert!(app(&h).palette.is_some(), "still open");
 
     // Ticked: numbered in that order, whatever the rows' order.
-    for row in [3, 1, 5] {
+    for row in [3, 0, 2] {
         h.state_mut().0.palette.as_mut().unwrap().selected = row;
         press(&mut h, Modifiers::NONE, Key::Space);
     }
     let p = app(&h).palette.as_ref().unwrap();
-    assert_eq!([3, 1, 5].map(|r| p.tick_number(r)), [Some(1), Some(2), Some(3)]);
-    assert!(!p.is_ticked(0), "a window's row isn't ticked");
+    assert_eq!([3, 0, 2].map(|r| p.tick_number(r)), [Some(1), Some(2), Some(3)]);
     shot(&mut h, "rt1-ticked");
+    // Sorting again keeps the ticks.
+    press(&mut h, Modifiers::COMMAND, Key::S);
+    assert_eq!(labels(&h), ["web", "api", "infra", "scripts"]);
+    assert_eq!(app(&h).ticked().len(), 3);
     press(&mut h, Modifiers::NONE, Key::Enter);
     assert!(app(&h).palette.is_none());
     let dirs: Vec<_> = app(&h).terminals.iter().map(|t| t.pane.dir.clone()).collect();
     assert_eq!(dirs, [web.clone(), api.clone(), scripts.clone()], "here, in the ticked order");
     assert!(app(&h).terminal_grid && app(&h).terminal_max && app(&h).terminal_focused());
     shot(&mut h, "rt2-opened");
-    // This window's terminals are kept, first.
     h.step();
-    let saved = terminal_groups();
-    assert_eq!((saved[0].name.as_str(), &saved[0].dirs), ("", &dirs));
+    assert_eq!(terminal_folders().len(), 4, "still each folder once");
 
-    // From the terminal: its key opens the list; this window first now. A
-    // window's row: all of its terminals, A to Z, in a new window (this
-    // one has some).
+    // This window has terminals now: the chosen one opens in a new window.
     press(&mut h, ALT, Key::R);
-    assert_eq!(rows(&h)[0].1, "3 terminals · this window");
-    let shop = rows(&h).iter().position(|r| r.0 == "shop").unwrap();
-    h.state_mut().0.palette.as_mut().unwrap().selected = shop;
-    assert!(matches!(app(&h).palette.as_ref().unwrap().selected_pick(), Some(Pick::Terminals(_))));
+    let infra_row = labels(&h).iter().position(|l| l == "infra").unwrap();
+    h.state_mut().0.palette.as_mut().unwrap().selected = infra_row;
     App::take_launched();
     press(&mut h, Modifiers::NONE, Key::Enter);
-    let s = |p: &std::path::PathBuf| p.to_string_lossy().into_owned();
     assert_eq!(
         App::take_launched(),
-        [vec!["new window".to_string(), "--terminal".into(), s(&api), "--terminal".into(), s(&infra), "--terminal".into(), s(&web)]]
+        [vec!["new window".to_string(), "--terminal".into(), infra.to_string_lossy().into_owned()]]
     );
-    assert!(app(&h).toasts.iter().any(|t| t.msg == "Opened 3 terminals in a new window"));
+    assert!(app(&h).toasts.iter().any(|t| t.msg == "Opened 1 terminal in a new window"));
     assert_eq!(app(&h).terminals.len(), 3, "this window keeps its own");
 }
 

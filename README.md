@@ -27,7 +27,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 3. Each tab says what its program is doing: printing, running, or gone quiet (maybe stuck, maybe waiting for you).
 4. Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else (a conversation, not a script's `claude -p`).
 5. Closing a terminal that's still running something asks first.
-6. **Alt+R** (**⌥R** on a Mac) lists your recent terminals: each window's, then every folder. Tick the ones you want, numbered in the order they'll open, and they open side by side, filling the window; a window's row opens all of its terminals again.
+6. **Alt+R** (**⌥R** on a Mac) lists every folder you've opened a terminal in, newest first (**Ctrl+S** / **⌘S** sorts them by name instead). Select the ones you want, numbered in the order they'll open, and a terminal opens in each, side by side, filling the window.
 
 **Editor**
 1. Syntax highlighting for 23 languages, tabs, split view, find and replace, go to line, go to file, search across the whole project.

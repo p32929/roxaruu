@@ -1,5 +1,5 @@
 //! Recently opened folders, newest first, one path per line; and the
-//! folders each window's terminals were in (Recent Terminals).
+//! folders terminals were in (Recent Terminals).
 
 use std::path::{Path, PathBuf};
 
@@ -48,46 +48,22 @@ fn record_to(path: &Path, folder: &Path) {
     let _ = std::fs::write(path, body.join("\n"));
 }
 
-/// One window's terminals: the folders they were in when they last changed.
-#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
-pub struct Group {
-    /// Which window, so it keeps one entry while it changes.
-    pub window: String,
-    /// Its project's name; empty without one.
-    pub name: String,
-    /// When, in seconds since 1970.
-    pub at: u64,
-    /// In the terminals' order.
-    pub dirs: Vec<PathBuf>,
-}
-
 fn terminals_file() -> Option<PathBuf> {
-    crate::config::state_dir().map(|d| d.join("terminals.json"))
+    crate::config::state_dir().map(|d| d.join("terminal-folders.json"))
 }
 
-/// Save this window's terminals, first in the list. Silent on I/O errors.
-pub fn record_terminals(group: Group) {
+/// The folders terminals were in (Recent Terminals): `dirs` move to the
+/// front, as used now. Silent on I/O errors.
+pub fn record_terminals(dirs: &[PathBuf]) {
     if let Some(path) = terminals_file() {
-        record_group_to(&path, group);
+        record_folders_to(&path, dirs, crate::update::now());
     }
 }
 
-/// The windows' terminals, newest first, without folders that are gone.
-pub fn terminal_groups() -> Vec<Group> {
-    terminals_file().map(|p| groups_from(&p)).unwrap_or_default()
-}
-
-/// Every folder in `groups` once, with when it was last used, newest first.
-pub fn terminal_folders(groups: &[Group]) -> Vec<(PathBuf, u64)> {
-    let mut out: Vec<(PathBuf, u64)> = Vec::new();
-    for g in groups {
-        for d in &g.dirs {
-            if !out.iter().any(|(o, _)| o == d) {
-                out.push((d.clone(), g.at));
-            }
-        }
-    }
-    out
+/// Every folder a terminal was in, with when (seconds since 1970), newest
+/// first, without those that are gone.
+pub fn terminal_folders() -> Vec<(PathBuf, u64)> {
+    terminals_file().map(|p| folders_from(&p)).unwrap_or_default()
 }
 
 /// "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago".
@@ -101,25 +77,28 @@ pub fn ago(secs: u64) -> String {
     }
 }
 
-fn groups_from(path: &Path) -> Vec<Group> {
+fn folders_from(path: &Path) -> Vec<(PathBuf, u64)> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
-    let mut groups: Vec<Group> = serde_json::from_str(&text).unwrap_or_default();
-    for g in &mut groups {
-        g.dirs.retain(|d| d.is_dir());
-    }
-    groups.retain(|g| !g.dirs.is_empty());
-    groups
+    let mut list: Vec<(PathBuf, u64)> = serde_json::from_str(&text).unwrap_or_default();
+    list.retain(|(d, _)| d.is_dir());
+    list
 }
 
 // ponytail: windows writing at the same moment can lose one's update; it's
 // written again at its next change.
-fn record_group_to(path: &Path, group: Group) {
-    let mut list = groups_from(path);
-    list.retain(|g| g.window != group.window);
-    list.insert(0, group);
-    list.truncate(MAX);
+fn record_folders_to(path: &Path, dirs: &[PathBuf], at: u64) {
+    let mut list = folders_from(path);
+    list.retain(|(d, _)| !dirs.contains(d));
+    let mut now: Vec<(PathBuf, u64)> = Vec::new();
+    for d in dirs {
+        if !now.iter().any(|(n, _)| n == d) {
+            now.push((d.clone(), at));
+        }
+    }
+    list.splice(0..0, now);
+    list.truncate(TERMINALS_MAX);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -127,6 +106,8 @@ fn record_group_to(path: &Path, group: Group) {
         let _ = std::fs::write(path, json);
     }
 }
+
+const TERMINALS_MAX: usize = 50;
 
 #[cfg(test)]
 mod tests {
@@ -148,30 +129,19 @@ mod tests {
     }
 
     #[test]
-    fn terminal_groups_one_per_window_newest_first() {
+    fn terminal_folders_once_each_newest_first() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
-        std::fs::create_dir(&a).unwrap();
-        std::fs::create_dir(&b).unwrap();
-        let file = dir.path().join("terminals.json");
-        let g = |window: &str, at, dirs: &[&PathBuf]| Group {
-            window: window.into(),
-            name: String::new(),
-            at,
-            dirs: dirs.iter().map(|d| d.to_path_buf()).collect(),
-        };
-        record_group_to(&file, g("w1", 1, &[&a]));
-        record_group_to(&file, g("w2", 2, &[&b, &a]));
-        record_group_to(&file, g("w1", 3, &[&a, &b]));
-        let groups = groups_from(&file);
-        assert_eq!(groups.iter().map(|g| g.window.as_str()).collect::<Vec<_>>(), ["w1", "w2"]);
-        assert_eq!(terminal_folders(&groups), [(a.clone(), 3), (b.clone(), 3)]);
-        // A folder that's gone is left out, and a window left with none.
+        let [a, b, c] = ["a", "b", "c"].map(|n| dir.path().join(n));
+        for d in [&a, &b, &c] {
+            std::fs::create_dir(d).unwrap();
+        }
+        let file = dir.path().join("terminal-folders.json");
+        record_folders_to(&file, std::slice::from_ref(&a), 1);
+        record_folders_to(&file, &[b.clone(), c.clone(), b.clone()], 2);
+        record_folders_to(&file, std::slice::from_ref(&a), 3);
+        assert_eq!(folders_from(&file), [(a.clone(), 3), (b.clone(), 2), (c.clone(), 2)]);
         std::fs::remove_dir(&b).unwrap();
-        record_group_to(&file, g("w3", 4, &[&b]));
-        let groups = groups_from(&file);
-        assert_eq!(groups.iter().map(|g| g.window.as_str()).collect::<Vec<_>>(), ["w1", "w2"]);
-        assert_eq!(groups[0].dirs, [a]);
+        assert_eq!(folders_from(&file), [(a, 3), (c, 2)], "a folder that's gone is left out");
     }
 
     #[test]

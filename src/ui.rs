@@ -2423,6 +2423,7 @@ impl App {
                     .and_then(|(c, what)| cmd(c, what))
                     .or_else(|| cmd(Command::ToggleTerminal, "open")),
                 cmd(Command::MaximizeTerminal, "open maximized"),
+                cmd(Command::RecentTerminals, "recent"),
             ]
         } else {
             vec![
@@ -2430,6 +2431,7 @@ impl App {
                 self.focus_hint(Focus::Terminal).and_then(|(c, what)| cmd(c, what)),
                 cmd(Command::ToggleTerminal, if shown { "hide" } else { "show" }),
                 cmd(Command::MaximizeTerminal, if shown { "maximize" } else { "show maximized" }).filter(|_| !self.terminal_max),
+                cmd(Command::RecentTerminals, "recent"),
                 cmd(Command::NewTerminal, "new").filter(|_| !shown || self.view().short),
             ]
         };
@@ -4162,7 +4164,7 @@ impl App {
             Stroke::new(1.0, c.border),
         );
 
-        let buttons: [(&str, &str, Command); 4] = [
+        let buttons: [(&str, &str, Command); 5] = [
             (
                 icon::CHEVRON_DOWN,
                 "Hide terminals",
@@ -4174,11 +4176,12 @@ impl App {
                 } else {
                     icon::MAXIMIZE
                 },
-                "Maximize / restore",
+                if self.terminal_max { "Restore size" } else { "Maximize" },
                 Command::MaximizeTerminal,
             ),
-            (icon::GRID, "Grid / tabs", Command::ToggleTerminalGrid),
+            (icon::GRID, if self.terminal_grid { "Show as tabs" } else { "Show side by side" }, Command::ToggleTerminalGrid),
             (icon::ADD, "New terminal", Command::NewTerminal),
+            (icon::HISTORY, "Recent terminals", Command::RecentTerminals),
         ];
         let mut run = None;
         let mut bx = head.right() - 6.0 * s - btn / 2.0;
@@ -4940,6 +4943,9 @@ impl App {
                     return true;
                 }
             }
+            Mode::RecentTerminals if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::S)) => {
+                self.sort_recent_terminals(ctx)
+            }
             Mode::Clipboard => {
                 let clear = ctx.input_mut(|i| empty && i.consume_key(Modifiers::COMMAND, Key::Backspace));
                 if clear {
@@ -5334,8 +5340,9 @@ impl App {
             Some(Mode::RecentTerminals) => (
                 "Recent terminals",
                 vec![
-                    ("↵", "Open side by side: the selected ones in their order, else this row (a window's row opens all its terminals)"),
-                    ("space  ⇥", "Select terminals, numbered in the order they'll open"),
+                    ("↵", "Open a terminal in each, side by side: the selected ones in their order, else this row"),
+                    ("space  ⇥", "Select folders, numbered in the order they'll open"),
+                    ("⌘S", "Sort by name, or by when last used"),
                     ("⇧↑  ⇧↓", "Select a range of them"),
                     ("⌘-click  ⇧-click", "Select one, or a range"),
                 ],
@@ -5791,8 +5798,7 @@ impl App {
                         &item.detail,
                         caps,
                         &[],
-                        // A window's terminals sit under its row.
-                        if matches!(item.pick, Pick::TerminalIn(_, Some(_))) { 22.0 * s } else { 0.0 },
+                        0.0,
                     );
                 }
 
@@ -5913,9 +5919,10 @@ impl App {
             Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to terminal"), esc],
             Mode::RecentTerminals => vec![
                 (k("↑ ↓"), "move"),
-                (k("↵"), if self.ticked().is_empty() { "open terminals" } else { "open selected, in order" }),
+                (k("↵"), if self.ticked().is_empty() { "open" } else { "open selected, in order" }),
                 (k("space ⇥"), "select (numbered in opening order)"),
                 (k("⇧↑ ⇧↓"), "select a range"),
+                (k("⌘S"), if self.config.settings.recent_terminals_by_name { "sort by date" } else { "sort by name" }),
                 esc,
             ],
             Mode::Links => vec![(k("↑ ↓"), "move"), (k("↵"), "open in browser"), esc],

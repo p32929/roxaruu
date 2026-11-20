@@ -247,9 +247,7 @@ pub struct App {
     pub terminal_grid: bool,
     /// The terminal panel fills the window (the editor steps aside).
     pub terminal_max: bool,
-    /// This window in Recent Terminals, and its terminals' folders as last
-    /// saved there.
-    window_id: String,
+    /// This window's terminals' folders as last saved in Recent Terminals.
     terms_saved: Vec<PathBuf>,
     /// All open files tiled side by side (split view).
     pub editor_grid: bool,
@@ -328,7 +326,6 @@ impl App {
             active_terminal: 0,
             terminal_grid: false,
             terminal_max: false,
-            window_id: window_id(),
             terms_saved: Vec::new(),
             editor_grid: false,
             throttle: Throttle::new(60),
@@ -2383,49 +2380,41 @@ impl App {
             .collect()
     }
 
-    /// Recent Terminals: each window's terminals (its row, then its folders
-    /// A to Z), newest window first; then every folder, newest first.
+    /// Recent Terminals: every folder a terminal was in, once, newest
+    /// first or A to Z (⌘S, remembered).
     fn recent_terminal_items(&self, query: &str) -> Vec<Item> {
-        let groups = crate::recent::terminal_groups();
+        let mut folders = crate::recent::terminal_folders();
+        // Nothing yet: what the list is for, and the way to start.
+        if folders.is_empty() && query.is_empty() {
+            return vec![Item {
+                caps: self.config.keymap.combo_for(Command::NewTerminal).map(|k| k.caps()).unwrap_or_default(),
+                ..Item::new(icon::ADD, "New Terminal", Pick::Command(Command::NewTerminal))
+                    .detail("nothing here yet: the folders you open terminals in are kept here, to open again")
+            }];
+        }
+        if self.config.settings.recent_terminals_by_name {
+            folders.sort_by_cached_key(|(d, _)| (display_name(d).to_lowercase(), d.clone()));
+        }
         let now = crate::update::now();
-        let hit = |d: &PathBuf| fuzzy::score(query, &display_name(d)).is_some() || fuzzy::score(query, &d.to_string_lossy()).is_some();
-        let folder = |d: &PathBuf, detail: String, at| Item {
-            matched: fuzzy::positions(query, &display_name(d)),
-            ..Item::new(icon::FOLDER, display_name(d), Pick::TerminalIn(d.clone(), at)).detail(detail)
-        };
-        let mut items = Vec::new();
-        for (g, group) in groups.iter().enumerate() {
-            let mut dirs = group.dirs.clone();
-            dirs.sort_by_key(|d| display_name(d).to_lowercase());
-            let name = if group.name.is_empty() { "(no project)" } else { &group.name };
-            // Its name matching shows all of it; else the folders that match.
-            let all = fuzzy::score(query, name).is_some();
-            let rows: Vec<(usize, &PathBuf)> = dirs.iter().enumerate().filter(|(_, d)| all || hit(d)).collect();
-            if rows.is_empty() {
-                continue;
-            }
-            let when = if group.window == self.window_id {
-                "this window".to_string()
-            } else {
-                crate::recent::ago(now.saturating_sub(group.at))
-            };
-            let n = dirs.len();
-            items.push(Item {
-                matched: fuzzy::positions(query, name),
-                ..Item::new(icon::TERMINAL, name, Pick::Terminals(dirs.clone()))
-                    .detail(format!("{n} terminal{} · {when}", if n == 1 { "" } else { "s" }))
-            });
-            for (m, d) in rows {
-                items.push(folder(d, crate::ui::tilde(&d.to_string_lossy()), Some((g, m))));
-            }
-        }
-        for (d, at) in crate::recent::terminal_folders(&groups) {
-            if hit(&d) {
+        folders
+            .into_iter()
+            .filter(|(d, _)| fuzzy::score(query, &display_name(d)).is_some() || fuzzy::score(query, &d.to_string_lossy()).is_some())
+            .map(|(d, at)| {
                 let detail = format!("{}  ·  {}", crate::ui::tilde(&d.to_string_lossy()), crate::recent::ago(now.saturating_sub(at)));
-                items.push(folder(&d, detail, None));
-            }
-        }
-        items
+                Item {
+                    matched: fuzzy::positions(query, &display_name(&d)),
+                    ..Item::new(icon::FOLDER, display_name(&d), Pick::TerminalIn(d.clone())).detail(detail)
+                }
+            })
+            .collect()
+    }
+
+    /// Recent Terminals' ⌘S: sort by name, or by when, and keep that.
+    pub(crate) fn sort_recent_terminals(&mut self, ctx: &egui::Context) {
+        let by_name = !self.config.settings.recent_terminals_by_name;
+        self.config.settings.recent_terminals_by_name = by_name;
+        self.save_choice_quietly("recentTerminalsByName", by_name, ctx);
+        self.refresh_items();
     }
 
     /// Recent Terminals: a terminal in each of `dirs`, in that order, side
@@ -2460,12 +2449,7 @@ impl App {
         if dirs.is_empty() || (!closing && dirs == self.terms_saved) {
             return;
         }
-        crate::recent::record_terminals(crate::recent::Group {
-            window: self.window_id.clone(),
-            name: self.project.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
-            at: crate::update::now(),
-            dirs: dirs.clone(),
-        });
+        crate::recent::record_terminals(&dirs);
         self.terms_saved = dirs;
     }
 
@@ -2594,19 +2578,15 @@ impl App {
                 self.active_terminal = i.min(self.terminals.len().saturating_sub(1));
                 self.show_terminals(ctx);
             }
-            Pick::Terminals(_) | Pick::TerminalIn(..) => {
+            Pick::TerminalIn(dir) => {
                 // The ticked ones, in ticking order, if any; else the row chosen.
                 let mut dirs: Vec<PathBuf> = self
                     .ticked()
                     .into_iter()
-                    .filter_map(|t| if let Pick::TerminalIn(d, _) = t { Some(d) } else { None })
+                    .filter_map(|t| if let Pick::TerminalIn(d) = t { Some(d) } else { None })
                     .collect();
                 if dirs.is_empty() {
-                    dirs = match pick {
-                        Pick::Terminals(all) => all,
-                        Pick::TerminalIn(d, _) => vec![d],
-                        _ => Vec::new(),
-                    };
+                    dirs.push(dir);
                 }
                 self.close_palette(true, ctx);
                 self.open_terminals(dirs, ctx);
@@ -2779,14 +2759,6 @@ fn folder_items(query: &str) -> Vec<Item> {
 }
 
 /// Maximize the window, or restore it (the title bar's double-click).
-/// This window's name in Recent Terminals: its process and when it
-/// started, and a count (tests run several in one process).
-fn window_id() -> String {
-    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{}-{}-{n}", std::process::id(), crate::update::now())
-}
-
 pub fn toggle_maximized(ctx: &egui::Context) {
     let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
     ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
