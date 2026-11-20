@@ -120,6 +120,10 @@ pub struct Tab {
     spans_from: usize,
     spans_rev: Option<u64>,
     job: Option<(u64, usize, Receiver<Vec<LineSpans>>)>,
+    /// While it's being edited, its syntax tree, so a keystroke colours just
+    /// the piece it's in (`syntax::Incremental`). Dropped once you're done
+    /// with it (`forget_parse`): it costs memory.
+    inc: Option<syntax::Incremental>,
     /// Widest line in display columns, for horizontal scrolling.
     pub max_cols: usize,
     cols_rev: Option<u64>,
@@ -159,6 +163,7 @@ impl Tab {
             spans_from: 0,
             spans_rev: None,
             job: None,
+            inc: None,
             max_cols: 0,
             cols_rev: None,
             scroll: [egui::Vec2::ZERO; 2],
@@ -263,6 +268,7 @@ impl Tab {
     pub fn invalidate_highlight(&mut self) {
         self.spans_rev = None;
         self.job = None;
+        self.inc = None;
         if let Some(h) = &mut self.huge {
             h.spans = None;
         }
@@ -406,7 +412,19 @@ impl Tab {
             b.rope.slice(at(want.start)..at(want.end)).to_string()
         };
         if lines <= SYNC_HIGHLIGHT_LINES || ctx.is_none() {
-            self.spans = syntax::highlight(&text(&self.buf), lang).spans;
+            let text = text(&self.buf);
+            // An edit to a file coloured whole: just the piece it's in, from
+            // the second keystroke on (the first keeps the syntax tree).
+            let edited = whole && self.spans_rev.is_some() && self.spans_from == 0;
+            match &mut self.inc {
+                Some(inc) if edited && lang.is_some_and(|l| std::ptr::eq(l, inc.lang)) => {
+                    inc.update(text, &mut self.spans);
+                }
+                _ => {
+                    self.spans = syntax::highlight(&text, lang).spans;
+                    self.inc = lang.filter(|_| edited).and_then(|l| syntax::Incremental::new(l, text));
+                }
+            }
             self.spans_from = want.start;
             self.spans_rev = Some(rev);
             return;
@@ -524,6 +542,18 @@ impl Tab {
     pub fn edited(&mut self) {
         self.last_edit = Instant::now();
         self.reveal = true;
+    }
+
+    /// Done editing it (another tab in front, or a minute without typing):
+    /// let its syntax tree go.
+    pub fn forget_parse(&mut self) {
+        self.inc = None;
+    }
+
+    /// Whether it holds a syntax tree for editing (`inc`), for tests.
+    #[cfg(test)]
+    pub fn parse_kept(&self) -> bool {
+        self.inc.is_some()
     }
 
     /// Apply this frame's typing and caret keys. `page` is rows per screen.
@@ -668,6 +698,25 @@ mod tests {
             repeat: false,
             modifiers,
         }
+    }
+
+    /// Typing in a file keeps its syntax tree and colours just the piece
+    /// it's in, as the whole file would be; done with it, the tree goes.
+    #[test]
+    fn typing_colours_its_piece_and_lets_the_tree_go() {
+        let src = "fn a() {\n    let x = 1;\n}\n\nfn b() {\n    let y = \"s\";\n}\n";
+        let (_d, mut t) = tab(src);
+        t.refresh(None);
+        assert!(!t.parse_kept(), "opening a file keeps no tree");
+        for c in ["q", "u", "x", " ", "=", " ", "2", ";"] {
+            t.input(&[Event::Text(c.into())], 10);
+            t.refresh(None);
+            let whole = crate::syntax::highlight(&t.buf.rope.to_string(), t.buf.lang).spans;
+            assert_eq!((0..t.line_count()).map(|l| t.line_spans(l).to_vec()).collect::<Vec<_>>(), whole);
+        }
+        assert!(t.parse_kept(), "kept while typing");
+        t.forget_parse();
+        assert!(!t.parse_kept());
     }
 
     #[test]

@@ -497,6 +497,157 @@ fn spans_for(lang: &'static Lang, source: &str) -> Option<Vec<LineSpans>> {
     Some(out)
 }
 
+/// The pieces of a language that colour the same alone as in their file
+/// (no rule looks outside them), so typing in one re-colours just it.
+/// Languages whose rules follow names across the file (`locals` queries:
+/// JavaScript, TypeScript, Swift, Ruby, Lua) aren't here, nor any that
+/// `incremental_matches_whole_file` finds colouring differently (C#: a
+/// half-typed line can recolour the lines above its piece): they're
+/// coloured whole, as before.
+fn units(lang: &Lang) -> &'static [&'static str] {
+    match lang.id {
+        "rust" => &[
+            "function_item",
+            "impl_item",
+            "struct_item",
+            "enum_item",
+            "trait_item",
+            "mod_item",
+            "const_item",
+            "static_item",
+            "macro_definition",
+            "type_item",
+            "use_declaration",
+        ],
+        "go" => &["function_declaration", "method_declaration", "type_declaration"],
+        "c" => &["function_definition"],
+        "cpp" => &["function_definition"],
+        "java" => &["method_declaration", "constructor_declaration", "class_declaration"],
+        "css" => &["rule_set", "media_statement"],
+        _ => &[],
+    }
+}
+
+/// Highlighting kept up to date as a file is edited: its syntax tree is
+/// re-parsed only where it changed, and only the smallest piece around the
+/// change (a function, a block: `units`) is coloured again; the rest keeps
+/// its colours. Anything else (a language without `units`, a change that
+/// isn't inside one, code that doesn't parse there) is coloured whole.
+pub struct Incremental {
+    pub lang: &'static Lang,
+    parser: tree_sitter::Parser,
+    tree: tree_sitter::Tree,
+    text: String,
+}
+
+impl Incremental {
+    /// For `text` in `lang`, if `lang` can be coloured piece by piece.
+    pub fn new(lang: &'static Lang, text: String) -> Option<Incremental> {
+        if units(lang).is_empty() {
+            return None;
+        }
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&config(lang)?.language).ok()?;
+        let tree = parser.parse(&text, None)?;
+        Some(Incremental { lang, parser, tree, text })
+    }
+
+    /// The file is `text` now: bring `spans` (this file's, as it was) up to
+    /// date with it. True when just a piece was coloured again.
+    pub fn update(&mut self, text: String, spans: &mut Vec<LineSpans>) -> bool {
+        let old = std::mem::replace(&mut self.text, text);
+        if old == self.text && spans.len() == self.text.split('\n').count() {
+            return true;
+        }
+        let piece = self.update_piece(&old, spans);
+        if !piece {
+            *spans = highlight(&self.text, Some(self.lang)).spans;
+            if let Some(tree) = self.parser.parse(&self.text, None) {
+                self.tree = tree;
+            }
+        }
+        piece
+    }
+
+    /// `update` for one piece; false when the file must be coloured whole.
+    fn update_piece(&mut self, old: &str, spans: &mut Vec<LineSpans>) -> bool {
+        let new = self.text.as_str();
+        if spans.len() != old.split('\n').count() {
+            return false;
+        }
+        // What changed: the bytes between what's the same at both ends.
+        let (ob, nb) = (old.as_bytes(), new.as_bytes());
+        let mut start = ob.iter().zip(nb).take_while(|(a, b)| a == b).count();
+        while !new.is_char_boundary(start) || !old.is_char_boundary(start) {
+            start -= 1;
+        }
+        let room = ob.len().min(nb.len()) - start;
+        let mut same_end = ob.iter().rev().zip(nb.iter().rev()).take(room).take_while(|(a, b)| a == b).count();
+        while !new.is_char_boundary(nb.len() - same_end) || !old.is_char_boundary(ob.len() - same_end) {
+            same_end -= 1;
+        }
+        let (old_end, new_end) = (ob.len() - same_end, nb.len() - same_end);
+        let point = |s: &str, at: usize| {
+            let before = s.get(..at).unwrap_or_default();
+            let row = before.matches('\n').count();
+            tree_sitter::Point::new(row, at - before.rfind('\n').map_or(0, |i| i + 1))
+        };
+        self.tree.edit(&tree_sitter::InputEdit {
+            start_byte: start,
+            old_end_byte: old_end,
+            new_end_byte: new_end,
+            start_position: point(old, start),
+            old_end_position: point(old, old_end),
+            new_end_position: point(new, new_end),
+        });
+        let Some(tree) = self.parser.parse(new, Some(&self.tree)) else { return false };
+        // Where the syntax changed too (a `"` opened can change what follows).
+        let (mut a, mut b) = (start, new_end);
+        for r in self.tree.changed_ranges(&tree) {
+            a = a.min(r.start_byte);
+            b = b.max(r.end_byte);
+        }
+        self.tree = tree;
+        let Some(unit) = self.unit(a, b) else { return false };
+        // Its lines, coloured alone, in place of theirs.
+        let (first, last) = (unit.start_position().row, unit.end_position().row);
+        let line_start = |row: usize| {
+            if row == 0 { 0 } else { new.match_indices('\n').nth(row - 1).map_or(new.len(), |(i, _)| i + 1) }
+        };
+        let (from, to) = (line_start(first), line_start(last + 1));
+        let Some(piece) = new.get(from..to) else { return false };
+        let piece = piece.strip_suffix('\n').unwrap_or(piece);
+        let Some(colored) = spans_for(self.lang, piece) else { return false };
+        let new_lines = new.split('\n').count();
+        let Some(old_last) = (last + spans.len()).checked_sub(new_lines) else { return false };
+        if colored.len() != last - first + 1 || old_last + 1 < first || old_last >= spans.len() {
+            return false;
+        }
+        spans.splice(first..=old_last, colored);
+        spans.len() == new_lines
+    }
+
+    /// The smallest piece around bytes `a..b` that colours alone: one of
+    /// `units`, on lines of its own, that parsed cleanly.
+    fn unit(&self, a: usize, b: usize) -> Option<tree_sitter::Node<'_>> {
+        let text = self.text.as_str();
+        let kinds = units(self.lang);
+        let own_lines = |n: &tree_sitter::Node| {
+            let (Some(before), Some(after)) = (text.get(..n.start_byte()), text.get(n.end_byte()..)) else { return false };
+            let lead = before.rsplit('\n').next().unwrap_or_default();
+            let tail = after.split('\n').next().unwrap_or_default();
+            lead.trim().is_empty() && tail.trim().is_empty()
+        };
+        let mut node = self.tree.root_node().descendant_for_byte_range(a, b)?;
+        loop {
+            if node.start_byte() <= a && b <= node.end_byte() && kinds.contains(&node.kind()) && own_lines(&node) {
+                return Some(node);
+            }
+            node = node.parent()?;
+        }
+    }
+}
+
 /// TypeScript's highlights are an addition to JavaScript's.
 fn typescript(language: impl Into<tree_sitter::Language>) -> Grammar {
     let highlights = format!(
@@ -510,6 +661,100 @@ fn typescript(language: impl Into<tree_sitter::Language>) -> Grammar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Colouring piece by piece (`Incremental`) gives exactly what
+    /// colouring the whole file does, after every kind of edit, one after
+    /// another (as typing goes): letters, new lines, an opened brace,
+    /// quote or comment, a deleted character or line, a pasted block, undo.
+    #[test]
+    fn incremental_matches_whole_file() {
+        let samples: &[(&str, &str)] = &[
+            ("x.rs", include_str!("editor.rs")),
+            ("x.rs", include_str!("keymap.rs")),
+            ("x.rs", include_str!("fuzzy.rs")),
+            ("x.go", "package main\n\nimport \"fmt\"\n\ntype Point struct {\n\tX, Y int\n}\n\nfunc (p Point) Sum() int {\n\treturn p.X + p.Y // add\n}\n\nfunc main() {\n\tp := Point{1, 2}\n\tfmt.Println(\"sum\", p.Sum())\n\tfor i := 0; i < 3; i++ {\n\t\tfmt.Println(i)\n\t}\n}\n"),
+            ("x.c", "#include <stdio.h>\n\nstatic int add(int a, int b) {\n    return a + b; /* sum */\n}\n\nint main(void) {\n    char *s = \"hi\";\n    for (int i = 0; i < 3; i++) {\n        printf(\"%s %d\\n\", s, add(i, 1));\n    }\n    return 0;\n}\n"),
+            ("x.cpp", "#include <vector>\n\nnamespace app {\nclass Box {\npublic:\n    int size() const { return n; }\nprivate:\n    int n = 0;\n};\n\nint total(const std::vector<int>& v) {\n    int t = 0;\n    for (auto x : v) { t += x; }\n    return t; // done\n}\n}\n"),
+            ("x.java", "package a;\n\nimport java.util.List;\n\npublic class Shop {\n    private int count = 0;\n\n    public Shop(int c) {\n        this.count = c;\n    }\n\n    public String name() {\n        return \"shop\" + count; // label\n    }\n\n    static int sum(List<Integer> xs) {\n        int t = 0;\n        for (int x : xs) t += x;\n        return t;\n    }\n}\n"),
+            // Coloured whole (no `units`): checked all the same.
+            ("x.cs", "using System;\n\nnamespace App {\n    public class Shop {\n        private int count = 0;\n\n        public Shop(int c) {\n            count = c;\n        }\n\n        public string Name() {\n            return $\"shop {count}\"; // label\n        }\n    }\n}\n"),
+            ("x.css", "body {\n  margin: 0;\n  color: #333;\n}\n\n@media (max-width: 600px) {\n  .a { display: none; }\n}\n\n.b:hover {\n  color: red; /* hot */\n}\n"),
+        ];
+        let edits: &[&str] = &["x", "\n", "{", "\"", "/*", "//", "fn a() {}\n", "}", "'", "#"];
+        for (file, text) in samples {
+            let lang = Lang::detect(Path::new(file)).unwrap();
+            let mut text = text.to_string();
+            let mut spans = highlight(&text, Some(lang)).spans;
+            let Some(mut inc) = Incremental::new(lang, text.clone()) else { continue };
+            let step = (text.len() / 40).max(1);
+            let (mut n, mut pieces) = (0, 0);
+            let mut at = 7;
+            while at < text.len() {
+                let before = text.clone();
+                let at_char = (0..=at).rev().find(|&i| text.is_char_boundary(i)).unwrap();
+                match n % 4 {
+                    0 | 1 => text.insert_str(at_char, edits[n % edits.len()]),
+                    // A character gone.
+                    2 => {
+                        if let Some(c) = text[at_char..].chars().next() {
+                            text.replace_range(at_char..at_char + c.len_utf8(), "");
+                        }
+                    }
+                    // Its line gone.
+                    _ => {
+                        let s = text[..at_char].rfind('\n').map_or(0, |i| i + 1);
+                        let e = text[at_char..].find('\n').map_or(text.len(), |i| at_char + i + 1);
+                        text.replace_range(s..e, "");
+                    }
+                }
+                pieces += usize::from(inc.update(text.clone(), &mut spans));
+                assert_eq!(spans, highlight(&text, Some(lang)).spans, "{file}: edit {n} at {at_char}");
+                // Every few: undone, as ⌘Z would.
+                if n % 5 == 4 {
+                    text = before;
+                    inc.update(text.clone(), &mut spans);
+                    assert_eq!(spans, highlight(&text, Some(lang)).spans, "{file}: undo {n}");
+                }
+                n += 1;
+                at += step;
+            }
+            eprintln!("{file}: {pieces} of {n} edits coloured just their piece");
+        }
+        // Typing, a character at a time, at the start of lines inside
+        // bodies: the half-typed states don't parse.
+        let sample = |f: &str| samples.iter().find(|s| s.0 == f).map(|s| s.1).unwrap();
+        let typed: &[(&str, &str, &str)] = &[
+            ("x.rs", include_str!("editor.rs"), "let total = items.iter().map(|x| x * 2).sum::<u32>(); // \"done\"\n"),
+            ("x.rs", include_str!("fuzzy.rs"), "if let Some(x) = self.find('a') { return Err(format!(\"{x}\")); }\n"),
+            ("x.rs", include_str!("recent.rs"), "#[test] fn t() { let r#raw = b'\\n'; }\n"),
+            ("x.go", sample("x.go"), "total := add(p.X, 2) // \"x\"\n"),
+            ("x.c", sample("x.c"), "int total = add(1, 2); /* x */\n"),
+            ("x.cpp", sample("x.cpp"), "auto total = v.size() + 1; // x\n"),
+            ("x.java", sample("x.java"), "int total = sum(List.of(1, 2)); // \"x\"\n"),
+            ("x.css", sample("x.css"), "border: 1px solid #fff; /* x */\n"),
+        ];
+        for (file, text, line) in typed {
+            let lang = Lang::detect(Path::new(file)).unwrap();
+            let mut text = text.to_string();
+            let mut spans = highlight(&text, Some(lang)).spans;
+            let mut inc = Incremental::new(lang, text.clone()).unwrap();
+            let (mut pieces, mut n) = (0, 0);
+            // Lines that start with indentation: inside something.
+            let indent = if *file == "x.css" { "\n  " } else if *file == "x.go" { "\n\t" } else { "\n    " };
+            let starts: Vec<usize> = text.match_indices(indent).map(|(i, _)| i + indent.len()).step_by(3).take(6).collect();
+            for start in starts.into_iter().rev() {
+                let mut at = start;
+                for c in line.chars() {
+                    text.insert(at, c);
+                    at += c.len_utf8();
+                    pieces += usize::from(inc.update(text.clone(), &mut spans));
+                    n += 1;
+                    assert_eq!(spans, highlight(&text, Some(lang)).spans, "{file}: typing {:?} at {start}", &text[start..at]);
+                }
+            }
+            eprintln!("{file}: {pieces} of {n} keystrokes coloured just their piece");
+        }
+    }
 
     fn tokens(file: &str, src: &str) -> Vec<(String, Token)> {
         let h = highlight(src, Lang::detect(Path::new(file)));
@@ -659,5 +904,29 @@ mod tests {
         let h = highlight("a\r\nb\n", None);
         assert_eq!(h.spans.len(), 3);
         assert!(h.spans.iter().all(Vec::is_empty));
+    }
+
+    /// How long a keystroke's colouring takes, piece by piece and whole
+    /// (`cargo test --release -- --ignored --nocapture keystroke_cost`).
+    #[test]
+    #[ignore]
+    fn keystroke_cost() {
+        let lang = Lang::detect(Path::new("x.rs")).unwrap();
+        let full: String = include_str!("ui.rs").lines().take(2000).collect::<Vec<_>>().join("\n");
+        let mut text = full.clone();
+        let mut spans = highlight(&text, Some(lang)).spans;
+        let mut inc = Incremental::new(lang, text.clone()).unwrap();
+        let at = text.match_indices("\n        ").nth(400).unwrap().0 + 9;
+        let (mut piece, mut whole) = (std::time::Duration::ZERO, std::time::Duration::ZERO);
+        for (i, c) in "let total = 1;".chars().enumerate() {
+            text.insert(at + i, c);
+            let t = std::time::Instant::now();
+            inc.update(text.clone(), &mut spans);
+            piece += t.elapsed();
+            let t = std::time::Instant::now();
+            let _ = highlight(&text, Some(lang));
+            whole += t.elapsed();
+        }
+        eprintln!("2000-line Rust file, per keystroke: piece {:?}, whole {:?}", piece / 14, whole / 14);
     }
 }

@@ -534,6 +534,13 @@ impl App {
             self.after_terminal_removed();
         }
         self.remember_terminals(false);
+        // Syntax trees are kept only while a tab is being edited.
+        let active = self.active;
+        for (i, t) in self.tabs.iter_mut().enumerate() {
+            if Some(i) != active || t.last_edit.elapsed() > Duration::from_secs(60) {
+                t.forget_parse();
+            }
+        }
         self.poll_terminal_requests(ctx);
         self.poll_attention(ctx);
         self.poll_search(ctx);
