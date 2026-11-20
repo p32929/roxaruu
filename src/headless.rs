@@ -3230,6 +3230,26 @@ fn headless_open_list() {
     assert_eq!(app(&h).terminals.len(), 5);
 }
 
+/// A mistake saved into settings.json: a warning toast says what and
+/// where at once (not only the status bar), and fixing it says so.
+#[test]
+#[ignore]
+fn headless_settings_mistake_is_told() {
+    let mut h = harness(None);
+    h.run();
+    let file = crate::config::dir().join("settings.json");
+    let before = std::fs::read_to_string(&file).ok();
+    std::fs::write(&file, "{ \"wordWrap\": maybe }").unwrap();
+    wait_for(&mut h, "the warning", |a| a.toasts.iter().any(|t| t.error && t.msg.starts_with("settings.json")));
+    assert!(app(&h).status_line().is_some(), "and the status bar");
+    std::fs::write(&file, "{}").unwrap();
+    wait_for(&mut h, "fixed", |a| a.toasts.iter().any(|t| t.msg == "Config reloaded"));
+    match before {
+        Some(b) => std::fs::write(&file, b).unwrap(),
+        None => std::fs::remove_file(&file).unwrap(),
+    }
+}
+
 /// New Window: an empty one, from anywhere, its key on Open…'s last row.
 #[test]
 #[ignore]

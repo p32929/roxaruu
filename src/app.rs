@@ -412,9 +412,16 @@ impl App {
         if fp == self.fingerprint {
             return;
         }
+        let before: Vec<String> = self.errors().cloned().collect();
         self.reload_config(ctx);
-        if self.errors().next().is_none() {
-            self.notify("Config reloaded");
+        // A new mistake says so where you'll see it, not only in the bar.
+        let first = self.errors().next().cloned();
+        match first {
+            None => self.notify("Config reloaded"),
+            Some(first) if !before.contains(&first) => {
+                self.warn(format!("{first} — that change waits until it's fixed; the rest still applies"))
+            }
+            Some(_) => {}
         }
     }
 
