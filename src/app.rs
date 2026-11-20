@@ -52,6 +52,10 @@ struct SearchState {
     changed: Option<Instant>,
 }
 
+/// A project's files (relative, each with whether it's ignored) and their
+/// matcher, from a background walk.
+type Index = (Vec<(String, bool)>, FileMatcher);
+
 /// Search results shown at most — more is noise, and costs layout.
 pub(crate) const MAX_RESULTS: usize = 300;
 
@@ -63,7 +67,9 @@ pub struct Project {
     /// background walk finishes.
     pub(crate) files: Vec<(String, bool)>,
     pub(crate) matcher: Option<FileMatcher>,
-    indexing: Option<Receiver<Vec<(PathBuf, bool)>>>,
+    /// The walk's result, with its matcher built there too (a big repo's
+    /// would hold the window up).
+    indexing: Option<Receiver<Index>>,
     /// Search includes the build/dependency folders (node_modules, target…).
     pub build: bool,
 }
@@ -254,7 +260,9 @@ pub struct App {
     throttle: std::sync::Arc<Throttle>,
     /// How far into the terminal bridge's request file we've read.
     request_offset: u64,
-    watching_requests: bool,
+    /// Set by the thread watching that file (`terminal::watch_requests`)
+    /// when it changed: read it then, not every frame.
+    requests_changed: Option<Arc<AtomicBool>>,
     /// Whether the terminal panel is showing.
     pub terminal_open: bool,
     /// Where each terminal was drawn last frame, for drops.
@@ -333,7 +341,7 @@ impl App {
             request_offset: crate::termbridge::request_file()
                 .and_then(|p| std::fs::metadata(p).ok())
                 .map_or(0, |m| m.len()),
-            watching_requests: false,
+            requests_changed: None,
             terminal_open: false,
             terminal_rects: Vec::new(),
             sidebar: Sidebar::default(),
@@ -1057,7 +1065,14 @@ impl App {
         let (tx, rx) = channel();
         let (root, build, ctx2) = (p.root.clone(), p.build, ctx.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(fstree::collect_files_marked(&root, build));
+            let files: Vec<(String, bool)> = fstree::collect_files_marked(&root, build)
+                .into_iter()
+                .map(|(path, ignored)| (rel_path(&root, &path), ignored))
+                .collect();
+            let names: Vec<String> = files.iter().map(|(f, _)| f.clone()).collect();
+            let matcher = FileMatcher::new(&names);
+            drop(names);
+            let _ = tx.send((files, matcher));
             ctx2.request_repaint();
         });
         p.indexing = Some(rx);
@@ -1066,16 +1081,12 @@ impl App {
     /// Pick up the background file walk when it finishes.
     fn poll_index(&mut self) {
         let Some(p) = &mut self.project else { return };
-        let Some(files) = p.indexing.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+        let Some((files, matcher)) = p.indexing.as_ref().and_then(|rx| rx.try_recv().ok()) else {
             return;
         };
         p.indexing = None;
-        p.files = files
-            .into_iter()
-            .map(|(path, ignored)| (rel_path(&p.root, &path), ignored))
-            .collect();
-        let names: Vec<String> = p.files.iter().map(|(f, _)| f.clone()).collect();
-        p.matcher = Some(FileMatcher::new(&names));
+        p.files = files;
+        p.matcher = Some(matcher);
         self.sidebar.hits_for = None; // search the new list
     }
 
@@ -1678,13 +1689,12 @@ impl App {
         if self.terminals.is_empty() {
             return; // only shells we started can queue anything
         }
-        crate::termbridge::ensure_intact();
         let Some(path) = crate::termbridge::request_file() else {
             return;
         };
-        if !self.watching_requests {
-            self.watching_requests = true;
-            terminal::watch_requests(ctx);
+        let changed = self.requests_changed.get_or_insert_with(|| terminal::watch_requests(ctx));
+        if !changed.swap(false, Ordering::Relaxed) {
+            return;
         }
         let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         if len < self.request_offset {

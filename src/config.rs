@@ -193,6 +193,15 @@ pub fn ensure_files() {
     }
 }
 
+/// The UI and code fonts the global settings choose (defaults if it can't
+/// be read): for unpacking them before the window is up.
+pub fn chosen_fonts() -> (String, String) {
+    let s: Settings = read_config(&dir().join("settings.json"))
+        .and_then(|src| json5::from_str(&src).ok())
+        .unwrap_or_default();
+    (s.ui_font, s.code_font)
+}
+
 /// Load everything, with `project`'s settings over the global ones. A file
 /// that fails to parse keeps `prev`'s version of it, so a half-typed edit
 /// doesn't flash the whole UI back to defaults.

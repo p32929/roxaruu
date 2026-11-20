@@ -4660,9 +4660,10 @@ impl App {
         // then lay out merged text runs. Runs of same-styled ASCII share one
         // layout (a busy screen is thousands of cells); anything else gets its
         // own, placed at its cell so wide and fallback glyphs stay aligned.
-        struct Cell {
+        // A cell's text is borrowed from the screen: no allocation per cell.
+        struct Cell<'a> {
             col: u16,
-            text: String,
+            text: &'a str,
             fg: Color32,
             bg: Option<Color32>,
             italic: bool,
@@ -4698,11 +4699,7 @@ impl App {
                 let text = cell.contents();
                 cells.push(Cell {
                     col,
-                    text: if text.is_empty() {
-                        " ".to_string()
-                    } else {
-                        text.to_string()
-                    },
+                    text: if text.is_empty() { " " } else { text },
                     fg,
                     bg,
                     italic: cell.italic(),
@@ -4728,7 +4725,7 @@ impl App {
             let style = |k: &Cell| (k.fg, k.italic, k.underline);
             for run in cells.chunk_by(|a, b| simple(a) && simple(b) && style(a) == style(b)) {
                 let Some(first) = run.first() else { continue };
-                let text: String = run.iter().map(|k| k.text.as_str()).collect();
+                let text: String = run.iter().map(|k| k.text).collect();
                 if !text.trim().is_empty() || first.underline {
                     let mut fmt = egui::TextFormat::simple(font.clone(), first.fg);
                     fmt.italics = first.italic;
@@ -6084,7 +6081,7 @@ fn huge_find(tab: &mut crate::editor::Tab, f: &crate::find::Find, step: Option<b
 fn line_job(
     full: &str,
     (b0, b1): (usize, usize),
-    spans: &[(std::ops::Range<usize>, crate::syntax::Token)],
+    spans: &[(std::ops::Range<u32>, crate::syntax::Token)],
     font: &FontId,
     c: &Colors,
 ) -> LayoutJob {
@@ -6101,7 +6098,7 @@ fn line_job(
     };
     let mut at = b0;
     for (range, token) in spans {
-        let (s1, e1) = (range.start.clamp(b0, b1), range.end.clamp(b0, b1));
+        let (s1, e1) = ((range.start as usize).clamp(b0, b1), (range.end as usize).clamp(b0, b1));
         if s1 < at || s1 >= e1 || !full.is_char_boundary(s1) || !full.is_char_boundary(e1) {
             continue;
         }

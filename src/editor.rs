@@ -336,7 +336,7 @@ impl Tab {
     }
 
     /// Highlighting for line `l` (empty until it's been worked out).
-    pub fn line_spans(&self, l: usize) -> &[(Range<usize>, crate::syntax::Token)] {
+    pub fn line_spans(&self, l: usize) -> &[(Range<u32>, crate::syntax::Token)] {
         l.checked_sub(self.spans_from)
             .and_then(|i| self.spans.get(i))
             .map(Vec::as_slice)

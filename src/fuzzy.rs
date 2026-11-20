@@ -14,7 +14,8 @@ const LABEL_SCORE_THRESHOLD: i64 = 1 << 16;
 const RECENCY_BOOST_STEP: i64 = 96;
 
 /// A project's file list, prepared once (chars + lowercase) so each keystroke
-/// only scores, rather than re-lowercasing every path.
+/// only scores, rather than re-lowercasing every path. ASCII paths are kept
+/// as bytes (`Chars`): 2 bytes a char for both forms, not 8.
 pub struct FileMatcher {
     prepared: Vec<Prepared>,
 }
@@ -97,16 +98,75 @@ fn recency_boost(rank: Option<usize>) -> i64 {
 }
 
 struct Prepared {
-    chars: Vec<char>,
-    lower: Vec<char>,
+    chars: Chars,
+    lower: Chars,
     /// Where the filename (as opposed to its folders) begins.
     label_start: usize,
 }
 
+/// A text as chars to index: bytes when it's ASCII (nearly every path), a
+/// quarter of the size of `char`s, which the rest keep.
+enum Chars {
+    Ascii(Box<[u8]>),
+    Wide(Box<[char]>),
+}
+
+impl Chars {
+    fn new(s: &str) -> Self {
+        if s.is_ascii() { Chars::Ascii(s.as_bytes().into()) } else { Chars::Wide(s.chars().collect()) }
+    }
+
+    fn as_text(&self) -> Text<'_> {
+        match self {
+            Chars::Ascii(b) => Text::Ascii(b),
+            Chars::Wide(c) => Text::Wide(c),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.as_text().len()
+    }
+}
+
+/// A borrowed `Chars`, or a part of one.
+#[derive(Clone, Copy)]
+enum Text<'a> {
+    Ascii(&'a [u8]),
+    Wide(&'a [char]),
+}
+
+impl<'a> Text<'a> {
+    fn len(self) -> usize {
+        match self {
+            Text::Ascii(b) => b.len(),
+            Text::Wide(c) => c.len(),
+        }
+    }
+
+    fn at(self, i: usize) -> Option<char> {
+        match self {
+            Text::Ascii(b) => b.get(i).map(|&b| b as char),
+            Text::Wide(c) => c.get(i).copied(),
+        }
+    }
+
+    /// From char `i` on (empty past the end).
+    fn from(self, i: usize) -> Text<'a> {
+        match self {
+            Text::Ascii(b) => Text::Ascii(b.get(i..).unwrap_or_default()),
+            Text::Wide(c) => Text::Wide(c.get(i..).unwrap_or_default()),
+        }
+    }
+
+    fn chars(self) -> impl Iterator<Item = char> + 'a {
+        (0..self.len()).filter_map(move |i| self.at(i))
+    }
+}
+
 impl Prepared {
     fn new(full: &str) -> Self {
-        let chars: Vec<char> = full.chars().collect();
-        let lower: Vec<char> = full.to_lowercase().chars().collect();
+        let chars = Chars::new(full);
+        let lower = Chars::new(&full.to_lowercase());
         let label_len = full.rsplit('/').next().unwrap_or(full).chars().count();
         // Clamped to both: lowercasing can (rarely) change the char count.
         let label_start = chars.len().saturating_sub(label_len).min(lower.len());
@@ -132,15 +192,8 @@ fn separator_bonus(prev: char) -> i64 {
 }
 
 /// VS Code `computeCharScore`.
-fn char_score(
-    q_char: char,
-    q_lower: char,
-    target: &[char],
-    target_lower: &[char],
-    ti: usize,
-    seq_len: i64,
-) -> i64 {
-    let (Some(&t), Some(&t_lower)) = (target.get(ti), target_lower.get(ti)) else {
+fn char_score(q_char: char, q_lower: char, target: Text, target_lower: Text, ti: usize, seq_len: i64) -> i64 {
+    let (Some(t), Some(t_lower)) = (target.at(ti), target_lower.at(ti)) else {
         return 0;
     };
     if q_lower != t_lower && !(is_path_sep(q_lower) && is_path_sep(t_lower)) {
@@ -153,9 +206,9 @@ fn char_score(
     if q_char == t {
         score += 1;
     }
-    match ti.checked_sub(1).and_then(|i| target.get(i)) {
+    match ti.checked_sub(1).and_then(|i| target.at(i)) {
         None => score += 8,
-        Some(&prev) => {
+        Some(prev) => {
             let sep = separator_bonus(prev);
             if sep != 0 {
                 score += sep;
@@ -168,12 +221,7 @@ fn char_score(
 }
 
 /// VS Code `doScoreFuzzy` DP: (score, matched positions).
-fn score_fuzzy(
-    target: &[char],
-    target_lower: &[char],
-    query: &[char],
-    query_lower: &[char],
-) -> (i64, Vec<usize>) {
+fn score_fuzzy(target: Text, target_lower: Text, query: &[char], query_lower: &[char]) -> (i64, Vec<usize>) {
     let (tl, ql) = (target.len(), query.len());
     if tl == 0 || ql == 0 || tl < ql {
         return (0, Vec::new());
@@ -229,11 +277,12 @@ fn score_piece(p: &Prepared, query: &str, prefer_label: bool) -> Option<(i64, Ve
     let q: Vec<char> = query.chars().collect();
     let q_lower: Vec<char> = query.to_lowercase().chars().collect();
     if prefer_label {
-        let lab = p.chars.get(p.label_start..).unwrap_or_default();
-        let lab_lower = p.lower.get(p.label_start..).unwrap_or_default();
+        let lab = p.chars.as_text().from(p.label_start);
+        let lab_lower = p.lower.as_text().from(p.label_start);
         let (ls, lpos) = score_fuzzy(lab, lab_lower, &q, &q_lower);
         if ls > 0 {
-            let base = if lab_lower.starts_with(&q_lower) {
+            let prefix = lab_lower.len() >= q_lower.len() && lab_lower.chars().zip(&q_lower).all(|(a, &b)| a == b);
+            let base = if prefix {
                 // Shorter filenames win among prefix matches: window.ts > windowActions.ts.
                 LABEL_PREFIX_SCORE_THRESHOLD
                     + ((q.len() as f64 / lab.len().max(1) as f64) * 100.0).round() as i64
@@ -247,7 +296,7 @@ fn score_piece(p: &Prepared, query: &str, prefer_label: bool) -> Option<(i64, Ve
             ));
         }
     }
-    let (ps, ppos) = score_fuzzy(&p.chars, &p.lower, &q, &q_lower);
+    let (ps, ppos) = score_fuzzy(p.chars.as_text(), p.lower.as_text(), &q, &q_lower);
     (ps > 0).then_some((ps, ppos, false))
 }
 
@@ -255,7 +304,7 @@ fn score_piece(p: &Prepared, query: &str, prefer_label: bool) -> Option<(i64, Ve
 /// `by_path` (query has a `/`) matches against the full path.
 fn score_item(p: &Prepared, query: &str, by_path: bool) -> Option<(i64, Vec<usize>, bool)> {
     if p.lower.len() == query.chars().count()
-        && p.lower.iter().copied().eq(query.to_lowercase().chars())
+        && p.lower.as_text().chars().eq(query.to_lowercase().chars())
     {
         return Some((PATH_IDENTITY_SCORE, (0..p.chars.len()).collect(), true));
     }
@@ -289,6 +338,29 @@ mod tests {
             .into_iter()
             .map(|i| entries[i].clone())
             .collect()
+    }
+
+    /// Paths kept as bytes score exactly as they did as chars.
+    #[test]
+    fn ascii_bytes_score_like_chars() {
+        let wide = |full: &str| {
+            let mut p = Prepared::new(full);
+            p.chars = Chars::Wide(full.chars().collect());
+            p.lower = Chars::Wide(full.to_lowercase().chars().collect());
+            p
+        };
+        let paths = ["src/app.rs", "src/ui/sidebar.rs", "README.md", "a/b/WindowActions.ts", "x", ""];
+        let queries = ["app", "sb", "ui/side", "rd", "wa", "windowactions.ts", "src app", "/", "zz", "README.md"];
+        for path in paths {
+            assert!(matches!(Prepared::new(path).chars, Chars::Ascii(_)));
+            for q in queries {
+                for by_path in [false, true] {
+                    assert_eq!(score_item(&Prepared::new(path), q, by_path), score_item(&wide(path), q, by_path), "{path:?} / {q:?}");
+                }
+            }
+        }
+        assert!(matches!(Prepared::new("café/naïve.rs").chars, Chars::Wide(_)));
+        assert_eq!(positions("naïv", "café/naïve.rs"), [5, 6, 7, 8]);
     }
 
     #[test]

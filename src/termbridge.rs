@@ -299,8 +299,8 @@ pub fn ensure_intact() {
     let Some(b) = bridge() else {
         return;
     };
-    // One `exists()` per tick, next to the `metadata()` the request poll
-    // already does. The shim is the file that matters; if it went, assume the
+    // One `exists()` per check, on the thread watching the request file
+    // (`terminal::watch_requests`), next to its `metadata()`. The shim is the file that matters; if it went, assume the
     // rest did too and rewrite the lot.
     let kept = if cfg!(unix) { "osascript" } else { "roxaruu-hook.exe" };
     if b.dir.join(kept).exists() || helper_program().is_none() {

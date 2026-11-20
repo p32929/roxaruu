@@ -379,8 +379,9 @@ pub struct Highlighted {
     pub spans: Vec<LineSpans>,
 }
 
-/// Styled byte ranges within one line.
-pub type LineSpans = Vec<(Range<usize>, Token)>;
+/// Styled byte ranges within one line: `u32`s, half the size (a line that
+/// long is a huge file's, shown without highlighting).
+pub type LineSpans = Vec<(Range<u32>, Token)>;
 
 pub fn highlight(source: &str, lang: Option<&'static Lang>) -> Highlighted {
     let spans = lang
@@ -478,7 +479,8 @@ fn spans_for(lang: &'static Lang, source: &str) -> Option<Vec<LineSpans>> {
                         && stop > pos
                         && let Some(line) = out.last_mut()
                     {
-                        line.push((pos - line_start..stop - line_start, t));
+                        let at = |b: usize| u32::try_from(b - line_start).unwrap_or(u32::MAX);
+                        line.push((at(pos)..at(stop), t));
                     }
                     match nl {
                         Some(n) => {
@@ -519,7 +521,7 @@ mod tests {
             .flat_map(|(spans, line)| {
                 spans
                     .iter()
-                    .map(move |(r, t)| (line[r.clone()].to_string(), *t))
+                    .map(move |(r, t)| (line[r.start as usize..r.end as usize].to_string(), *t))
             })
             .collect()
     }

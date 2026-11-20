@@ -264,22 +264,30 @@ pub fn short_title(cmd: &str) -> String {
 /// Wake the UI when a script queues a terminal request — a cheap file-size
 /// check a few times a second, so requests land promptly without redrawing
 /// while nothing happens.
-pub fn watch_requests(ctx: &egui::Context) {
+pub fn watch_requests(ctx: &egui::Context) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // Set at first, so the file is read once from where it stands.
+    let changed = std::sync::Arc::new(AtomicBool::new(true));
     let Some(path) = crate::termbridge::request_file() else {
-        return;
+        return changed;
     };
-    let ctx = ctx.clone();
+    let (ctx, flag) = (ctx.clone(), changed.clone());
     std::thread::spawn(move || {
         let mut last = 0;
-        loop {
+        // Ends with the window (the flag's only other owner).
+        while std::sync::Arc::strong_count(&flag) > 1 {
             std::thread::sleep(Duration::from_millis(200));
+            // Here, not on the window's thread each frame.
+            crate::termbridge::ensure_intact();
             let len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             if len != last {
                 last = len;
+                flag.store(true, Ordering::Relaxed);
                 ctx.request_repaint();
             }
         }
     });
+    changed
 }
 
 /// Tab labels: `folder · command`, with duplicates numbered (Oxru's rule).
