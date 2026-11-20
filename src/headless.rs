@@ -3162,6 +3162,17 @@ fn headless_recent_terminals() {
     assert_eq!(app(&h).terminals.len(), 3, "this window keeps its own");
 }
 
+/// New Window: an empty one, from anywhere, its key in the status bar.
+#[test]
+#[ignore]
+fn headless_new_window() {
+    let mut h = harness(None);
+    assert!(app(&h).status_hints().iter().any(|(_, _, c)| *c == Some(crate::keymap::Command::NewWindow)));
+    App::take_launched();
+    press(&mut h, ALT | Modifiers::SHIFT, Key::N);
+    assert_eq!(App::take_launched(), [vec!["new window".to_string()]]);
+}
+
 /// Many tabs: the strip scrolls (wheel, the "‹ N" end), keeps the active
 /// tab in view, and a tab drags to a new place; terminals' tabs too.
 #[test]

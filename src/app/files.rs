@@ -542,6 +542,11 @@ pub fn spawn_window(dir: &Path) -> std::io::Result<()> {
     spawn_window_with(vec![dir.into()])
 }
 
+/// A new window with nothing open (New Window).
+pub fn spawn_empty_window() -> std::io::Result<()> {
+    spawn_window_with(Vec::new())
+}
+
 /// A new window with a terminal in each of `dirs`, in that order (Recent
 /// Terminals).
 pub fn spawn_terminals_window(dirs: &[PathBuf]) -> std::io::Result<()> {
@@ -566,6 +571,9 @@ fn spawn_window_with(args: Vec<std::ffi::OsString>) -> std::io::Result<()> {
         std::process::Command::new(std::env::current_exe()?)
             .args(args)
             .args(virtual_screen.then_some("--virtual-screen"))
+            // Not this window's terminal: with no arguments, a copy started
+            // in one would open the folder it's in (`main::opens_here`).
+            .stdin(std::process::Stdio::null())
             .spawn()
             .map(|_| ())
     }

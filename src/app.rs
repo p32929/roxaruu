@@ -676,6 +676,12 @@ impl App {
             // server and opens out of sight of a browser using remote access.
             Command::OpenFolder => self.open_palette(Mode::Folders, ctx),
             Command::RecentFolders => self.open_palette(Mode::Recent, ctx),
+            // An empty one: no folder, its terminals start at home.
+            Command::NewWindow => {
+                if let Err(e) = files::spawn_empty_window() {
+                    self.warn(format!("Couldn't open a new window: {e}"));
+                }
+            }
             Command::CloseFolder => self.begin_close(self.tab_paths(), After::CloseFolder, ctx),
             Command::SelectTheme => self.open_palette(Mode::Themes, ctx),
             Command::SelectUiFont => self.open_palette(Mode::UiFonts, ctx),

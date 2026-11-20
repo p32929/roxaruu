@@ -14,6 +14,7 @@ use serde::Deserialize;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Command {
     Palette,
+    NewWindow,
     About,
     CheckForUpdates,
     OpenNotificationSettings,
@@ -143,6 +144,7 @@ macro_rules! commands {
 commands! {
     Palette, "app.commandPalette", "Command Palette", ["ctrl+shift+p"];
     Help, "app.help", "Help: Keyboard Shortcuts", ["f1"];
+    NewWindow, "app.newWindow", "New Window", ["alt+shift+n"];
     About, "app.about", "About Roxaruu", ["ctrl+alt+shift+i"];
     CheckForUpdates, "app.update", "Check for Updates", ["ctrl+alt+shift+d"];
     OpenNotificationSettings, "app.notificationSettings", "Open Notification Settings", ["ctrl+alt+shift+n"];

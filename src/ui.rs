@@ -300,6 +300,7 @@ pub mod icon {
             Command::Keybindings | Command::OpenKeybindings => KEYBOARD,
             Command::Help => QUESTION,
             Command::About => INFO,
+            Command::NewWindow => WINDOW_RESTORE,
             Command::CheckForUpdates => DOWNLOAD,
             Command::OpenNotificationSettings => BELL,
             Command::Todos => TASKS,
@@ -2439,7 +2440,12 @@ impl App {
         if !self.sidebar_shown() && self.project.is_some() {
             list.splice(0..0, [mark(icon::FOLDER), cmd(Command::ToggleSidebar, "show")]);
         }
-        list.extend([mark(icon::KEYBOARD), cmd(Command::Palette, "all commands"), cmd(Command::Help, "all shortcuts")]);
+        list.extend([
+            mark(icon::KEYBOARD),
+            cmd(Command::Palette, "all commands"),
+            cmd(Command::Help, "all shortcuts"),
+            cmd(Command::NewWindow, "new window"),
+        ]);
         tidy(list)
     }
 

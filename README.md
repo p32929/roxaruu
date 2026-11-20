@@ -28,6 +28,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 4. Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else (a conversation, not a script's `claude -p`).
 5. Closing a terminal that's still running something asks first.
 6. **Alt+R** (**⌥R** on a Mac) lists every folder you've opened a terminal in, newest first (**Ctrl+S** / **⌘S** sorts them by name instead). Select the ones you want, numbered in the order they'll open, and a terminal opens in each, side by side, filling the window.
+7. **Alt+Shift+N** (**⌥⇧N** on a Mac) opens a new, empty window, with no folder, for terminals that start in your home folder.
 
 **Editor**
 1. Syntax highlighting for 23 languages, tabs, split view, find and replace, go to line, go to file, search across the whole project.
