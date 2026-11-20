@@ -38,6 +38,9 @@ pub enum Ask {
     Update { others: usize },
     /// Closing terminals (by id) that still run something: stop them?
     CloseTerminals { ids: Vec<u64> },
+    /// Several terminals to open (the Open list's ⌘↵) in a window that has
+    /// things open: here, or in a new window?
+    OpenTerminals { dirs: Vec<PathBuf> },
 }
 
 /// Where Git for Windows (and its Git Bash) comes from.
@@ -175,6 +178,11 @@ impl App {
             }
             Ask::CloseTerminals { ids } => {
                 self.close_terminals(&ids);
+                Ok(())
+            }
+            // ↵ is "this window"; "new window" answers apart (`ui`).
+            Ask::OpenTerminals { dirs } => {
+                self.terminals_here(dirs, ctx);
                 Ok(())
             }
             // ↵ is "GitHub"; "Portfolio" answers apart (`ui`).

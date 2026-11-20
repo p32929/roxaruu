@@ -1829,6 +1829,20 @@ impl App {
                 ];
                 self.modal(ctx, icon::TERMINAL, &title, &body, &buttons, None, None, None)
             }
+            Ask::OpenTerminals { dirs } => {
+                let title = format!("Open {} terminals here?", dirs.len());
+                let names: Vec<String> = dirs.iter().map(|d| crate::app::display_name(d)).collect();
+                let body = format!(
+                    "{}\n\nHere: beside this window's terminals, side by side. Or in a new window of their own.",
+                    names.join(", ")
+                );
+                let buttons = [
+                    CANCEL,
+                    Btn { label: "New Window", hint: "N", keys: &[Key::N], primary: false },
+                    ok("This Window"),
+                ];
+                self.modal(ctx, icon::TERMINAL, &title, &body, &buttons, None, None, None)
+            }
             Ask::OpenUrl(url) => {
                 let body = url.clone();
                 self.modal(
@@ -1877,6 +1891,13 @@ impl App {
                 self.answer_ask(true, ctx);
             }
             Some(i) if matches!(self.ask, Some(crate::app::Ask::CloseTerminals { .. })) => self.answer_ask(i == 2, ctx),
+            // New Window (This Window is "yes").
+            Some(1) if matches!(self.ask, Some(crate::app::Ask::OpenTerminals { .. })) => {
+                if let Some(crate::app::Ask::OpenTerminals { dirs }) = self.ask.take() {
+                    self.terminals_in_new_window(&dirs);
+                }
+            }
+            Some(i) if matches!(self.ask, Some(crate::app::Ask::OpenTerminals { .. })) => self.answer_ask(i == 2, ctx),
             Some(i) => self.answer_ask(i == 1, ctx),
             None => {}
         }

@@ -2464,10 +2464,10 @@ impl App {
         self.open_terminals(dirs, ctx);
     }
 
-    /// A terminal in each of `dirs`, in that order, side by side and
-    /// filling the window: here if this window has nothing open, else in a
-    /// new one; just one, in a window with things open, is a new terminal
-    /// here.
+    /// A terminal in each of `dirs`, in that order, side by side. A window
+    /// with nothing open takes them, filling it; one with things open takes
+    /// just one at once, and asks about several: here, or a new window
+    /// (`Ask::OpenTerminals`).
     pub fn open_terminals(&mut self, dirs: Vec<PathBuf>, ctx: &egui::Context) {
         let dirs: Vec<PathBuf> = dirs.into_iter().filter(|d| d.is_dir()).collect();
         if dirs.is_empty() {
@@ -2475,23 +2475,35 @@ impl App {
         }
         tracing::info!(n = dirs.len(), "open terminals");
         let busy = self.project.is_some() || !self.terminals.is_empty();
-        if let ([dir], true) = (dirs.as_slice(), busy) {
-            return self.new_terminal_in(Some(dir.clone()), ctx);
+        match (dirs.as_slice(), busy) {
+            ([dir], true) => self.new_terminal_in(Some(dir.clone()), ctx),
+            (_, true) => self.ask = Some(Ask::OpenTerminals { dirs }),
+            _ => self.terminals_here(dirs, ctx),
         }
-        if busy {
-            let n = dirs.len();
-            match files::spawn_terminals_window(&dirs) {
-                Ok(()) => self.notify(format!("Opened {n} terminal{} in a new window", if n == 1 { "" } else { "s" })),
-                Err(e) => self.warn(format!("Couldn't open a new window: {e}")),
-            }
-            return;
-        }
+    }
+
+    /// `open_terminals` in this window: after the one in front, side by
+    /// side, the first of them in front; filling a window with nothing else.
+    pub(crate) fn terminals_here(&mut self, dirs: Vec<PathBuf>, ctx: &egui::Context) {
+        let (empty, before) = (self.project.is_none() && self.terminals.is_empty(), self.terminals.len());
+        let first = if empty { 0 } else { self.active_terminal + 1 };
         for d in dirs {
             self.new_terminal_in(Some(d), ctx);
         }
-        self.active_terminal = 0;
-        self.terminal_grid = true;
-        self.terminal_max = true;
+        if self.terminals.len() > before {
+            self.active_terminal = first.min(self.terminals.len() - 1);
+            self.terminal_grid = true;
+            self.terminal_max |= empty;
+        }
+    }
+
+    /// `open_terminals` in a window of their own.
+    pub(crate) fn terminals_in_new_window(&mut self, dirs: &[PathBuf]) {
+        let n = dirs.len();
+        match files::spawn_terminals_window(dirs) {
+            Ok(()) => self.notify(format!("Opened {n} terminal{} in a new window", if n == 1 { "" } else { "s" })),
+            Err(e) => self.warn(format!("Couldn't open a new window: {e}")),
+        }
     }
 
     /// Keep this window's terminals' folders in the Open list when they
@@ -2673,7 +2685,7 @@ fn project_root(dir: &Path) -> PathBuf {
         .to_path_buf()
 }
 
-fn display_name(p: &Path) -> String {
+pub(crate) fn display_name(p: &Path) -> String {
     p.file_name().map_or_else(
         || p.to_string_lossy().into_owned(),
         |n| n.to_string_lossy().into_owned(),

@@ -3154,18 +3154,35 @@ fn headless_open_list() {
     h.step();
     assert_eq!(crate::recent::list().len(), 4, "still each folder once");
 
-    // This window has terminals: several open in a new window; one here.
-    press(&mut h, CMD, Key::O);
-    for name in ["infra", "web"] {
-        let row = labels(&h).iter().position(|l| l == name).unwrap();
-        h.state_mut().0.palette.as_mut().unwrap().selected = row;
-        press(&mut h, Modifiers::NONE, Key::Space);
-    }
+    // This window has terminals: several, it asks where (N: a new window;
+    // ↵: here, beside them); one goes here at once.
+    let several = |h: &mut Harness<'static, Root>| {
+        press(h, CMD, Key::O);
+        for name in ["infra", "web"] {
+            let row = labels(h).iter().position(|l| l == name).unwrap();
+            h.state_mut().0.palette.as_mut().unwrap().selected = row;
+            press(h, Modifiers::NONE, Key::Space);
+        }
+        press(h, CMD, Key::Enter);
+        assert!(matches!(app(h).ask, Some(crate::app::Ask::OpenTerminals { .. })), "asked where");
+    };
+    several(&mut h);
+    shot(&mut h, "op2b-where");
     App::take_launched();
-    press(&mut h, CMD, Key::Enter);
+    press(&mut h, Modifiers::NONE, Key::N);
     let s = |p: &std::path::PathBuf| p.to_string_lossy().into_owned();
     assert_eq!(App::take_launched(), [vec!["new window".to_string(), "--terminal".into(), s(&infra), "--terminal".into(), s(&web)]]);
     assert_eq!(app(&h).terminals.len(), 3, "this window keeps its own");
+    several(&mut h);
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(App::take_launched().is_empty() && app(&h).ask.is_none());
+    let at = app(&h).active_terminal;
+    let new: Vec<_> = app(&h).terminals[at..at + 2].iter().map(|t| (t.id, t.pane.dir.clone())).collect();
+    assert_eq!(app(&h).terminals.len(), 5);
+    assert_eq!(new.iter().map(|n| &n.1).collect::<Vec<_>>(), [&infra, &web], "here, in order, the first in front");
+    assert!(app(&h).terminal_grid);
+    h.state_mut().0.close_terminals(&new.iter().map(|n| n.0).collect::<Vec<_>>());
+    assert_eq!(app(&h).terminals.len(), 3);
     press(&mut h, CMD, Key::O);
     let row = labels(&h).iter().position(|l| l == "infra").unwrap();
     h.state_mut().0.palette.as_mut().unwrap().selected = row;
@@ -3911,6 +3928,11 @@ fn headless_dialogs_fit() {
         ctx.memory_mut(|m| *m.areas_mut() = Default::default());
         h.state_mut().0.ask = Some(crate::app::Ask::CloseTerminals { ids: vec![0, 1] });
         check(&mut h, "close terminals", size);
+        h.state_mut().0.ask = None;
+        ctx.memory_mut(|m| *m.areas_mut() = Default::default());
+        let many: Vec<PathBuf> = (0..30).map(|i| root.join(format!("a_rather_long_folder_name_{i}"))).collect();
+        h.state_mut().0.ask = Some(crate::app::Ask::OpenTerminals { dirs: many });
+        check(&mut h, "open terminals where", size);
         h.state_mut().0.ask = None;
         ctx.memory_mut(|m| *m.areas_mut() = Default::default());
         h.state_mut().0.ask = Some(crate::app::Ask::Delete { path: root.join(&long) });
