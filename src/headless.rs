@@ -3106,9 +3106,9 @@ fn headless_recent_terminals() {
         let mut h = harness(None);
         assert!(app(&h).status_hints().iter().any(|(_, _, c)| *c == Some(crate::keymap::Command::RecentTerminals)));
         press(&mut h, ALT, Key::R);
-        let items = &app(&h).palette.as_ref().unwrap().items;
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].pick, Pick::Command(crate::keymap::Command::NewTerminal));
+        let picks: Vec<_> = app(&h).palette.as_ref().unwrap().items.iter().map(|i| i.pick.clone()).collect();
+        use crate::keymap::Command::{NewTerminal, OpenTerminalIn};
+        assert_eq!(picks, [Pick::Command(NewTerminal), Pick::Command(OpenTerminalIn)]);
         shot(&mut h, "rt0-empty");
     }
     record_terminals(std::slice::from_ref(&scripts));
@@ -3116,8 +3116,11 @@ fn headless_recent_terminals() {
 
     let mut h = harness(None);
     press(&mut h, ALT, Key::R);
+    // The folders, then the way to any other.
     let labels = |h: &Harness<'static, Root>| -> Vec<String> {
-        app(h).palette.as_ref().unwrap().items.iter().map(|i| i.label.clone()).collect()
+        let items = &app(h).palette.as_ref().unwrap().items;
+        assert_eq!(items.last().unwrap().pick, Pick::Command(crate::keymap::Command::OpenTerminalIn));
+        items[..items.len() - 1].iter().map(|i| i.label.clone()).collect()
     };
     assert_eq!(labels(&h), ["web", "api", "infra", "scripts"], "newest first, each once");
     assert!(app(&h).palette.as_ref().unwrap().items[0].detail.ends_with("just now"));
@@ -3160,6 +3163,39 @@ fn headless_recent_terminals() {
     );
     assert!(app(&h).toasts.iter().any(|t| t.msg == "Opened 1 terminal in a new window"));
     assert_eq!(app(&h).terminals.len(), 3, "this window keeps its own");
+}
+
+/// Open Terminal in Folder: browse like Open Folder (⇥ into a folder),
+/// ↵ opens a terminal there, in this window, whatever it has open.
+#[test]
+#[ignore]
+fn headless_open_terminal_in_folder() {
+    use crate::palette::Mode;
+    let dir = tempfile::tempdir().unwrap();
+    let shop = dir.path().canonicalize().unwrap().join("shop");
+    std::fs::create_dir_all(shop.join("api/src")).unwrap();
+    std::fs::write(shop.join("README"), "hi\n").unwrap();
+    let mut h = harness(Some(shop.join("README")));
+    press(&mut h, ALT | Modifiers::SHIFT, Key::O);
+    let p = app(&h).palette.as_ref().unwrap();
+    assert_eq!(p.mode, Mode::TerminalFolders);
+    assert_eq!(p.items[0].label, "Open a Terminal Here", "starting in the open folder");
+    let api = p.items.iter().position(|i| i.label == "api").unwrap();
+    h.state_mut().0.palette.as_mut().unwrap().selected = api;
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert_eq!(app(&h).palette.as_ref().unwrap().items[1].label, "src", "inside api");
+    shot(&mut h, "tf0-browse");
+    App::take_launched();
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert!(app(&h).palette.is_none());
+    assert!(App::take_launched().is_empty(), "here, not a new window");
+    assert_eq!(app(&h).terminals.len(), 1);
+    assert_eq!(app(&h).terminals[0].pane.dir, shop.join("api"));
+    assert!(app(&h).terminal_focused());
+    // Its key closes it again.
+    press(&mut h, ALT | Modifiers::SHIFT, Key::O);
+    press(&mut h, ALT | Modifiers::SHIFT, Key::O);
+    assert!(app(&h).palette.is_none());
 }
 
 /// New Window: an empty one, from anywhere, its key in the status bar.
@@ -5685,7 +5721,7 @@ fn headless_every_key_that_applies_shows() {
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
         OpenProjectSettings, OpenConfigFolder, Todos, ClipboardHistory, ZoomIn, ZoomOut, ResetZoom, FullScreen,
         MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
-        ToggleTerminal, RecentTerminals, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
+        ToggleTerminal, RecentTerminals, OpenTerminalIn, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
         // A tab's or the tree's right-click menu.
         RenameFile, RevealInFinder, OpenInDefaultApp, OpenInTerminal, CopyPath, CopyRelativePath,
         // On each tab's tooltip (⌘1–8); ⌘9 is "the last".

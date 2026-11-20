@@ -359,7 +359,7 @@ pub mod icon {
             Command::SwitchFocus => TERMINAL,
             Command::ClearTerminal => CLEAR,
             Command::FocusSidebar => FILE,
-            Command::ToggleTerminal | Command::SwitchTerminal | Command::RecentTerminals | Command::JumpTerminal(_) => {
+            Command::ToggleTerminal | Command::SwitchTerminal | Command::RecentTerminals | Command::OpenTerminalIn | Command::JumpTerminal(_) => {
                 TERMINAL
             }
             Command::NewTerminal => ADD,
@@ -4979,7 +4979,7 @@ impl App {
             {
                 self.reset_binding(ctx)
             }
-            Mode::Folders => {
+            Mode::Folders | Mode::TerminalFolders => {
                 // ⇥ into the selected folder, ⇧⇥ up out of the one typed.
                 let (up, into) = ctx.input_mut(|i| {
                     (i.consume_key(Modifiers::SHIFT, Key::Tab), i.consume_key(Modifiers::NONE, Key::Tab))
@@ -5364,6 +5364,16 @@ impl App {
                 ],
                 vec![],
             ),
+            Some(Mode::TerminalFolders) => (
+                "Open Terminal in Folder",
+                vec![
+                    ("↵", "Open a terminal in the selected folder"),
+                    ("⇥", "Go into it, to list its folders"),
+                    ("⇧⇥", "Go up a folder"),
+                    ("~/", "Start from your home folder"),
+                ],
+                vec![],
+            ),
             Some(Mode::Keybindings) => (
                 "Keyboard Shortcuts",
                 vec![
@@ -5719,7 +5729,7 @@ impl App {
                             "Type to search every file in the project"
                         }
                         Mode::Search if searching => "Searching…",
-                        Mode::Folders => "No folder here — ⇧⇥ goes up",
+                        Mode::Folders | Mode::TerminalFolders => "No folder here — ⇧⇥ goes up",
                         _ => "No matches",
                     };
                     ui.painter().text(
@@ -5917,6 +5927,13 @@ impl App {
             Mode::Folders => vec![
                 (k("↑ ↓"), "move"),
                 (k("↵"), "open folder"),
+                (k("⇥"), "go into folder"),
+                (k("⇧⇥"), "go up a folder"),
+                esc,
+            ],
+            Mode::TerminalFolders => vec![
+                (k("↑ ↓"), "move"),
+                (k("↵"), "open a terminal here"),
                 (k("⇥"), "go into folder"),
                 (k("⇧⇥"), "go up a folder"),
                 esc,

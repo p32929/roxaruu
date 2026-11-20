@@ -18,8 +18,10 @@ pub enum Mode {
     Recent,
     /// Open Folder: browse to any folder, by typing its path.
     Folders,
+    /// Open Terminal in Folder: browse like Open Folder, a terminal there.
+    TerminalFolders,
     Terminals,
-    /// Recent Terminals: each window's terminals, then every folder.
+    /// Recent Terminals: every folder a terminal was in.
     RecentTerminals,
     Search,
     Todos,
@@ -38,7 +40,7 @@ impl Mode {
             Mode::UiFonts => "Select a UI font — ↑↓ to preview",
             Mode::CodeFonts => "Select a code font — ↑↓ to preview",
             Mode::Recent => "Open a recent folder…",
-            Mode::Folders => "Type a folder's path…",
+            Mode::Folders | Mode::TerminalFolders => "Type a folder's path…",
             Mode::Terminals => "Switch to a terminal…",
             Mode::RecentTerminals => "Open recent terminals…",
             Mode::Line => "Line number — or line:column",

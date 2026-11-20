@@ -102,6 +102,7 @@ pub enum Command {
     MaximizeTerminal,
     SwitchTerminal,
     RecentTerminals,
+    OpenTerminalIn,
     OpenTerminalLink,
     ToggleRemoteAccess,
     ShowRemoteAddress,
@@ -239,6 +240,7 @@ commands! {
     MaximizeTerminal, "terminal.maximize", "Maximize / Restore Terminal", ["alt+m"];
     SwitchTerminal, "terminal.switch", "Switch to Terminal…", ["alt+k"];
     RecentTerminals, "terminal.recent", "Recent Terminals", ["alt+r"];
+    OpenTerminalIn, "terminal.openInFolder", "Open Terminal in Folder…", ["alt+shift+o"];
     OpenTerminalLink, "terminal.openLink", "Open a Link from the Terminal…", ["ctrl+shift+o"];
     ToggleRemoteAccess, "remote.toggle", "Remote Access: On / Off", ["ctrl+alt+shift+r"];
     ShowRemoteAddress, "remote.address", "Remote Access: Show Address", ["ctrl+alt+shift+a"];
