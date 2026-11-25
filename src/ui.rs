@@ -2209,37 +2209,23 @@ impl App {
             Stroke::new(1.0, c.border),
         );
 
-        // "project › folder › … › file": the project bright, the rest
-        // quieter, each a part a click shows in the file tree. Too wide (a
-        // phone), the folders nearest the project go first ("…"), then the
-        // project. Centred, it keeps clear of the window buttons either side.
+        // "project · file": the project bright, the file quieter, each a
+        // click to show it in the file tree (the file's whole path on hover).
+        // Too wide (a phone), the project goes. Centred, it keeps clear of
+        // the window buttons either side.
         // Window buttons: macOS's on the left; elsewhere ours, on the right.
         let own_buttons = !cfg!(target_os = "macos") && !self.remote_pass;
         let side = if self.remote_pass { 8.0 } else if own_buttons { 3.0 * 46.0 * pt.s } else { 78.0 };
         let room = (rect.width() - 2.0 * (side + 32.0 * pt.s)).max(40.0);
-        let crumbs = self.crumbs();
+        let mut shown = self.crumbs();
         let font = |w| pt.font(12.5, w);
-        let gap = |ui: &egui::Ui| {
-            ui.fonts_mut(|f| f.layout_no_wrap(format!("   {}   ", icon::CHEVRON_RIGHT), font(Weight::Regular), c.text_subtle))
-        };
-        let sep = gap(ui);
-        // The parts that fit: folders after the project dropped, then the project.
-        let folders = crumbs.len().saturating_sub(2);
-        let mut shown: Vec<Crumb> = crumbs.clone();
-        let mut hidden = 0;
-        let width = |ui: &egui::Ui, parts: &[Crumb]| {
-            parts.iter().map(|k| ui.fonts_mut(|f| f.layout_no_wrap(k.text.clone(), font(k.weight), c.text)).size().x).sum::<f32>()
-                + sep.size().x * parts.len().saturating_sub(1) as f32
-        };
-        while width(ui, &shown) > room && hidden < folders {
-            hidden += 1;
-            shown = crumbs.clone();
-            shown.splice(1..1 + hidden, [Crumb { text: "…".into(), path: None, weight: Weight::Regular, bright: false, file: false }]);
+        let sep = ui.fonts_mut(|f| f.layout_no_wrap("  \u{00b7}  ".to_string(), font(Weight::Regular), c.text_subtle));
+        let width: f32 = shown.iter().map(|k| ui.fonts_mut(|f| f.layout_no_wrap(k.text.clone(), font(k.weight), c.text)).size().x).sum::<f32>()
+            + sep.size().x * shown.len().saturating_sub(1) as f32;
+        if width > room && shown.len() > 1 {
+            shown.remove(0);
         }
-        if width(ui, &shown) > room && shown.len() > 1 {
-            shown.drain(..shown.len() - 1);
-        }
-        // The last one alone still too wide: it ends in "…".
+        // The file alone still too wide: it ends in "…".
         let galleys: Vec<_> = shown
             .iter()
             .map(|k| {
@@ -2269,16 +2255,16 @@ impl App {
             let hit = ui.interact(r.expand2(vec2(3.0, 6.0) * pt.s), egui::Id::unique(("crumb", n)), Sense::click());
             hit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, &k.text));
             if hit.hovered() {
-                p.rect_filled(r.expand2(vec2(5.0, 3.0) * pt.s), 4.0 * pt.s, c.hover);
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
-            p.galley(r.min, g, if hit.hovered() { c.text } else { c.text_muted });
-            let tip = match (n, self.folder_tip()) {
-                (0, Some(tip)) if Some(path) == self.project.as_ref().map(|p| &p.root) => tip,
-                _ => match self.shortcut(Command::FocusSidebar).filter(|_| k.file) {
-                    Some(key) => format!("Show in the file tree  {key}"),
-                    None => "Show in the file tree".to_string(),
-                },
+            let color = if hit.hovered() || k.bright { c.text } else { c.text_muted };
+            p.galley(r.min, g, color);
+            let tip = match (k.file, self.folder_tip()) {
+                (false, Some(tip)) => tip,
+                _ => {
+                    let key = self.shortcut(Command::FocusSidebar).map(|k| format!("  {k}")).unwrap_or_default();
+                    format!("{}\n\nClick to show it in the file tree{key}", crate::ui::tilde(&path.to_string_lossy()))
+                }
             };
             if hit.on_hover_text(tip).clicked() {
                 picked = Some(path.clone());
@@ -2335,8 +2321,8 @@ impl App {
         (toggle, picked)
     }
 
-    /// The title's parts: the project, each folder down to the file, the
-    /// file; a file outside the project (or none) as it was, one part.
+    /// The title's parts: the project and the file in front (a file outside
+    /// the project: its path, not a part a click takes to the tree).
     pub(crate) fn crumbs(&self) -> Vec<Crumb> {
         let part = |text: String, path: Option<PathBuf>, bright: bool, file: bool| Crumb {
             text,
@@ -2351,16 +2337,8 @@ impl App {
         };
         let mut out = vec![part(proj.name.clone(), Some(proj.root.clone()), true, false)];
         let Some(tab) = tab else { return out };
-        match tab.path().and_then(|p| p.strip_prefix(&proj.root).ok().map(|r| (p, r))) {
-            Some((path, rel)) => {
-                let mut at = proj.root.clone();
-                let n = rel.components().count();
-                for (i, c) in rel.components().enumerate() {
-                    at.push(c);
-                    let file = i + 1 == n;
-                    out.push(part(c.as_os_str().to_string_lossy().into_owned(), Some(if file { path.clone() } else { at.clone() }), false, file));
-                }
-            }
+        match tab.path().filter(|p| p.starts_with(&proj.root)) {
+            Some(path) => out.push(part(tab.buf.name(), Some(path.clone()), false, true)),
             None => out.push(part(self.tab_rel(tab), None, false, true)),
         }
         out

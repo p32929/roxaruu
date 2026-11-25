@@ -34,7 +34,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 2. Opens huge files instantly: it reads only what's on screen.
 3. Files reopen where you left them, with the cursor and scroll position.
 4. The file tree shows what git says changed (a changed file yellow with M, a new one green with U, and the folders they're in), for the folder's own repository and any projects inside it.
-5. The path in the title bar is clickable: any folder in it, or the file, shows it in the file tree.
+5. The title bar names the project and the file in front (its whole path on hover); a click shows it in the file tree.
 6. Pin a tab (right-click it) to keep it at the left: Close Others and Close All leave it open, and it stays pinned next time. Terminals too.
 
 **Remote access**

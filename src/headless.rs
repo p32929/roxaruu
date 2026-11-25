@@ -4129,30 +4129,28 @@ fn headless_tree_follows_the_active_file() {
         assert_eq!(app(&h).focus, Focus::Sidebar);
         assert!(row_visible(&h, &files[n]), "⌘B, tab {n}: in view: {:?} offset {} view {}", app(&h).sidebar.selected, app(&h).sidebar.offset, app(&h).sidebar.view);
     }
-    // The title's path: each folder a part, a click shows it in the tree
-    // (opened, chosen, in view); the file's part shows the file.
+    // The title: the project and the file; a click on the file shows it in
+    // the tree (chosen, in view), on the project the top row.
     h.state_mut().0.config.settings.sidebar = false;
     h.state_mut().0.focus = Focus::Editor;
     let t = tab_of(&h, &files[1]);
     h.state_mut().0.select_tab(t);
     h.step();
     let names: Vec<String> = app(&h).crumbs().iter().map(|c| c.text.clone()).collect();
-    assert_eq!(names, ["shop", "pkg27", "src", "deep", "mod.rs"]);
-    shot(&mut h, "tf3-title-path");
-    h.get_by_label("src").click();
-    for _ in 0..4 {
-        h.step();
-    }
-    let src = root.join("pkg27/src");
-    assert_eq!(app(&h).focus, Focus::Sidebar);
-    assert!(row_visible(&h, &src), "the folder chosen, in view: {:?}", app(&h).sidebar.selected);
-    let tree = &app(&h).project.as_ref().unwrap().tree;
-    assert!(tree.entries[tree.index_of(&src).unwrap()].expanded, "and opened");
+    assert_eq!(names, ["shop", "mod.rs"]);
+    shot(&mut h, "tf3-title");
     h.get_by_label("mod.rs").click();
     for _ in 0..4 {
         h.step();
     }
-    assert!(row_visible(&h, &files[1]), "the file's part: the file");
+    assert_eq!(app(&h).focus, Focus::Sidebar);
+    assert!(row_visible(&h, &files[1]), "the file chosen, in view: {:?}", app(&h).sidebar.selected);
+    h.get_by_label("shop").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    let first = app(&h).project.as_ref().unwrap().tree.entries[0].path.clone();
+    assert!(row_visible(&h, &first), "the project: the top row");
     // Two mod.rs in folders both called deep: told apart by the folder
     // that differs, not just "deep".
     let a = app(&h);
