@@ -13,6 +13,8 @@ enum Act {
     /// Open the file; `true` moves the keyboard to it.
     Open(PathBuf, bool),
     Toggle(usize),
+    /// A folder found by search: open in the tree, chosen there.
+    Reveal(PathBuf),
     Hide,
     Run(Command),
 }
@@ -201,14 +203,18 @@ impl App {
             self.sidebar.hits.clear(); // still indexing: try again next frame
             return;
         };
-        let recent = |i: usize| {
-            let f = p.files.get(i)?;
-            self.mru.iter().position(|r| *r == p.root.join(&f.0))
-        };
+        // What matches, folders first, then A to Z by name (then by path).
         self.sidebar.hits = if key.0.trim().is_empty() {
             Vec::new()
         } else {
-            m.rank(&key.0, recent).into_iter().take(crate::app::MAX_RESULTS).collect()
+            let mut hits = m.rank(&key.0, |_| None);
+            hits.sort_by_cached_key(|&i| {
+                let (rel, dir) = p.files.get(i).map_or(("", false), |f| (f.0.as_str(), f.2));
+                let name = rel.rsplit('/').next().unwrap_or(rel);
+                (!dir, name.to_lowercase(), rel.to_lowercase())
+            });
+            hits.truncate(crate::app::MAX_RESULTS);
+            hits
         };
         self.sidebar.hit = 0;
         self.sidebar.scroll = true;
@@ -219,6 +225,14 @@ impl App {
     pub(crate) fn hit_path(&self, n: usize) -> Option<PathBuf> {
         let p = self.project.as_ref()?;
         Some(p.root.join(&p.files.get(*self.sidebar.hits.get(n)?)?.0))
+    }
+
+    /// ↵ or a click on a match: a file opens, a folder opens in the tree.
+    fn hit_act(&self, n: usize) -> Option<Act> {
+        let p = self.project.as_ref()?;
+        let dir = p.files.get(*self.sidebar.hits.get(n)?)?.2;
+        let path = self.hit_path(n)?;
+        Some(if dir { Act::Reveal(path) } else { Act::Open(path, true) })
     }
 
     fn sidebar_keys(&mut self, ctx: &egui::Context) -> Option<Act> {
@@ -246,7 +260,7 @@ impl App {
                 self.sidebar.hit = self.sidebar.hit.saturating_sub(1);
                 self.sidebar.scroll = true;
             } else if pressed(Key::Enter) {
-                return self.hit_path(self.sidebar.hit).map(|p| Act::Open(p, true));
+                return self.hit_act(self.sidebar.hit);
             } else if pressed(Key::Escape) {
                 self.leave_search();
             }
@@ -420,7 +434,7 @@ impl App {
             pt.font(12.5, Weight::Regular),
             c.text_subtle,
         );
-        let hint = egui::RichText::new(format!("Search files{go_to}"))
+        let hint = egui::RichText::new(format!("Search files and folders{go_to}"))
             .color(c.text_subtle)
             .font(pt.font(12.5, Weight::Regular));
         let had = !self.sidebar.query.is_empty();
@@ -675,6 +689,17 @@ impl App {
                     self.focus = Focus::Editor;
                 }
             }
+            Some(Act::Reveal(path)) => {
+                self.sidebar.query.clear();
+                self.sidebar.searching = false;
+                self.focus = Focus::Sidebar;
+                let Some(p) = &mut self.project else { return };
+                if let Some(i) = p.tree.reveal(&path) {
+                    p.tree.expand(i);
+                    self.select_row(i);
+                    self.sidebar.center = true; // in the middle, what's in it below
+                }
+            }
             Some(Act::Toggle(i)) => {
                 if let Some(p) = &mut self.project {
                     p.tree.toggle(i);
@@ -701,7 +726,7 @@ impl App {
         if self.sidebar.scroll {
             let i = self.sidebar.hit;
             let (top, bottom) = (i as f32 * row_h, (i + 1) as f32 * row_h);
-            let (off, view) = (self.sidebar.offset, self.sidebar.view);
+            let (off, view) = (self.sidebar.hits_offset, self.sidebar.hits_view);
             if top < off {
                 area = area.vertical_scroll_offset(top);
             } else if bottom > off + view && view > 0.0 {
@@ -711,7 +736,7 @@ impl App {
         let out = area.show_rows(ui, row_h, self.sidebar.hits.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for n in range {
-                let Some((rel, ignored)) = self.sidebar.hits.get(n).and_then(|&h| p.files.get(h)) else {
+                let Some((rel, ignored, is_dir)) = self.sidebar.hits.get(n).and_then(|&h| p.files.get(h)) else {
                     continue;
                 };
                 let (dir, name) = rel.rsplit_once('/').unwrap_or(("", rel));
@@ -730,7 +755,7 @@ impl App {
                 } else if chosen || resp.hovered() {
                     ui.painter().rect_filled(bg, 6.0 * s, c.hover);
                 }
-                let (glyph, tint) = icon::for_file(name);
+                let (glyph, tint) = if *is_dir { (icon::FOLDER, Some(c.accent.gamma_multiply(0.85))) } else { icon::for_file(name) };
                 let tint = tint.map(|t| if *ignored { t.gamma_multiply(0.5) } else { t });
                 let mut label = pt.label(
                     name,
@@ -741,19 +766,20 @@ impl App {
                     s.format.font_id.size = pt.font(13.0, Weight::Regular).size;
                 }
                 // The chosen match says what ↵ does.
-                let open: Vec<Hint> = if chosen && focused { vec![(vec!["↵".into()], "open file")] } else { Vec::new() };
+                let what = if *is_dir { "show in tree" } else { "open file" };
+                let open: Vec<Hint> = if chosen && focused { vec![(vec!["↵".into()], what)] } else { Vec::new() };
                 pt.row(ui, ui.painter(), bg, 0.0, (glyph, tint), label, dir, &[], &open, -4.0 * s);
                 if resp.hovered() {
                     ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                 }
                 if resp.clicked() {
-                    act = self.hit_path(n).map(|p| Act::Open(p, true));
+                    act = self.hit_act(n);
                 }
                 if resp.secondary_clicked() {
                     clicked = Some(n);
                 }
                 resp.context_menu(|ui| {
-                    if let Some(cmd) = self.sidebar_menu(ui, false) {
+                    if let Some(cmd) = self.sidebar_menu(ui, *is_dir) {
                         act = Some(Act::Run(cmd));
                     }
                 });
@@ -780,8 +806,8 @@ impl App {
                 );
             }
         }
-        self.sidebar.offset = out.state.clamped_offset().y;
-        self.sidebar.view = out.inner_rect.height();
+        self.sidebar.hits_offset = out.state.clamped_offset().y;
+        self.sidebar.hits_view = out.inner_rect.height();
         self.sidebar.scroll = false;
         if let Some(n) = clicked {
             self.sidebar.hit = n;

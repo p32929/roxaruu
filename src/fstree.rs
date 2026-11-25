@@ -210,6 +210,26 @@ pub fn collect_files_marked(root: &Path, build: bool) -> Vec<(PathBuf, bool)> {
         .collect()
 }
 
+/// `files` (path relative to the root, ignored) plus every folder they're
+/// in, as `(path, ignored, is_dir)`: the files first, in their order. A
+/// folder is ignored when every file in it is.
+// ponytail: folders come from the files' paths, so an empty folder isn't
+// found by name; walk folders too if that's missed.
+pub fn with_folders(files: Vec<(String, bool)>) -> Vec<(String, bool, bool)> {
+    let mut dirs: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+    for (rel, ignored) in &files {
+        let mut end = 0;
+        while let Some(i) = rel.get(end..).and_then(|r| r.find('/')) {
+            end += i;
+            *dirs.entry(rel.get(..end).unwrap_or_default().to_string()).or_insert(true) &= *ignored;
+            end += 1;
+        }
+    }
+    let mut all: Vec<(String, bool, bool)> = files.into_iter().map(|(f, ignored)| (f, ignored, false)).collect();
+    all.extend(dirs.into_iter().map(|(d, ignored)| (d, ignored, true)));
+    all
+}
+
 /// The one definition of "a project file", shared by Go to File and Search
 /// in Files so they can never disagree: dotfiles included, the project's own
 /// ignore files honoured (optionally), never the user's global or a parent
@@ -247,6 +267,23 @@ fn walk(root: &Path, respect_gitignore: bool, build: bool) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn folders_from_the_files_paths() {
+        let files = vec![("a/b/c.rs".to_string(), false), ("a/x.rs".to_string(), true), ("d/e.rs".to_string(), true), ("top.rs".to_string(), false)];
+        assert_eq!(
+            with_folders(files),
+            [
+                ("a/b/c.rs".to_string(), false, false),
+                ("a/x.rs".to_string(), true, false),
+                ("d/e.rs".to_string(), true, false),
+                ("top.rs".to_string(), false, false),
+                ("a".to_string(), false, true),
+                ("a/b".to_string(), false, true),
+                ("d".to_string(), true, true),
+            ]
+        );
+    }
 
     fn make_tree() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

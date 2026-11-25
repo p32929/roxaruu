@@ -55,7 +55,7 @@ struct SearchState {
 
 /// A project's files (relative, each with whether it's ignored) and their
 /// matcher, from a background walk.
-type Index = (Vec<(String, bool)>, FileMatcher);
+type Index = (Vec<(String, bool, bool)>, FileMatcher);
 
 /// Search results shown at most — more is noise, and costs layout.
 pub(crate) const MAX_RESULTS: usize = 300;
@@ -66,7 +66,8 @@ pub struct Project {
     pub tree: FileTree,
     /// Project-relative paths (with `/`) and their gitignored flag, once the
     /// background walk finishes.
-    pub(crate) files: Vec<(String, bool)>,
+    /// The tree search's list: (path from the root, ignored, is a folder).
+    pub(crate) files: Vec<(String, bool, bool)>,
     pub(crate) matcher: Option<FileMatcher>,
     /// The walk's result, with its matcher built there too (a big repo's
     /// would hold the window up).
@@ -135,9 +136,12 @@ pub struct Sidebar {
     /// following the file in front, so what's around it shows too).
     pub scroll: bool,
     pub center: bool,
-    /// The list's scroll position and height last frame.
+    /// The tree's scroll position and height last frame.
     pub offset: f32,
     pub view: f32,
+    /// The search matches' own (a match chosen must not move the tree by them).
+    pub hits_offset: f32,
+    pub hits_view: f32,
     /// When the tree was last re-read from disk.
     pub read_at: Option<Instant>,
     /// The search box above the tree: typing there (or anywhere in the
@@ -1155,11 +1159,13 @@ impl App {
         let (tx, rx) = channel();
         let (root, build, ctx2) = (p.root.clone(), self.config.settings.search_ignored, ctx.clone());
         std::thread::spawn(move || {
-            let files: Vec<(String, bool)> = fstree::collect_files_marked(&root, build)
-                .into_iter()
-                .map(|(path, ignored)| (rel_path(&root, &path), ignored))
-                .collect();
-            let names: Vec<String> = files.iter().map(|(f, _)| f.clone()).collect();
+            let files = fstree::with_folders(
+                fstree::collect_files_marked(&root, build)
+                    .into_iter()
+                    .map(|(path, ignored)| (rel_path(&root, &path), ignored))
+                    .collect(),
+            );
+            let names: Vec<String> = files.iter().map(|(f, _, _)| f.clone()).collect();
             let matcher = FileMatcher::new(&names);
             drop(names);
             let _ = tx.send((files, matcher));

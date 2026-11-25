@@ -5505,7 +5505,7 @@ impl App {
             None if self.focus == Focus::Sidebar && self.sidebar_shown() => (
                 "Sidebar",
                 vec![
-                    ("type", "Search files by name (↑ ↓ ↵ pick one)"),
+                    ("type", "Search files and folders by name (↑ ↓ ↵ pick one)"),
                     ("↑ ↓", "Move"),
                     ("← →", "Fold / unfold a folder"),
                     ("↵", "Open the file and go to it"),

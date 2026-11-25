@@ -138,7 +138,7 @@ fn headless_project_walkthrough() {
     press(&mut h, Modifiers::NONE, Key::ArrowDown);
     press(&mut h, Modifiers::NONE, Key::ArrowRight);
     shot(&mut h, "12-files-expanded");
-    type_text(&mut h, "app");
+    type_text(&mut h, "app.rs"); // "app" alone lists the src/app folder first
     shot(&mut h, "13-files-search");
     press(&mut h, Modifiers::NONE, Key::Enter);
     shot(&mut h, "14-opened");
@@ -2575,6 +2575,33 @@ fn headless_project_home_and_file_browser() {
     assert!(!app(&h).sidebar.searching);
     press(&mut h, Modifiers::NONE, Key::Escape);
     assert_eq!(app(&h).focus, crate::app::Focus::Editor);
+    // Folders are found too, listed first, then files, each A to Z; ↵ on
+    // a folder opens it in the tree, chosen there.
+    press(&mut h, ALT, Key::F);
+    type_text(&mut h, "d");
+    let found: Vec<(String, bool)> = {
+        let a = app(&h);
+        let p = a.project.as_ref().unwrap();
+        a.sidebar.hits.iter().map(|&i| (p.files[i].0.clone(), p.files[i].2)).collect()
+    };
+    let key = |(rel, dir): &(String, bool)| (!dir, rel.rsplit('/').next().unwrap().to_lowercase(), rel.to_lowercase());
+    let mut sorted = found.clone();
+    sorted.sort_by_key(key);
+    assert_eq!(found, sorted, "folders first, then A to Z");
+    assert!(found.contains(&("docs".to_string(), true)), "the docs folder: {found:?}");
+    assert!(found.iter().any(|f| !f.1), "and files: {found:?}");
+    shot(&mut h, "k4d-folders-first");
+    for _ in 0..found.iter().position(|f| f.0 == "docs").unwrap() {
+        press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    }
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let docs = app(&h).project.as_ref().unwrap().root.join("docs");
+    assert_eq!(app(&h).focus, crate::app::Focus::Sidebar);
+    assert!(app(&h).sidebar.query.is_empty() && !app(&h).sidebar.searching);
+    assert_eq!(app(&h).sidebar.selected.as_ref(), Some(&docs), "chosen in the tree");
+    let tree = &app(&h).project.as_ref().unwrap().tree;
+    assert!(tree.entries[tree.index_of(&docs).unwrap()].expanded, "and opened");
+    press(&mut h, Modifiers::NONE, Key::Escape);
     // From the box with nothing typed, ↓ goes down into the rows.
     press(&mut h, ALT, Key::F);
     assert!(app(&h).sidebar.searching);
@@ -3824,6 +3851,22 @@ fn headless_tree_follows_the_active_file() {
     }
     assert!(row_visible(&h, &files[2]), "through a symlink: {:?}", app(&h).sidebar.selected);
     shot(&mut h, "tf1-tree-follows-again");
+
+    // Found by search, from anywhere in a long tree: in view at once,
+    // a folder (opened there) and a file (opened in a tab) alike.
+    for (query, found) in [("pkg25", root.join("pkg25")), ("zz_last", files[2].clone()), ("pkg02", root.join("pkg02"))] {
+        let ctx = h.ctx.clone();
+        h.state_mut().0.run(crate::keymap::Command::CollapseFolders, &ctx);
+        h.step();
+        press(&mut h, ALT, Key::F);
+        type_text(&mut h, query);
+        press(&mut h, Modifiers::NONE, Key::Enter);
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(row_visible(&h, &found), "{query}: in view: {:?} offset {}", app(&h).sidebar.selected, app(&h).sidebar.offset);
+    }
+    shot(&mut h, "tf2-found-in-view");
 }
 
 /// A terminal's tab says what its program is doing: printing, running,

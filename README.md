@@ -30,7 +30,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 6. **Ctrl+O** (**⌘O** on a Mac) opens one list of every folder you've opened, as a project or with a terminal in it, newest first (**Ctrl+S** / **⌘S** sorts them by name). **Enter** opens the folder (in a window that already has one, or terminals, it asks: here in its place, or a new window); **Ctrl+Enter** (**⌘↵**) opens a terminal in it instead. Select several (numbered in the order they'll open) and **Ctrl+Enter** opens a terminal in each, side by side, filling the window. In a window that already has things open, a terminal asks too, one or several: here, or a new window. Type a path, or pick **Browse…**, to go to any other folder (**Tab** goes into a folder, **Shift+Tab** up); its last row is **New Window** (**Alt+Shift+N** / **⌥⇧N**), an empty one with no folder.
 
 **Editor**
-1. Syntax highlighting for 23 languages, tabs, split view, find and replace, go to line, go to file, search across the whole project.
+1. Syntax highlighting for 23 languages, tabs, split view, find and replace, go to line, go to a file or folder by name, search across the whole project.
 2. Opens huge files instantly: it reads only what's on screen.
 3. Files reopen where you left them, with the cursor and scroll position.
 
