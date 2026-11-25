@@ -44,6 +44,9 @@ pub enum Ask {
     /// Folders to open in a window that has things open: here (in place of
     /// its folder; the rest in new windows), or in new windows?
     OpenFolders { dirs: Vec<PathBuf> },
+    /// Discard changes (Source Control): put back `rels` in `repo` (`what`
+    /// names them; `untracked` of them go to the trash).
+    Discard { repo: Box<crate::git::Repo>, rels: Vec<String>, what: String, untracked: usize },
 }
 
 /// Where Git for Windows (and its Git Bash) comes from.
@@ -183,6 +186,10 @@ impl App {
             // ↵ is "this window"; "new window" answers apart (`ui`).
             Ask::OpenTerminals { dirs } => {
                 self.terminals_here(dirs, ctx);
+                Ok(())
+            }
+            Ask::Discard { repo, rels, .. } => {
+                self.discard(*repo, rels, ctx);
                 Ok(())
             }
             // ↵ is "this window"; "new window" answers apart (`ui`).

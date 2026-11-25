@@ -1757,6 +1757,33 @@ fn headless_every_shortcut() {
     assert_eq!(crate::app::dry_run(false), [Command::DeleteFile]);
     done.push(Command::DeleteFile);
 
+    // Source Control: two repositories in the folder, a change in each; the
+    // keyboard on a changed file.
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    for name in ["one", "two"] {
+        crate::git::tests::repo_at(&root.join(name));
+        std::fs::write(root.join(name).join("kept.rs"), "changed\n").unwrap();
+    }
+    // Opening it looks for repositories again: these are new.
+    h.state_mut().0.source_control();
+    wait_for(&mut h, "two repositories with changes", |a| {
+        a.project.as_ref().is_some_and(|p| p.repos.len() == 2 && p.repos.iter().all(|r| !r.files.is_empty()))
+    });
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    assert!(matches!(app(&h).chosen_row(), Some(crate::ui::changes::Row::File(..))), "{:?}", app(&h).chosen_row());
+    visible_keys_work(&mut h, "Source Control");
+    for &(command, title, (key, mods)) in &sheet {
+        if done.contains(&command) || !app(&h).available(command) {
+            continue;
+        }
+        crate::app::dry_run(true);
+        press(&mut h, mods, key);
+        assert_eq!(crate::app::dry_run(false), [command], "from Source Control, {title}");
+        done.push(command);
+    }
+    h.state_mut().0.focus = crate::app::Focus::Editor;
+
     // Switch Window: in a browser's copy (the page's list; the Chrome test
     // opens it for real).
     press(&mut h, Modifiers::NONE, Key::Escape);
@@ -2628,6 +2655,134 @@ fn headless_project_home_and_file_browser() {
     // The welcome launcher is for no folder only.
     let mut h = harness(None);
     shot(&mut h, "k5-no-folder");
+}
+
+/// Source Control (⇧⌘G) in a folder holding two projects, each pushing
+/// to a remote of its own (bare repositories here): stage with space, see
+/// the changes (a read-only diff tab), one message committing both, push
+/// both, discard, the history and a commit's changes.
+#[test]
+#[ignore]
+fn headless_source_control() {
+    use crate::ui::changes::Row;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("work");
+    let git = |at: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git").arg("-C").arg(at).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    for name in ["api", "web"] {
+        let (repo, origin) = (root.join(name), dir.path().join(format!("{name}.git")));
+        git(dir.path(), &["init", "-q", "--bare", "-b", "main", origin.to_str().unwrap()]);
+        crate::git::tests::repo_at(&repo);
+        git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        git(&repo, &["push", "-q", "-u", "origin", "main"]);
+        std::fs::write(repo.join("kept.rs"), "fn changed() {}\n").unwrap();
+    }
+    std::fs::write(root.join("api").join("new.rs"), "fn new() {}\n").unwrap();
+    let mut h = harness(Some(root.clone()));
+    let repos = |h: &Harness<'static, Root>| app(h).project.as_ref().unwrap().repos.clone();
+    let file = |h: &Harness<'static, Root>, repo: usize, rel: &str| {
+        repos(h).get(repo).and_then(|r| r.files.iter().find(|f| f.rel == rel).cloned())
+    };
+
+    press(&mut h, CMD_SHIFT, Key::G);
+    assert!(app(&h).changes_focused());
+    wait_for(&mut h, "both repositories", |a| a.project.as_ref().is_some_and(|p| p.repos.len() == 2 && p.repos.iter().all(|r| !r.files.is_empty())));
+    h.step();
+    assert_eq!(repos(&h).iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["api", "web"]);
+    assert_eq!(
+        app(&h).change_rows(),
+        [Row::Repo(0), Row::Section(0, false), Row::File(0, false, 0), Row::File(0, false, 1), Row::History(0), Row::Repo(1), Row::Section(1, false), Row::File(1, false, 0), Row::History(1)]
+    );
+    shot(&mut h, "g0-source-control");
+    visible_keys_work(&mut h, "Source Control");
+
+    // Space stages the file the keyboard's on.
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    assert_eq!(app(&h).chosen_row(), Some(Row::File(0, false, 0)));
+    press(&mut h, Modifiers::NONE, Key::Space);
+    wait_for(&mut h, "kept.rs staged", |a| {
+        a.project.as_ref().and_then(|p| p.repos.first()).is_some_and(|r| {
+            r.files.iter().any(|f| f.rel == "kept.rs" && f.staged == Some('M') && f.unstaged.is_none())
+        })
+    });
+    assert!(file(&h, 0, "new.rs").is_some_and(|f| f.untracked()));
+    assert!(app(&h).changes.message.is_empty(), "space staged, it didn't type");
+
+    // ↵: its changes, read-only, the keyboard still in the list.
+    let at = app(&h).change_rows().iter().position(|r| *r == Row::File(0, true, 0)).unwrap();
+    while app(&h).chosen_row() != Some(Row::File(0, true, 0)) {
+        let up = app(&h).change_rows().iter().position(|r| Some(*r) == app(&h).chosen_row()).unwrap() > at;
+        press(&mut h, Modifiers::NONE, if up { Key::ArrowUp } else { Key::ArrowDown });
+    }
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let tab = app(&h).active_tab().unwrap();
+    assert_eq!(tab.name(), "kept.rs (staged)");
+    let text = tab.buf.rope.to_string();
+    assert!(text.contains("-1") && text.contains("+fn changed() {}"), "{text}");
+    assert!(app(&h).changes_focused());
+    shot(&mut h, "g1-diff");
+    // Read-only: typing in it changes nothing.
+    h.state_mut().0.focus = crate::app::Focus::Editor;
+    type_text(&mut h, "x");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(app(&h).active_tab().unwrap().buf.rope.to_string(), text);
+    assert!(!app(&h).editable() && !app(&h).available(crate::keymap::Command::Save));
+    visible_keys_work(&mut h, "a diff");
+    // ⌥⇧O: the file itself, at the changed line.
+    press(&mut h, ALT | SHIFT, Key::O);
+    assert_eq!(app(&h).active_tab().unwrap().path(), Some(&root.join("api").join("kept.rs")));
+
+    // Typing in the list types the message; ⇧⌥↵ commits every repository
+    // (what's staged; everything where nothing is).
+    press(&mut h, CMD_SHIFT, Key::G);
+    type_text(&mut h, "Both at once");
+    assert_eq!(app(&h).changes.message, "Both at once");
+    assert!(app(&h).changes.typing);
+    shot(&mut h, "g2-message");
+    press(&mut h, ALT | SHIFT, Key::Enter);
+    wait_for(&mut h, "both committed", |a| {
+        a.changes.message.is_empty() && a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.head.ahead == 1))
+    });
+    let api = repos(&h)[0].clone();
+    assert_eq!(api.files.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["new.rs"], "only what was staged");
+    assert!(repos(&h)[1].files.is_empty(), "nothing staged: everything");
+
+    // ⇧⌥P pushes both.
+    press(&mut h, ALT | SHIFT, Key::P);
+    wait_for(&mut h, "both pushed", |a| a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.head.ahead == 0)));
+    assert!(app(&h).toasts.iter().any(|t| t.msg.contains("Pushed 2 of 2")), "{:?}", app(&h).toasts.iter().map(|t| &t.msg).collect::<Vec<_>>());
+
+    // Discard (asks first): api's last change, the new file, goes.
+    press(&mut h, Modifiers::NONE, Key::Escape); // out of the message box, into the list
+    assert!(app(&h).changes_focused() && !app(&h).changes.typing);
+    press(&mut h, Modifiers::NONE, Key::Home);
+    assert_eq!(app(&h).chosen_row(), Some(Row::Repo(0)));
+    press(&mut h, CMD | ALT, Key::Backspace);
+    assert!(matches!(app(&h).ask, Some(crate::app::Ask::Discard { untracked: 1, .. })));
+    shot(&mut h, "g3-discard");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    wait_for(&mut h, "discarded", |a| a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.files.is_empty())));
+    assert!(!root.join("api").join("new.rs").exists());
+
+    // The history: ↵ opens it, ↵ on a commit shows what it changed.
+    let history = app(&h).change_rows().iter().position(|r| *r == Row::History(0)).unwrap();
+    while app(&h).chosen_row() != Some(Row::History(0)) {
+        press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    }
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(app(&h).change_rows().get(history + 1), Some(&Row::Commit(0, 0)));
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let shown = app(&h).active_tab().unwrap();
+    assert!(shown.name().ends_with("Both at once") && shown.buf.rope.to_string().contains("+fn changed() {}"), "{}", shown.name());
+    shot(&mut h, "g4-history");
+    // ← folds the repository.
+    press(&mut h, Modifiers::NONE, Key::Home);
+    press(&mut h, Modifiers::NONE, Key::ArrowLeft);
+    assert_eq!(app(&h).change_rows()[..2], [Row::Repo(0), Row::Repo(1)]);
 }
 
 /// The tree shows what git says changed: a changed file yellow with M, a

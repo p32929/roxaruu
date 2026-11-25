@@ -70,7 +70,8 @@ impl App {
             return;
         }
         if self.sidebar_shown() && self.focus != Focus::Sidebar {
-            self.focus_sidebar();
+            // Into what it shows: the tree, or Source Control.
+            if self.changes.on { self.source_control() } else { self.focus_sidebar() }
         } else {
             self.toggle_sidebar(ctx);
         }
@@ -88,7 +89,8 @@ impl App {
     /// again to go back to the editor.
     pub fn search_files(&mut self) {
         let shown = self.sidebar_shown();
-        let in_tree = self.focus == Focus::Sidebar && shown;
+        let in_tree = self.focus == Focus::Sidebar && shown && !self.changes.on;
+        self.changes.on = false;
         if in_tree && self.sidebar.searching {
             self.focus = Focus::Editor;
             return;
@@ -134,10 +136,11 @@ impl App {
     /// ⇧⌘E: into the tree, on the active file (showing the sidebar if
     /// needed), else its first row; again to go back to the editor.
     pub fn focus_sidebar(&mut self) {
-        if self.focus == Focus::Sidebar && self.sidebar_shown() {
+        if self.focus == Focus::Sidebar && self.sidebar_shown() && !self.changes.on {
             self.focus = Focus::Editor;
             return;
         }
+        self.changes.on = false;
         if self.view().compact {
             self.view_mut().drawer = true;
         } else {
@@ -166,6 +169,7 @@ impl App {
     /// folders opened (a folder itself too, what's in it below it), chosen
     /// and in the middle. The project folder: the top row.
     pub(crate) fn reveal_in_tree(&mut self, path: &Path, ctx: &egui::Context) {
+        self.changes.on = false;
         self.sidebar.query.clear();
         self.sidebar.searching = false;
         if !self.sidebar_shown() {
@@ -259,7 +263,7 @@ impl App {
     }
 
     fn sidebar_keys(&mut self, ctx: &egui::Context) -> Option<Act> {
-        if self.focus != Focus::Sidebar || self.palette.is_some() || self.modal_open() {
+        if self.focus != Focus::Sidebar || self.palette.is_some() || self.modal_open() || self.changes.on {
             return None;
         }
         let pressed = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
@@ -384,12 +388,27 @@ impl App {
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0 * s;
-                let buttons = [
+                // Source Control: its actions ("all" ones with several
+                // repositories) that can run now, and the way back to the files.
+                let many = project.repos.len() > 1;
+                let run = |c: Command, title: &str| (icon::for_command(c), format!("{title}{}", caps(c)), Act::Run(c));
+                let buttons: Vec<_> = if self.changes.on {
+                    let git = if many {
+                        [(Command::GitPullAll, "Pull All Repositories"), (Command::GitPushAll, "Push All Repositories"), (Command::GitCommitAll, "Commit All Repositories")]
+                    } else {
+                        [(Command::GitPull, "Pull"), (Command::GitPush, "Push"), (Command::GitCommit, "Commit")]
+                    };
+                    [(icon::SIDEBAR, format!("Hide Sidebar{}", caps(Command::ToggleSidebar)), Act::Hide), run(Command::FocusSidebar, "Show Files")]
+                        .into_iter()
+                        .chain(git.into_iter().filter(|(c, _)| self.available(*c)).map(|(c, t)| run(c, t)))
+                        .collect()
+                } else { vec![
                     (
                         icon::SIDEBAR,
                         format!("Hide File Tree{}", caps(Command::ToggleSidebar)),
                         Act::Hide,
                     ),
+                    run(Command::SourceControl, "Source Control"),
                     (
                         icon::COLLAPSE_ALL,
                         format!("Collapse Folders{}", caps(Command::CollapseFolders)),
@@ -405,7 +424,7 @@ impl App {
                         format!("New File…{}", caps(Command::NewFile)),
                         Act::Run(Command::NewFile),
                     ),
-                ];
+                ] };
                 // Their keys are in the tree's row of the status bar, and
                 // in their tips.
                 for (glyph, tip, a) in buttons {
@@ -414,8 +433,9 @@ impl App {
                     }
                 }
                 let room = (ui.available_width() - 6.0 * s).max(0.0);
+                let title = if self.changes.on { "SOURCE CONTROL".to_string() } else { project.name.to_uppercase() };
                 let mut job = LayoutJob::simple_singleline(
-                    project.name.to_uppercase(),
+                    title,
                     pt.font(11.5, Weight::SemiBold),
                     c.text_muted,
                 );
@@ -435,6 +455,12 @@ impl App {
                 }
             },
         );
+
+        if self.changes.on {
+            let act = act.take();
+            self.sidebar_act(act, None, &ctx);
+            return self.changes_ui(ui, focused);
+        }
 
         // The search box: Go to File. It has the keys whenever the tree
         // does, so typing in the rows searches; it looks it (lit, a caret)

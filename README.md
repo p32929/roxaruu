@@ -37,6 +37,12 @@ I looked for something that already solved this, didn't like what I found, so I 
 5. The title bar names the project and the file in front (its whole path on hover); a click shows it in the file tree.
 6. Pin a tab (right-click it) to keep it at the left: Close Others and Close All leave it open, and it stays pinned next time. Terminals too.
 
+**Source control (git)**
+1. **Ctrl+Shift+G** (**⇧⌘G**) shows every git repository in the folder (its own, and projects or worktrees inside it), each with its branch, how far ahead or behind it is, and its staged and changed files.
+2. **Space** stages or unstages a file (or all of a repository's), **Enter** shows its changes (added lines green, removed red), **Alt+Shift+O** (**⌥⇧O**) opens the file itself, **Ctrl+Alt+Backspace** (**⌃⌥⌫**) discards them (asks first; new files go to the trash). **↵** on History lists the recent commits, and on a commit shows what it changed.
+3. One commit message at the top. **Alt+Enter** (**⌥↵**) commits the repository you're on: what's staged, or everything if nothing is. **Alt+Shift+Enter** (**⌥⇧↵**) commits every repository with changes, with the same message.
+4. **Alt+P** / **Alt+L** (**⌥P** / **⌥L**) push and pull; add **Shift** to push or pull every repository at once. A branch that was never pushed is pushed to its remote. It uses git and your git login as they are: nothing to set up, nothing extra installed.
+
 **Remote access**
 1. Turn it on, set a password, and open the address in any browser, on another computer or a phone. You get the same window, with all its files and terminals.
 2. Install it on a **Linux server** (no screen needed) and code on that machine from your browser: `rox --remote on --password <password>`.

@@ -17,6 +17,7 @@ use crate::terminalpane::Pulse;
 use crate::palette::{Mode, Pick};
 use crate::theme::{Colors, mix};
 
+pub(crate) mod changes;
 mod sidebar;
 pub(crate) mod tabstrip;
 use tabstrip::Strip;
@@ -98,6 +99,11 @@ pub mod icon {
     pub const GITHUB: &str = "\u{ea84}";
     pub const GLOBE: &str = "\u{eb01}";
     pub const DOWNLOAD: &str = "\u{eac2}";
+    pub const SOURCE_CONTROL: &str = "\u{ea68}";
+    pub const GIT_COMMIT: &str = "\u{eafc}";
+    pub const REPO: &str = "\u{ea62}";
+    pub const PUSH: &str = "\u{eb41}";
+    pub const PULL: &str = "\u{eb40}";
     pub const TABS: &str = "\u{f04e9}";
 
     /// A file's type icon and its colour (Seti's, as VS Code shows them).
@@ -363,6 +369,13 @@ pub mod icon {
             Command::ClearTerminal => CLEAR,
             Command::TogglePinTab => PIN,
             Command::CopyTerminalOutput => COPY,
+            Command::SourceControl => SOURCE_CONTROL,
+            Command::GitStage | Command::GitStageAll => ADD,
+            Command::GitDiscard => UNDO,
+            Command::GitCommit | Command::GitCommitAll => GIT_COMMIT,
+            Command::GitPush | Command::GitPushAll => PUSH,
+            Command::GitPull | Command::GitPullAll => PULL,
+            Command::GitOpenFile => GO_TO_FILE,
             Command::FocusSidebar => FILE,
             Command::ToggleTerminal | Command::SwitchTerminal | Command::JumpTerminal(_) => {
                 TERMINAL
@@ -1217,7 +1230,7 @@ impl App {
             Stroke::new(1.0, c.border),
         );
 
-        let names: Vec<String> = self.tabs.iter().map(|t| t.buf.name()).collect();
+        let names: Vec<String> = self.tabs.iter().map(|t| t.name()).collect();
         // Same-named files get the folders that tell them apart alongside.
         let details = self.tab_details();
         let font = pt.font(13.0, Weight::Medium);
@@ -1883,6 +1896,17 @@ impl App {
                 ];
                 self.modal(ctx, icon::FOLDER_OPEN, &title, &body, &buttons, None, None, None)
             }
+            Ask::Discard { what, untracked, .. } => {
+                let body = match untracked {
+                    0 => "They go back to how they were at the last commit. This can't be undone.".to_string(),
+                    n => format!(
+                        "They go back to how they were at the last commit; {} git never had {} to the trash.",
+                        if *n == 1 { "a new file".to_string() } else { format!("{n} new files") },
+                        if *n == 1 { "goes" } else { "go" }
+                    ),
+                };
+                self.modal(ctx, icon::UNDO, &format!("Discard {what}?"), &body, &[CANCEL, ok("Discard")], None, None, None)
+            }
             Ask::OpenUrl(url) => {
                 let body = url.clone();
                 self.modal(
@@ -2337,7 +2361,7 @@ impl App {
         let mut out = vec![part(proj.name.clone(), Some(proj.root.clone()), true, false)];
         let Some(tab) = tab else { return out };
         match tab.path().filter(|p| p.starts_with(&proj.root)) {
-            Some(path) => out.push(part(tab.buf.name(), Some(path.clone()), false, true)),
+            Some(path) => out.push(part(tab.name(), Some(path.clone()), false, true)),
             None => out.push(part(self.tab_rel(tab), None, false, true)),
         }
         out
@@ -2459,6 +2483,10 @@ impl App {
         let back = if self.sidebar.from_tree { "back to files" } else { "back to editor" };
         let mut list = if self.palette.is_some() || self.modal_open() || !self.sidebar_shown() {
             vec![]
+        } else if self.changes.on {
+            let mut list = self.change_hints();
+            list.insert(0, mark(icon::SOURCE_CONTROL));
+            return tidy(list);
         } else if self.focus != Focus::Sidebar {
             vec![
                 self.focus_hint(Focus::Sidebar).and_then(|(c, what)| cmd(c, what)),
@@ -2480,6 +2508,7 @@ impl App {
             // Most useful first: a narrow tree shows what fits.
             vec![
                 raw("↵", "open"),
+                cmd(Command::SourceControl, "source control"),
                 cmd(Command::NewFile, "new file"),
                 cmd(Command::NewFolder, "new folder"),
                 cmd(Command::RenameFile, "rename"),
@@ -2494,6 +2523,45 @@ impl App {
         };
         list.insert(0, mark(icon::FOLDER));
         tidy(list)
+    }
+
+    /// The Changes view's keys: the way in from elsewhere; in it, what the
+    /// message box or the chosen row can do, most useful first.
+    fn change_hints(&self) -> Vec<Option<StatusHint>> {
+        use crate::ui::changes::Row;
+        let cmd = |c, what| self.hint(c, what);
+        let raw = |keys: &str, what: &'static str| Some((keys.to_string(), what, None));
+        if !self.changes_focused() {
+            return vec![cmd(Command::SourceControl, "go to"), cmd(Command::ToggleSidebar, "hide")];
+        }
+        let commit = [cmd(Command::GitCommit, "commit"), cmd(Command::GitCommitAll, "commit all")];
+        if self.changes.typing {
+            return commit.into_iter().chain([raw("↓", "the changes"), raw("esc", "the changes")]).collect();
+        }
+        let row = self.chosen_row();
+        let staged = matches!(row, Some(Row::File(_, true, _) | Row::Section(_, true)));
+        let open = match row {
+            Some(Row::File(..)) => raw("↵", "show changes"),
+            Some(Row::Commit(..)) => raw("↵", "show commit"),
+            Some(Row::Repo(_) | Row::History(_)) => raw("↵", "open / close"),
+            _ => None,
+        };
+        let stage = if self.can_stage() { raw("space", if staged { "unstage" } else { "stage" }) } else { None };
+        // Most used first: a narrow sidebar shows what fits.
+        let [commit, commit_all] = commit;
+        let mut list = vec![stage, commit, cmd(Command::GitPush, "push"), open, commit_all];
+        list.extend([
+            cmd(Command::GitPushAll, "push all"),
+            cmd(Command::GitPull, "pull"),
+            cmd(Command::GitPullAll, "pull all"),
+            cmd(Command::GitStageAll, "stage all"),
+            cmd(Command::GitDiscard, "discard"),
+            cmd(Command::GitOpenFile, "open file"),
+            raw("type", "message"),
+            cmd(Command::FocusSidebar, "files"),
+            raw("esc", "back to editor"),
+        ]);
+        list
     }
 
     /// The rest of the status bar: the terminal's keys, then the two that
@@ -2567,6 +2635,8 @@ impl App {
                 if self.editable() { raw("⇥", "replace") } else { None },
                 raw("esc", "close find"),
             ]);
+        } else if self.active_tab().is_some_and(|t| t.diff.is_some()) {
+            list.push(cmd(Command::GitOpenFile, "open the file"));
         } else if !self.editable() {
             list.push(cmd(Command::EditWholeFile, "edit the whole file"));
         }
@@ -3279,6 +3349,8 @@ impl App {
             let s = b.rope.line(l).to_string();
             s.trim_end_matches(['\n', '\r']).to_string()
         };
+        // A diff: its lines numbered as in the file, added and removed tinted.
+        let diff_lines = tab.diff.as_ref().map(|d| &d.lines);
         let crow = b.cursor_row();
         let ccol_char = b.cursor_col();
         // The screen row the caret is on.
@@ -3401,13 +3473,29 @@ impl App {
                     } else {
                         c.text_subtle
                     };
+                    let number = match diff_lines {
+                        Some(d) => d.get(l).copied().flatten().map(|n| (n + 1).to_string()).unwrap_or_default(),
+                        None => (l + 1).to_string(),
+                    };
                     p.text(
                         pos2(rect.left() + gutter - 16.0, y),
                         Align2::RIGHT_CENTER,
-                        (l + 1).to_string(),
+                        number,
                         font.clone(),
                         num_color,
                     );
+                }
+                if diff_lines.is_some() {
+                    let tint = match full.as_bytes().first() {
+                        _ if full.starts_with("+++ ") || full.starts_with("--- ") => None,
+                        Some(b'+') => Some(c.ansi_2.gamma_multiply(0.16)),
+                        Some(b'-') => Some(c.ansi_1.gamma_multiply(0.16)),
+                        _ if full.starts_with("@@") => Some(c.accent.gamma_multiply(0.08)),
+                        _ => None,
+                    };
+                    if let Some(tint) = tint {
+                        p.rect_filled(rect, 0.0, tint);
+                    }
                 }
                 if l == crow && show_current_line {
                     p.rect_filled(rect, 0.0, c.line_highlight);
@@ -3971,7 +4059,7 @@ impl App {
             title_resp.context_menu(|ui| {
                 tile_pick = tile_pick.or(command_menu(ui, &self.tab_menu(i), &|c| self.shortcut(c)));
             });
-            let (name, modified) = self.tabs.get(i).map_or_else(Default::default, |t| (t.buf.name(), t.buf.modified));
+            let (name, modified) = self.tabs.get(i).map_or_else(Default::default, |t| (t.name(), t.buf.modified));
             let dot = if modified {
                 "  ●"
             } else {
@@ -6102,6 +6190,7 @@ pub(crate) fn help_sections(
         "search" => "Search",
         "view" => "View",
         "terminal" => "Terminals",
+        "git" => "Source Control",
         _ => "General",
     };
     let mut out: Vec<(&'static str, Vec<(Command, &'static str)>)> = [
@@ -6112,6 +6201,7 @@ pub(crate) fn help_sections(
         "Search",
         "View",
         "Terminals",
+        "Source Control",
     ]
     .iter()
     .map(|t| (*t, Vec::new()))

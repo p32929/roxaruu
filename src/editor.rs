@@ -152,6 +152,16 @@ pub struct Tab {
     pub disk_news: Option<buffer::DiskStatus>,
     /// Pinned: kept at the left, left open by Close Others / All / Saved.
     pub pinned: bool,
+    /// Not a file: what git says changed (read-only, never saved).
+    pub diff: Option<Diff>,
+}
+
+/// A diff shown in a tab: its name, the file it's about, and where each
+/// of its lines is in that file now (`git::new_lines`).
+pub struct Diff {
+    pub title: String,
+    pub file: Option<PathBuf>,
+    pub lines: Vec<Option<usize>>,
 }
 
 impl Tab {
@@ -180,7 +190,24 @@ impl Tab {
             gone: false,
             disk_news: None,
             pinned: false,
+            diff: None,
         }
+    }
+
+    /// A read-only tab showing `text`, a diff.
+    pub fn diff(title: &str, file: Option<PathBuf>, text: &str) -> Tab {
+        let mut tab = Tab::lazy(Path::new(title));
+        tab.buf = Buffer::from_text(Path::new(title), text);
+        tab.buf.path = None;
+        tab.buf.lang = Some(&crate::syntax::DIFF);
+        tab.loaded = true;
+        tab.diff = Some(Diff { title: title.to_string(), file, lines: crate::git::new_lines(text) });
+        tab
+    }
+
+    /// Its name on its tab: the file's, or a diff's.
+    pub fn name(&self) -> String {
+        self.diff.as_ref().map_or_else(|| self.buf.name(), |d| d.title.clone())
     }
 
     pub fn open(path: &Path) -> Result<Tab, String> {
@@ -561,8 +588,12 @@ impl Tab {
 
     /// Apply this frame's typing and caret keys. `page` is rows per screen.
     pub fn input(&mut self, events: &[Event], page: usize) {
+        let read_only = self.diff.is_some();
         for e in events {
             match e {
+                // Moving and selecting only.
+                Event::Text(_) | Event::Ime(_) | Event::Paste(_) if read_only => {}
+                Event::Key { key: Key::Backspace | Key::Delete | Key::Enter | Key::Tab, pressed: true, .. } if read_only => {}
                 Event::Text(t) => self.type_text(t),
                 Event::Ime(egui::ImeEvent::Commit(t)) => self.type_text(t),
                 Event::Paste(t) => self.paste(t),

@@ -65,11 +65,23 @@ pub static GENERIC: Lang = Lang {
     grammar: || grammar(tree_sitter_json::LANGUAGE, "", "", ""),
 };
 
+/// A diff (what git says changed, a `.patch`): its lines coloured as the
+/// code they are (`generic`), its headers dimmed (`diff_spans`). The editor
+/// tints added and removed lines.
+pub static DIFF: Lang = Lang {
+    name: "Diff",
+    id: "diff",
+    extensions: &["diff", "patch"],
+    comment: None,
+    grammar: || grammar(tree_sitter_json::LANGUAGE, "", "", ""),
+};
+
 impl Lang {
     pub fn detect(path: &Path) -> Option<&'static Lang> {
         let ext = path.extension()?.to_str()?.to_lowercase();
         LANGUAGES
             .iter()
+            .chain([&DIFF])
             .find(|l| l.extensions.contains(&ext.as_str()))
             .or_else(|| (!PROSE.contains(&ext.as_str())).then_some(&GENERIC))
     }
@@ -444,7 +456,7 @@ pub fn queries_readme() -> String {
 /// Highlight configs, built once per language on first use and kept for
 /// the life of the app (so injections can borrow them from any thread).
 fn config(lang: &'static Lang) -> Option<&'static HighlightConfiguration> {
-    if lang.id == GENERIC.id {
+    if lang.id == GENERIC.id || lang.id == DIFF.id {
         return None;
     }
     static CONFIGS: OnceLock<Mutex<HashMap<&'static str, Option<&'static HighlightConfiguration>>>> =
@@ -485,6 +497,9 @@ fn build_with(lang: &Lang, mine: Option<String>) -> Option<HighlightConfiguratio
 fn spans_for(lang: &'static Lang, source: &str) -> Option<Vec<LineSpans>> {
     if lang.id == GENERIC.id {
         return Some(generic(source));
+    }
+    if lang.id == DIFF.id {
+        return Some(diff_spans(source));
     }
     let cfg = config(lang)?;
     let mut highlighter = Highlighter::new();
@@ -552,6 +567,26 @@ const PRIMITIVES: &[&str] = &[
     "i32", "i64", "f32", "f64",
 ];
 const OPERATORS: &[u8] = b"+-*/%=<>!&|^~?:";
+
+/// A diff: each changed or kept line's code (after its `+` `-` or space)
+/// coloured by `generic`, the rest (`diff --git`, `@@ … @@`, a commit's
+/// header) dimmed.
+fn diff_spans(source: &str) -> Vec<LineSpans> {
+    let code = |l: &str| matches!(l.as_bytes().first(), Some(b'+' | b'-' | b' ')) && !l.starts_with("+++ ") && !l.starts_with("--- ");
+    // The marks become spaces: same columns, nothing for `generic` to read.
+    let stripped: String = source
+        .split('\n')
+        .map(|l| if code(l) { format!(" {}", l.get(1..).unwrap_or("")) } else { String::new() })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut spans = generic(&stripped);
+    for (line, l) in source.split('\n').enumerate() {
+        if let (false, Some(s), Ok(n)) = (code(l), spans.get_mut(line), u32::try_from(l.len())) {
+            *s = if n > 0 { vec![(0..n, if l.starts_with("@@") { Token::Attribute } else { Token::Comment })] } else { Vec::new() };
+        }
+    }
+    spans
+}
 
 /// Colours for code in a language without a grammar here, from what
 /// nearly all share: comments (`//`, `/* */`, `#`, `--`), strings
@@ -906,6 +941,20 @@ mod tests {
                 last = r.end;
             }
         }
+    }
+
+    /// A diff: headers dimmed, the code in it coloured, at its own columns.
+    #[test]
+    fn diffs_coloured() {
+        use Token::*;
+        let d = "diff --git a/x b/x\n--- a/x\n@@ -1 +1 @@\n-let a = 1;\n+let a = \"b\";";
+        let spans = highlight(d, Lang::detect(Path::new("fix.patch"))).spans;
+        let first = |line: usize| spans[line].first().map(|(r, t)| (r.start, *t));
+        assert_eq!(first(0), Some((0, Comment)));
+        assert_eq!(first(1), Some((0, Comment)), "--- a/x is a header, not a removed line");
+        assert_eq!(first(2), Some((0, Attribute)));
+        assert!(spans[4].iter().any(|(r, t)| *t == String && r.start == 9), "{:?}", spans[4]);
+        assert!(spans[3].iter().all(|(r, _)| r.start >= 1), "the - isn't code");
     }
 
     #[test]

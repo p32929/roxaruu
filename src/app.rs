@@ -77,14 +77,14 @@ pub struct Project {
     pub(crate) git: std::collections::HashMap<PathBuf, crate::git::Change>,
     /// Each repository, its branch and changed files (the Changes view).
     pub(crate) repos: Vec<crate::git::Repo>,
-    git_job: Option<Receiver<GitAnswer>>,
+    pub(crate) git_job: Option<Receiver<GitAnswer>>,
     git_stale: bool,
     /// The repositories git is asked about: found again only when files
     /// come or go (`index`), not on every look.
     git_repos: Option<crate::git::Repos>,
     /// When git was last asked, and whether there's a repository to ask.
     git_at: Option<Instant>,
-    git_found: bool,
+    pub(crate) git_found: bool,
 }
 
 /// Closing tabs that may hold unsaved work: they're worked through one at a
@@ -296,6 +296,8 @@ pub struct App {
     /// Where each terminal was drawn last frame, for drops.
     pub terminal_rects: Vec<(usize, egui::Rect)>,
     pub sidebar: Sidebar,
+    /// Source Control, shown in the sidebar's place.
+    pub changes: crate::ui::changes::Changes,
     /// Commands picked in the palette, latest first (they lead its list).
     used: Vec<Command>,
     pub focus: Focus,
@@ -377,6 +379,7 @@ impl App {
             terminal_layout: 0,
             terminal_rects: Vec::new(),
             sidebar: Sidebar::default(),
+            changes: Default::default(),
             used: Vec::new(),
             focus: Focus::Editor,
             mru: Vec::new(),
@@ -506,6 +509,7 @@ impl App {
     pub fn tick(&mut self, ctx: &egui::Context) {
         self.expire_toasts();
         self.poll_git(ctx);
+        self.poll_git_ops();
         // FPS is this window's own: a browser's frames don't count.
         self.frames += u32::from(!self.remote_pass);
         let elapsed = self.fps_window_start.elapsed();
@@ -677,13 +681,15 @@ impl App {
         // Take the chord's events (and the text it typed, like ⌥F's "ƒ",
         // which comes right after its key) so nothing downstream acts on
         // them too. Other typing in the same frame stays: "ab" then ⌘S
-        // landing together (a slow frame, a remote batch) still types "ab".
+        // landing together (a slow frame, a remote batch) still types "ab";
+        // so does a chord whose command can't run here (⌥A's "å" in the
+        // editor, Stage All being Source Control's).
         ctx.input_mut(|i| {
             let mut after_chord = false;
             i.events.retain(|e| {
                 let keep = command_for(e).is_none()
                     && !(after_chord && matches!(e, egui::Event::Text(_)));
-                after_chord = bound(e).is_some();
+                after_chord = command_for(e).is_some();
                 keep
             })
         });
@@ -765,6 +771,21 @@ impl App {
                 self.begin_close(paths, After::Nothing, ctx);
             }
             Command::TogglePinTab => self.toggle_pin(self.terminal_focused()),
+            Command::SourceControl => self.source_control(),
+            Command::GitStage => {
+                if let Some(row) = self.chosen_row() {
+                    self.stage_chosen(row, ctx);
+                }
+            }
+            Command::GitStageAll => self.stage_everything(ctx),
+            Command::GitDiscard => self.ask_discard(),
+            Command::GitCommit => self.commit(false, ctx),
+            Command::GitCommitAll => self.commit(true, ctx),
+            Command::GitPush => self.sync(crate::git::Op::Push, false, ctx),
+            Command::GitPushAll => self.sync(crate::git::Op::Push, true, ctx),
+            Command::GitPull => self.sync(crate::git::Op::Pull, false, ctx),
+            Command::GitPullAll => self.sync(crate::git::Op::Pull, true, ctx),
+            Command::GitOpenFile => self.open_changed_file(),
             Command::CloseOtherTabs
             | Command::CloseTabsToRight
             | Command::CloseTabsToLeft
@@ -808,7 +829,7 @@ impl App {
                     match t.load(true) {
                         Ok(()) => {
                             t.go_to(line, 0..0);
-                            let name = t.buf.name();
+                            let name = t.name();
                             self.notify(format!("{name} is open for editing"));
                         }
                         Err(e) => self.warn(e),
@@ -1000,7 +1021,7 @@ impl App {
             | Command::AddNextOccurrence
             | Command::AddCursorAbove
             | Command::AddCursorBelow => self.editable(),
-            Command::EditWholeFile => !self.editable() && self.active.is_some(),
+            Command::EditWholeFile => self.active_tab().is_some_and(|t| t.huge.is_some()),
             // Line edits are the editor's: in a terminal ⌥↑ and ⌘↵ stay the shell's.
             Command::GoToLine => self.active.is_some() && self.focus == Focus::Editor,
             Command::ToggleComment
@@ -1018,6 +1039,18 @@ impl App {
             }
             Command::ClearTerminal => self.terminal_focused(),
             Command::CopyTerminalOutput => self.terminal_focused() && self.terminal().is_some_and(|t| t.pane.has_run()),
+            Command::SourceControl => self.project.is_some(),
+            Command::GitStage => self.can_stage(),
+            Command::GitDiscard => self.can_discard(),
+            Command::GitOpenFile => self.changed_file_target(),
+            // The repository you're on (the Changes view's row, the file in front's).
+            Command::GitCommit => self.current_repo().and_then(|r| self.project.as_ref()?.repos.get(r)).is_some_and(|r| !r.files.is_empty()),
+            Command::GitPush | Command::GitPull => self.current_repo().is_some(),
+            // Only there: elsewhere ⌥A types (å on a Mac).
+            Command::GitStageAll => self.changes_focused() && self.project.as_ref().is_some_and(|p| p.repos.iter().any(|r| r.files.iter().any(|f| f.unstaged.is_some()))),
+            // "All": more than one repository to do it in.
+            Command::GitCommitAll => self.project.as_ref().is_some_and(|p| p.repos.len() > 1 && p.repos.iter().any(|r| !r.files.is_empty())),
+            Command::GitPushAll | Command::GitPullAll => self.project.as_ref().is_some_and(|p| p.repos.len() > 1),
             Command::SwitchFocus => {
                 self.active.is_some() || !self.terminals.is_empty() || self.project.is_some()
             }
@@ -1250,6 +1283,15 @@ impl App {
         }
     }
 
+    /// `git_changed`, looking for the repositories again too (one cloned
+    /// into the folder since).
+    pub(crate) fn git_rescan(&mut self) {
+        if let Some(p) = &mut self.project {
+            p.git_stale = true;
+            p.git_repos = None;
+        }
+    }
+
     /// Git's answer in, or asked again: when something may have changed it
     /// (`git_stale`), on coming back to the window, and every `GIT_EVERY`
     /// while you're at it (an agent in a terminal edits behind its back).
@@ -1356,7 +1398,7 @@ impl App {
 
     /// Whether the active tab's text can be edited (a huge file's can't).
     pub(crate) fn editable(&self) -> bool {
-        self.active_tab().is_some_and(|t| t.huge.is_none())
+        self.active_tab().is_some_and(|t| t.huge.is_none() && t.diff.is_none())
     }
 
     pub fn active_tab(&self) -> Option<&Tab> {
@@ -1372,7 +1414,7 @@ impl App {
         match (tab.path(), &self.project) {
             (Some(path), Some(p)) => rel_path(&p.root, path),
             (Some(path), None) => display_name(path),
-            (None, _) => tab.buf.name(),
+            (None, _) => tab.name(),
         }
     }
 
@@ -1445,7 +1487,7 @@ impl App {
         let Some(tab) = self.tabs.get_mut(i) else {
             return false;
         };
-        let name = tab.buf.name();
+        let name = tab.name();
         match tab.buf.save() {
             Ok(()) => {
                 tab.gone = false; // saved back
@@ -1858,7 +1900,7 @@ impl App {
         self.file_checks += 1;
         for i in 0..self.tabs.len() {
             let Some(tab) = self.tabs.get_mut(i) else { continue };
-            let name = tab.buf.name();
+            let name = tab.name();
             if !tab.is_loaded() {
                 // Not read yet: whether it's still there is all that matters.
                 let there = tab.path().is_some_and(|p| p.exists());
@@ -1931,7 +1973,7 @@ impl App {
         if !first {
             return tab.buf.rebaseline_disk();
         }
-        let name = tab.buf.name();
+        let name = tab.name();
         match tab.reload() {
             Ok(()) => self.notify(format!("Reloaded {name}")),
             Err(e) => self.warn(format!("Couldn't reload {name}: {e:#}")),
@@ -2636,7 +2678,7 @@ impl App {
 
     /// Each editor tab's folders that tell it from same-named files.
     pub(crate) fn tab_details(&self) -> Vec<String> {
-        let names: Vec<String> = self.tabs.iter().map(|t| t.buf.name()).collect();
+        let names: Vec<String> = self.tabs.iter().map(|t| t.name()).collect();
         let items: Vec<(&str, Option<&Path>)> =
             self.tabs.iter().zip(&names).map(|(t, n)| (n.as_str(), t.path().and_then(|p| p.parent()))).collect();
         fstree::tell_apart(&items)

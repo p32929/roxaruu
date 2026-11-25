@@ -54,7 +54,10 @@ pub fn find(root: &Path) -> Repos {
         let top = PathBuf::from(lines.next()?.trim());
         Some((top, lines.next().unwrap_or("").trim().to_string()))
     });
-    Repos { own, below: repos_below(root) }
+    // A to Z, as the Changes view lists them (the disk's order is any).
+    let mut below = repos_below(root);
+    below.sort();
+    Repos { own, below }
 }
 
 /// One repository, as the Changes view shows it.
@@ -435,7 +438,7 @@ pub fn new_lines(diff: &str) -> Vec<Option<usize>> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]

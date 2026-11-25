@@ -108,6 +108,17 @@ pub enum Command {
     ShowRemoteAddress,
     SwitchWindow,
     JumpTerminal(u8),
+    SourceControl,
+    GitStage,
+    GitStageAll,
+    GitDiscard,
+    GitCommit,
+    GitCommitAll,
+    GitPush,
+    GitPushAll,
+    GitPull,
+    GitPullAll,
+    GitOpenFile,
     Quit,
 }
 
@@ -158,6 +169,7 @@ const KEYLESS: &[Command] = &[
     Command::CloseTabsToLeft,
     Command::CloseSavedTabs,
     Command::TogglePinTab,
+    Command::GitStage, // space, in the Changes view
     Command::MaximizeWindow,
     Command::InstallRox,
 ];
@@ -286,6 +298,17 @@ commands! {
     JumpTerminal(7), "terminal.jump7", "Go to Terminal 7", ["alt+7"];
     JumpTerminal(8), "terminal.jump8", "Go to Terminal 8", ["alt+8"];
     JumpTerminal(9), "terminal.jump9", "Go to Terminal 9", ["alt+9"];
+    SourceControl, "view.sourceControl", "Source Control: Go In, or Back to the Editor", ["ctrl+shift+g"];
+    GitStage, "git.stage", "Stage / Unstage", [];
+    GitStageAll, "git.stageAll", "Stage All Changes (Every Repository)", ["alt+a"];
+    GitDiscard, "git.discard", "Discard Changes…", ["ctrl+alt+backspace"];
+    GitCommit, "git.commit", "Commit (What's Staged, or Everything)", ["alt+enter"];
+    GitCommitAll, "git.commitAll", "Commit All Repositories", ["alt+shift+enter"];
+    GitPush, "git.push", "Push", ["alt+p"];
+    GitPushAll, "git.pushAll", "Push All Repositories", ["alt+shift+p"];
+    GitPull, "git.pull", "Pull", ["alt+l"];
+    GitPullAll, "git.pullAll", "Pull All Repositories", ["alt+shift+l"];
+    GitOpenFile, "git.openFile", "Open the Changed File", ["alt+shift+o"];
     Quit, "app.quit", "Quit", ["ctrl+q"];
 }
 
