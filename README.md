@@ -97,7 +97,7 @@ To keep your settings, keys and themes for later: `curl -fsSL https://raw.github
 
 ## Getting started
 
-1. Open a folder with **Ctrl+O** (**⌘O** on a Mac: recent folders, or type a path), or from a terminal: `rox` for the one you're in, or `rox <folder>` (installed with the app; dragged from the disk image, the start screen offers **Install the rox Terminal Command**). Opened from the app list (Dock, Start Menu, Spotlight), it starts with no folder.
+1. Open a folder with **Ctrl+O** (**⌘O** on a Mac: recent folders, or type a path), or from a terminal: `rox` for the one you're in, or `rox <folder>` (installed with the app; dragged from the disk image, the start screen offers **Install the rox Terminal Command**). Opened from the app list (Dock, Start Menu, Spotlight), it starts with no folder. A folder always opens the same way: the file tree shown and a terminal below, 40% of the window high.
 2. **Alt+T** shows or hides the terminal, **Alt+M** shows it filling the window (opening one if there is none), **Alt+N** opens another one.
 3. **F1** shows every shortcut; the keys for wherever you are are always at the bottom of the screen.
 

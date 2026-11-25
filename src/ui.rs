@@ -1040,12 +1040,11 @@ impl App {
                 .show(ui, |ui| self.tab_strip(ui));
         }
         if terminals_up && !maximized {
-            egui::Panel::bottom("terminal")
+            egui::Panel::bottom(("terminal", self.terminal_layout))
                 .frame(bare.fill(bg))
                 .resizable(true)
                 .show_separator_line(false)
-                // A short screen (a phone on its side) keeps room for the text.
-                .default_size(320.0_f32.min(ui.available_height() * 0.45))
+                .default_size(ui.available_height() * 0.4)
                 .size_range(120.0..=if short {
                     ui.available_height() * 0.6
                 } else {

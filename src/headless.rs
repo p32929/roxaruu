@@ -3129,6 +3129,49 @@ fn headless_open_folder_list() {
     assert!(app(&h).palette.is_none(), "its key closes it again");
 }
 
+/// A folder always opens the same way, whatever the one before left: the
+/// tree shown, a terminal below (not maximized), 40% of the window high.
+#[test]
+#[cfg_attr(not(unix), ignore = "needs a Unix shell")]
+fn headless_folder_opens_with_tree_and_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().canonicalize().unwrap().join("a"), dir.path().canonicalize().unwrap().join("b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    let file = crate::config::dir().join("settings.json");
+    let before = std::fs::read_to_string(&file).ok();
+    let mut h = harness(Some(a.clone()));
+    h.run();
+    let ctx = h.ctx.clone();
+    let check = |h: &Harness<'static, Root>, when: &str| {
+        let app = app(h);
+        assert!(app.sidebar_shown(), "{when}: the tree");
+        assert!(app.terminal_open && !app.terminal_max, "{when}: a terminal, not maximized");
+        assert_eq!(app.terminals.len(), 1, "{when}");
+        // Its text area: the panel (40% of what's between the bars) less its tab row.
+        let tall = app.terminal_rects.first().map(|(_, r)| r.height()).unwrap_or(0.0);
+        let share = tall / h.ctx.content_rect().height();
+        assert!((0.25..0.4).contains(&share), "{when}: {tall} high");
+        tall
+    };
+    let first = check(&h, "first");
+    assert_eq!(app(&h).focus, crate::app::Focus::Editor, "the keyboard isn't taken by the terminal");
+    // Leave it maximized, the tree hidden: the next folder opens as ever.
+    press(&mut h, ALT, Key::M);
+    h.state_mut().0.save_choice_quietly("sidebar", false, &ctx);
+    h.run();
+    assert!(app(&h).terminal_max && !app(&h).sidebar_shown());
+    h.state_mut().0.open_folders_answered(vec![b.clone()], true, &ctx);
+    h.run();
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(b));
+    let next = check(&h, "the next");
+    assert!((next - first).abs() < 4.0, "back to its first height: {next}, was {first}");
+    match before {
+        Some(text) => std::fs::write(&file, text).unwrap(),
+        None => drop(std::fs::remove_file(&file)),
+    }
+}
+
 /// A process standing in for another Roxaruu window that has `folder` open:
 /// `sleep`, under a name with "roxaruu" in it (how windows are recognised),
 /// registered as that window's. Killed when dropped.
@@ -3805,8 +3848,9 @@ fn headless_tab_strips_scroll_and_drag() {
     assert_eq!(app(&h).active, Some(2), "the moved tab is the active one");
     assert_eq!(order(&h).len(), 24);
 
-    // Terminals: three, drag the last to the front.
-    for _ in 0..3 {
+    // Terminals: three (the folder opened with one), drag the last to the front.
+    wait_for(&mut h, "a prompt", at_prompt);
+    for _ in 0..2 {
         press(&mut h, ALT, Key::N);
         wait_for(&mut h, "a prompt", at_prompt);
     }
@@ -3837,7 +3881,7 @@ fn headless_quit_asks_first() {
     // Nothing running, nothing unsaved: it still asks.
     press(&mut h, CMD, Key::Q);
     assert!(matches!(app(&h).ask, Some(Ask::Quit)), "always asks");
-    assert!(app(&h).quit_losses().is_empty());
+    assert_eq!(app(&h).quit_losses(), ["Its terminal closes."], "the one it opened with");
     press(&mut h, Modifiers::NONE, Key::Escape);
     assert!(app(&h).ask.is_none() && !app(&h).allow_close, "esc keeps the window");
 
@@ -4169,29 +4213,6 @@ fn headless_tree_follows_the_active_file() {
         assert!(row_visible(&h, &files[n]), "tab {n}: in view: {:?} offset {}", app(&h).sidebar.selected, app(&h).sidebar.offset);
     }
 
-    // A window whose tree has been hidden since it opened: ⌘B the first
-    // time already shows the file in view.
-    let cfg = crate::config::dir();
-    std::fs::create_dir_all(&cfg).unwrap();
-    let settings = cfg.join("settings.json");
-    let before = std::fs::read_to_string(&settings).ok();
-    std::fs::write(&settings, "{ \"sidebar\": false }").unwrap();
-    let mut h2 = harness(Some(files[1].clone()));
-    match &before {
-        Some(b) => std::fs::write(&settings, b).unwrap(),
-        None => std::fs::remove_file(&settings).unwrap(),
-    }
-    assert!(!app(&h2).sidebar_shown() && app(&h2).sidebar.view == 0.0, "never drawn");
-    for _ in 0..3 {
-        h2.step();
-    }
-    press(&mut h2, CMD, Key::B);
-    for _ in 0..4 {
-        h2.step();
-    }
-    assert!(row_visible(&h2, &files[1]), "first ⌘B: in view: {:?} offset {} view {}", app(&h2).sidebar.selected, app(&h2).sidebar.offset, app(&h2).sidebar.view);
-    drop(h2);
-
     // No tabs: ⌘B shows the tree with its first row chosen.
     let ctx = h.ctx.clone();
     h.state_mut().0.run(crate::keymap::Command::CloseAllTabs, &ctx);
@@ -4333,6 +4354,8 @@ fn headless_claude_hooks_say_when_it_is_done() {
 #[test]
 #[ignore]
 fn headless_tab_menus() {
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap().join("shop");
     std::fs::create_dir_all(root.join(".git")).unwrap();
@@ -4385,8 +4408,6 @@ fn headless_tab_menus() {
     assert_eq!(names(&h).len(), 2);
 
     // Terminal tabs: the same menu, on terminals.
-    let home = PathBuf::from(std::env::var("HOME").unwrap());
-    std::fs::write(home.join(".zshrc"), "PROMPT='%1~ $ '\n").unwrap();
     press(&mut h, ALT, Key::T);
     wait_for(&mut h, "first prompt", screen_has("$ "));
     for _ in 0..3 {
@@ -4400,16 +4421,25 @@ fn headless_tab_menus() {
     let before = terms(&h);
     press(&mut h, CMD, Key::J); // back to the editor: the menu still acts on terminals
     assert_eq!(app(&h).focus, crate::app::Focus::Editor);
-    click_at(&mut h, egui::pos2(228.0, 490.0), egui::PointerButton::Secondary);
+    // A terminal's tab, wherever the panel's top is.
+    let term_tab = |h: &mut Harness<'static, Root>, i: usize| {
+        crate::ui::tabstrip::laid_out();
+        h.step();
+        crate::ui::tabstrip::laid_out().into_iter().rfind(|(room, _)| room.top() > 300.0).unwrap().1[i].center()
+    };
+    let at = term_tab(&mut h, 2);
+    click_at(&mut h, at, egui::PointerButton::Secondary);
     shot(&mut h, "t2-terminal-menu");
     assert_eq!(app(&h).active_terminal, 2);
     pick(&mut h, "Close to the Right");
     assert_eq!(terms(&h), before[..3]);
     assert_eq!(names(&h).len(), 2, "editor tabs untouched");
-    click_at(&mut h, egui::pos2(128.0, 490.0), egui::PointerButton::Secondary);
+    let at = term_tab(&mut h, 1);
+    click_at(&mut h, at, egui::PointerButton::Secondary);
     pick(&mut h, "Close to the Left");
     assert_eq!(terms(&h), before[1..3]);
-    click_at(&mut h, egui::pos2(40.0, 490.0), egui::PointerButton::Secondary);
+    let at = term_tab(&mut h, 0);
+    click_at(&mut h, at, egui::PointerButton::Secondary);
     pick(&mut h, "Close Others");
     assert_eq!(terms(&h), before[1..2]);
     assert_eq!(names(&h).len(), 2);

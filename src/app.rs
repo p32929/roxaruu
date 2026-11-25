@@ -288,6 +288,9 @@ pub struct App {
     requests_changed: Option<Arc<AtomicBool>>,
     /// Whether the terminal panel is showing.
     pub terminal_open: bool,
+    /// Counts folders opened: the terminal panel's id, so each starts at
+    /// its first height, not where the last folder left it.
+    pub(crate) terminal_layout: u32,
     /// Where each terminal was drawn last frame, for drops.
     pub terminal_rects: Vec<(usize, egui::Rect)>,
     pub sidebar: Sidebar,
@@ -369,6 +372,7 @@ impl App {
                 .map_or(0, |m| m.len()),
             requests_changed: None,
             terminal_open: false,
+            terminal_layout: 0,
             terminal_rects: Vec::new(),
             sidebar: Sidebar::default(),
             used: Vec::new(),
@@ -1133,6 +1137,20 @@ impl App {
             if !self.tabs.is_empty() {
                 self.active = Some(active.min(self.tabs.len() - 1));
             }
+        }
+        // A folder always opens the same way, whatever the last one left:
+        // the tree, and a terminal below at its first size.
+        if !self.config.settings.sidebar && !self.view().compact {
+            self.save_choice_quietly("sidebar", true, ctx);
+        }
+        self.terminal_max = false;
+        self.terminal_layout += 1;
+        if self.terminals.is_empty() {
+            let focus = self.focus;
+            self.new_terminal_in(None, ctx);
+            self.focus = focus;
+        } else {
+            self.terminal_open = true;
         }
     }
 
