@@ -607,6 +607,22 @@ pub fn check_notifications() {
     register_app_id();
 }
 
+/// `git -C dir args…`'s output, if it ran and succeeded (none installed,
+/// not a repository: `None`). It never takes the repository's lock (a
+/// `git commit` of yours at that moment mustn't fail for it), and on
+/// Windows opens no console window.
+pub fn git(dir: &std::path::Path, args: &[&str]) -> Option<Vec<u8>> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(dir).args(args).env("GIT_OPTIONAL_LOCKS", "0").stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
 /// Windows: the id Roxaruu's notifications go under, so Windows shows them
 /// as Roxaruu's (with its icon), not PowerShell's.
 #[cfg(windows)]

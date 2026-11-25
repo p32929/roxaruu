@@ -150,6 +150,8 @@ pub struct Tab {
     pub gone: bool,
     /// A change on disk not answered yet: asked when this tab is in front.
     pub disk_news: Option<buffer::DiskStatus>,
+    /// Pinned: kept at the left, left open by Close Others / All / Saved.
+    pub pinned: bool,
 }
 
 impl Tab {
@@ -177,6 +179,7 @@ impl Tab {
             wrap: None,
             gone: false,
             disk_news: None,
+            pinned: false,
         }
     }
 

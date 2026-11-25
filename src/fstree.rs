@@ -210,6 +210,53 @@ pub fn collect_files_marked(root: &Path, build: bool) -> Vec<(PathBuf, bool)> {
         .collect()
 }
 
+/// Folders not worth looking inside for anything of the project's own:
+/// version control's, dependencies, build output.
+pub fn is_skipped(name: &str) -> bool {
+    ALWAYS_HIDDEN.contains(&name) || SEARCH_PRUNE.contains(&name)
+}
+
+/// For things shown by name (`(name, the folder it's in)`), what tells
+/// same-named ones in different places apart: the fewest folders up from
+/// where each is that differ from the others' ("deep", "pkg03/deep",
+/// "pkg03/…/deep"); empty where its name alone is enough.
+pub fn tell_apart(items: &[(&str, Option<&Path>)]) -> Vec<String> {
+    // A folder's names, nearest first.
+    let up = |p: &Path| -> Vec<String> {
+        p.components()
+            .rev()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, (name, at))| {
+            let Some(at) = at else { return String::new() };
+            let others: Vec<Vec<String>> = items
+                .iter()
+                .enumerate()
+                .filter(|(j, (n, p))| *j != i && n == name && p.is_some_and(|p| p != *at))
+                .filter_map(|(_, (_, p))| p.map(up))
+                .collect();
+            if others.is_empty() {
+                return String::new();
+            }
+            let mine = up(at);
+            let k = (1..=mine.len()).find(|&k| others.iter().all(|o| o.get(..k) != mine.get(..k))).unwrap_or(mine.len());
+            match (mine.first(), mine.get(k.saturating_sub(1))) {
+                (Some(near), Some(far)) if k > 2 => format!("{far}/…/{near}"),
+                (Some(near), Some(far)) if k == 2 => format!("{far}/{near}"),
+                (Some(near), _) => near.clone(),
+                _ => String::new(),
+            }
+        })
+        .collect()
+}
+
 /// `files` (path relative to the root, ignored) plus every folder they're
 /// in, as `(path, ignored, is_dir)`: the files first, in their order. A
 /// folder is ignored when every file in it is.
@@ -267,6 +314,27 @@ fn walk(root: &Path, respect_gitignore: bool, build: bool) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn same_names_told_apart_by_the_fewest_folders() {
+        let p = |s: &'static str| Some(Path::new(s));
+        let items = [
+            ("mod.rs", p("/r/pkg03/src/deep")),
+            ("mod.rs", p("/r/pkg27/src/deep")),
+            ("main.rs", p("/r/src")),
+            ("lib.rs", p("/r/a/src")),
+            ("lib.rs", p("/r/b/src")),
+            ("x.rs", p("/r/one")),
+            ("x.rs", p("/r/two")),
+            ("new", None),
+            ("thr", p("/Users/me/Codes")),
+            ("thr", p("/Users/me/Codes")), // the same place twice: nothing to tell
+        ];
+        assert_eq!(
+            tell_apart(&items),
+            ["pkg03/…/deep", "pkg27/…/deep", "", "a/src", "b/src", "one", "two", "", "", ""]
+        );
+    }
 
     #[test]
     fn folders_from_the_files_paths() {

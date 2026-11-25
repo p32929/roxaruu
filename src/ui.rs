@@ -7,6 +7,8 @@ use eframe::egui::{
     StrokeKind, pos2, text::LayoutJob, vec2,
 };
 
+use std::path::PathBuf;
+
 use crate::app::{Answer, App, Focus};
 use crate::editor::{char_to_col, col_to_char};
 use crate::fonts::{self, Weight};
@@ -75,6 +77,7 @@ pub mod icon {
     pub const REPLACE: &str = "\u{eb3d}";
     pub const REPLACE_ALL: &str = "\u{eb3c}";
     pub const CLEAR: &str = "\u{eabf}";
+    pub const PIN: &str = "\u{eba0}";
     pub const CASE: &str = "\u{eab1}";
     pub const WHOLE_WORD: &str = "\u{eb7e}";
     pub const WRAP: &str = "\u{eb80}";
@@ -358,6 +361,8 @@ pub mod icon {
             Command::GoToTab(_) => FILE,
             Command::SwitchFocus => TERMINAL,
             Command::ClearTerminal => CLEAR,
+            Command::TogglePinTab => PIN,
+            Command::CopyTerminalOutput => COPY,
             Command::FocusSidebar => FILE,
             Command::ToggleTerminal | Command::SwitchTerminal | Command::JumpTerminal(_) => {
                 TERMINAL
@@ -998,9 +1003,12 @@ impl App {
             .frame(bare)
             .show_separator_line(false)
             .show(ui, |ui| self.titlebar(ui));
-        let (toggle, title_bottom) = (title.inner, title.response.rect.bottom());
+        let ((toggle, crumb), title_bottom) = (title.inner, title.response.rect.bottom());
         if toggle {
             self.toggle_sidebar(&ctx);
+        }
+        if let Some(path) = crumb {
+            self.reveal_in_tree(&path, &ctx);
         }
         let terminals_up = self.terminal_open && !self.terminals.is_empty();
         let maximized = terminals_up && self.terminal_max;
@@ -1211,6 +1219,8 @@ impl App {
         );
 
         let names: Vec<String> = self.tabs.iter().map(|t| t.buf.name()).collect();
+        // Same-named files get the folders that tell them apart alongside.
+        let details = self.tab_details();
         let font = pt.font(13.0, Weight::Medium);
         let galleys: Vec<_> = self
             .tabs
@@ -1218,15 +1228,7 @@ impl App {
             .zip(&names)
             .enumerate()
             .map(|(i, (tab, name))| {
-                // Same-named files get their folder alongside, to tell them apart.
-                let dup = names.iter().filter(|n| *n == name).count() > 1;
-                let detail = tab
-                    .path()
-                    .and_then(|p| p.parent())
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .filter(|_| dup)
-                    .unwrap_or_default();
+                let detail = details.get(i).cloned().unwrap_or_default();
                 let active = self.active == Some(i);
                 let mut job = LayoutJob::default();
                 let mut fmt = egui::TextFormat::simple(font.clone(), if active { c.text } else { c.text_muted });
@@ -1384,6 +1386,8 @@ impl App {
                 Some(icon::DOT)
             } else if resp.hovered() || active {
                 Some(icon::CLOSE)
+            } else if tab.pinned {
+                Some(icon::PIN)
             } else {
                 None
             };
@@ -1391,7 +1395,11 @@ impl App {
                 if over_close {
                     p.rect_filled(close_rect, 4.0 * s, c.hover);
                 }
-                let size = if m == icon::DOT { 9.0 } else { 13.0 };
+                let size = match m {
+                    icon::DOT => 9.0,
+                    icon::PIN => 12.0,
+                    _ => 13.0,
+                };
                 let color = if m == icon::DOT {
                     c.text_muted
                 } else if over_close {
@@ -2185,7 +2193,9 @@ impl App {
 
     /// A slim, seamless bar: drag to move the window, double-click to zoom.
     /// Returns whether the sidebar button was clicked.
-    fn titlebar(&self, ui: &mut egui::Ui) -> bool {
+    /// The title bar: whether its sidebar button was clicked, and a part of
+    /// the path clicked (to show in the tree).
+    fn titlebar(&self, ui: &mut egui::Ui) -> (bool, Option<PathBuf>) {
         let pt = self.paint();
         let c = &pt.c;
         let height = 32.0_f32.max(22.0 * pt.s);
@@ -2199,55 +2209,80 @@ impl App {
             Stroke::new(1.0, c.border),
         );
 
-        // "project  ›  path/to/file": the project bright, the path quieter.
-        // Too wide (a phone), the path loses its folders, then the project.
-        // Centred, it keeps clear of the buttons on the left either side.
+        // "project › folder › … › file": the project bright, the rest
+        // quieter, each a part a click shows in the file tree. Too wide (a
+        // phone), the folders nearest the project go first ("…"), then the
+        // project. Centred, it keeps clear of the window buttons either side.
         // Window buttons: macOS's on the left; elsewhere ours, on the right.
         let own_buttons = !cfg!(target_os = "macos") && !self.remote_pass;
         let side = if self.remote_pass { 8.0 } else if own_buttons { 3.0 * 46.0 * pt.s } else { 78.0 };
-        let room = rect.width() - 2.0 * (side + 32.0 * pt.s);
-        let line = |path: Option<String>, project: bool| {
-            let mut job = LayoutJob::default();
-            let mut push = |s: &str, color: Color32, w: Weight| {
-                job.append(s, 0.0, egui::TextFormat::simple(pt.font(12.5, w), color))
-            };
-            match (&self.project, path) {
-                (Some(proj), path) => {
-                    if project {
-                        push(&proj.name, c.text, Weight::Medium);
-                    }
-                    if let Some(path) = path {
-                        if project {
-                            push(&format!("   {}   ", icon::CHEVRON_RIGHT), c.text_subtle, Weight::Regular);
-                        }
-                        push(&path, c.text_muted, Weight::Regular);
-                    }
-                }
-                (None, _) => push("Roxaruu", c.text_muted, Weight::Medium),
-            }
-            job.wrap = egui::text::TextWrapping {
-                max_width: room.max(40.0),
-                max_rows: 1,
-                break_anywhere: true,
-                overflow_character: Some('…'),
-            };
-            job
+        let room = (rect.width() - 2.0 * (side + 32.0 * pt.s)).max(40.0);
+        let crumbs = self.crumbs();
+        let font = |w| pt.font(12.5, w);
+        let gap = |ui: &egui::Ui| {
+            ui.fonts_mut(|f| f.layout_no_wrap(format!("   {}   ", icon::CHEVRON_RIGHT), font(Weight::Regular), c.text_subtle))
         };
-        let tab = self.active_tab();
-        let rel = tab.map(|t| self.tab_rel(t));
-        let name = tab.map(|t| t.buf.name());
-        let mut g = ui.fonts_mut(|f| f.layout_job(line(rel, true)));
-        for job in [line(name.clone(), true), line(name, false)] {
-            if !g.elided {
-                break;
-            }
-            g = ui.fonts_mut(|f| f.layout_job(job));
+        let sep = gap(ui);
+        // The parts that fit: folders after the project dropped, then the project.
+        let folders = crumbs.len().saturating_sub(2);
+        let mut shown: Vec<Crumb> = crumbs.clone();
+        let mut hidden = 0;
+        let width = |ui: &egui::Ui, parts: &[Crumb]| {
+            parts.iter().map(|k| ui.fonts_mut(|f| f.layout_no_wrap(k.text.clone(), font(k.weight), c.text)).size().x).sum::<f32>()
+                + sep.size().x * parts.len().saturating_sub(1) as f32
+        };
+        while width(ui, &shown) > room && hidden < folders {
+            hidden += 1;
+            shown = crumbs.clone();
+            shown.splice(1..1 + hidden, [Crumb { text: "…".into(), path: None, weight: Weight::Regular, bright: false, file: false }]);
         }
-        let text = Rect::from_center_size(rect.center(), g.size());
-        p.galley(text.min, g, c.text);
-        if let Some(tip) = self.folder_tip() {
-            ui.interact(text, egui::Id::unique("titlebar-folder"), Sense::hover())
-                .on_hover_text(tip);
+        if width(ui, &shown) > room && shown.len() > 1 {
+            shown.drain(..shown.len() - 1);
+        }
+        // The last one alone still too wide: it ends in "…".
+        let galleys: Vec<_> = shown
+            .iter()
+            .map(|k| {
+                let mut job = LayoutJob::single_section(
+                    k.text.clone(),
+                    egui::TextFormat::simple(font(k.weight), if k.bright { c.text } else { c.text_muted }),
+                );
+                job.wrap = egui::text::TextWrapping { max_width: room, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+                ui.fonts_mut(|f| f.layout_job(job))
+            })
+            .collect();
+        let total: f32 = galleys.iter().map(|g| g.size().x).sum::<f32>() + sep.size().x * galleys.len().saturating_sub(1) as f32;
+        let mut x = rect.center().x - total / 2.0;
+        let mut picked = None;
+        for (n, (g, k)) in galleys.into_iter().zip(&shown).enumerate() {
+            if n > 0 {
+                p.galley(pos2(x, rect.center().y - sep.size().y / 2.0), sep.clone(), c.text_subtle);
+                x += sep.size().x;
+            }
+            let r = Rect::from_min_size(pos2(x, rect.center().y - g.size().y / 2.0), g.size());
+            x += g.size().x;
+            let Some(path) = &k.path else {
+                p.galley(r.min, g, c.text);
+                continue;
+            };
+            // Click only: a drag still moves the window.
+            let hit = ui.interact(r.expand2(vec2(3.0, 6.0) * pt.s), egui::Id::unique(("crumb", n)), Sense::click());
+            hit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, &k.text));
+            if hit.hovered() {
+                p.rect_filled(r.expand2(vec2(5.0, 3.0) * pt.s), 4.0 * pt.s, c.hover);
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            p.galley(r.min, g, if hit.hovered() { c.text } else { c.text_muted });
+            let tip = match (n, self.folder_tip()) {
+                (0, Some(tip)) if Some(path) == self.project.as_ref().map(|p| &p.root) => tip,
+                _ => match self.shortcut(Command::FocusSidebar).filter(|_| k.file) {
+                    Some(key) => format!("Show in the file tree  {key}"),
+                    None => "Show in the file tree".to_string(),
+                },
+            };
+            if hit.on_hover_text(tip).clicked() {
+                picked = Some(path.clone());
+            }
         }
 
         if resp.drag_started() {
@@ -2262,7 +2297,7 @@ impl App {
 
         // The sidebar button, just right of the traffic lights.
         if self.project.is_none() {
-            return false;
+            return (false, picked);
         }
         // Room for the macOS window buttons, which a browser's copy hasn't got.
         let buttons = cfg!(target_os = "macos") && !self.remote_pass;
@@ -2294,11 +2329,41 @@ impl App {
             .combo_for(Command::ToggleSidebar)
             .map(|k| format!("  {}", k.label()))
             .unwrap_or_default();
-        b.on_hover_text(format!(
-            "{} File Tree{keys}",
-            if on { "Hide" } else { "Show" }
-        ))
-        .clicked()
+        let toggle = b
+            .on_hover_text(format!("{} File Tree{keys}", if on { "Hide" } else { "Show" }))
+            .clicked();
+        (toggle, picked)
+    }
+
+    /// The title's parts: the project, each folder down to the file, the
+    /// file; a file outside the project (or none) as it was, one part.
+    pub(crate) fn crumbs(&self) -> Vec<Crumb> {
+        let part = |text: String, path: Option<PathBuf>, bright: bool, file: bool| Crumb {
+            text,
+            path,
+            weight: if bright { Weight::Medium } else { Weight::Regular },
+            bright,
+            file,
+        };
+        let tab = self.active_tab();
+        let Some(proj) = &self.project else {
+            return vec![part("Roxaruu".into(), None, false, false)];
+        };
+        let mut out = vec![part(proj.name.clone(), Some(proj.root.clone()), true, false)];
+        let Some(tab) = tab else { return out };
+        match tab.path().and_then(|p| p.strip_prefix(&proj.root).ok().map(|r| (p, r))) {
+            Some((path, rel)) => {
+                let mut at = proj.root.clone();
+                let n = rel.components().count();
+                for (i, c) in rel.components().enumerate() {
+                    at.push(c);
+                    let file = i + 1 == n;
+                    out.push(part(c.as_os_str().to_string_lossy().into_owned(), Some(if file { path.clone() } else { at.clone() }), false, file));
+                }
+            }
+            None => out.push(part(self.tab_rel(tab), None, false, true)),
+        }
+        out
     }
 
     /// Off macOS the window has no system frame (one title bar, ours): its
@@ -2474,6 +2539,7 @@ impl App {
                 cmd(Command::MaximizeTerminal, if self.terminal_max { "restore size" } else { "maximize" }),
                 cmd(Command::SwitchTerminal, "switch"),
                 cmd(Command::ClearTerminal, "clear"),
+                cmd(Command::CopyTerminalOutput, "copy output"),
                 cmd(Command::OpenTerminalLink, "open a link"),
             ]
         } else if self.terminals.is_empty() {
@@ -2502,6 +2568,8 @@ impl App {
             cmd(Command::OpenFolder, "open…"),
             cmd(Command::Palette, "all commands"),
             cmd(Command::Help, "all shortcuts"),
+            cmd(Command::ClipboardHistory, "clipboard history"),
+            cmd(Command::Todos, "to-dos"),
         ]);
         tidy(list)
     }
@@ -2624,7 +2692,7 @@ impl App {
         let lang = if self.terminal_focused() {
             self.terminal().map(|t| t.pane.pulse().map_or("idle".into(), Pulse::label))
         } else {
-            self.active_tab().map(|t| t.buf.lang.map_or("Plain Text", |l| l.name).to_string())
+            self.active_tab().map(|t| crate::syntax::Lang::label(t.buf.lang, t.path().map(|p| p.as_path())))
         };
         // Remote access, with the key that shows its address and state.
         let key = self
@@ -3771,6 +3839,7 @@ impl App {
                 (Command::CloseAllTabs, "Close All", true),
             ],
             vec![
+                (Command::TogglePinTab, if self.tabs.get(i).is_some_and(|t| t.pinned) { "Unpin" } else { "Pin" }, true),
                 (
                     Command::ReopenTab,
                     "Reopen Closed Tab",
@@ -3852,6 +3921,7 @@ impl App {
                 (Command::CloseTabsToLeft, "Close to the Left", i > 0),
             ],
             vec![
+                (Command::TogglePinTab, if self.terminals.get(i).is_some_and(|t| t.pinned) { "Unpin" } else { "Pin" }, true),
                 (Command::MoveTabLeft, "Move Left", i > 0),
                 (Command::MoveTabRight, "Move Right", i + 1 < n),
             ],
@@ -3860,6 +3930,7 @@ impl App {
                 (Command::Paste, "Paste", true),
                 (Command::SelectAll, "Select All", true),
                 (Command::OpenTerminalLink, "Open a Link…", true),
+                (Command::CopyTerminalOutput, "Copy the Last Output", self.terminals.get(i).is_some_and(|t| t.pane.has_run())),
             ],
             vec![(Command::OpenNotificationSettings, "Notification Settings…", true)],
             vec![
@@ -4281,12 +4352,7 @@ impl App {
             }
         }
 
-        let names: Vec<String> = self
-            .terminals
-            .iter()
-            .map(|t| t.pane.display_name())
-            .collect();
-        let labels = crate::terminal::labels(&names);
+        let labels = crate::terminal::labels(&self.terminal_names());
         let tabs_right = bx + 8.0 * s;
         let galleys: Vec<_> = labels
             .iter()
@@ -4456,6 +4522,8 @@ impl App {
                 (icon::DOT, c.accent, 8.0)
             } else if t.pane.finished_unseen() {
                 (icon::PASS, c.accent, 12.0)
+            } else if t.pinned {
+                (icon::PIN, c.text_subtle, 12.0)
             } else {
                 ("", c.text, 8.0)
             };
@@ -6278,6 +6346,18 @@ fn xterm_256(i: u8) -> Color32 {
     Color32::from_rgb(level(i / 36), level((i / 6) % 6), level(i % 6))
 }
 
+/// One part of the title's path (`App::crumbs`).
+#[derive(Clone)]
+pub(crate) struct Crumb {
+    pub text: String,
+    /// What a click shows in the tree (none: "…", a file outside it).
+    pub path: Option<PathBuf>,
+    weight: Weight,
+    bright: bool,
+    /// The open file itself (⇧⌘E shows it too).
+    file: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6290,3 +6370,4 @@ mod tests {
         assert_eq!(what, [icon::TERMINAL, "hide"]);
     }
 }
+

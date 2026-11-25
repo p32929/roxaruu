@@ -51,12 +51,41 @@ fn grammar(
     }
 }
 
+/// Files that are words, not code: no colours guessed for them.
+const PROSE: &[&str] = &["txt", "text", "log", "csv", "tsv", "rtf"];
+
+/// Any other code: coloured by `generic`, from what nearly every language
+/// shares, so Dart, Kotlin, Zig… aren't plain text without a grammar here.
+/// Never built into a tree-sitter config (`config`, `spans_for`).
+pub static GENERIC: Lang = Lang {
+    name: "Code",
+    id: "generic",
+    extensions: &[],
+    comment: None,
+    grammar: || grammar(tree_sitter_json::LANGUAGE, "", "", ""),
+};
+
 impl Lang {
     pub fn detect(path: &Path) -> Option<&'static Lang> {
         let ext = path.extension()?.to_str()?.to_lowercase();
         LANGUAGES
             .iter()
             .find(|l| l.extensions.contains(&ext.as_str()))
+            .or_else(|| (!PROSE.contains(&ext.as_str())).then_some(&GENERIC))
+    }
+
+    /// What the status bar calls a file's language: a generic one by its
+    /// extension ("Dart").
+    pub fn label(lang: Option<&Lang>, path: Option<&Path>) -> String {
+        match lang {
+            Some(l) if l.id == GENERIC.id => {
+                let ext = path.and_then(|p| p.extension()).and_then(|e| e.to_str()).unwrap_or(l.name);
+                let mut c = ext.chars();
+                c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+            }
+            Some(l) => l.name.to_string(),
+            None => "Plain Text".to_string(),
+        }
     }
 
     /// The language an injection names: its id, its name, or an extension
@@ -415,6 +444,9 @@ pub fn queries_readme() -> String {
 /// Highlight configs, built once per language on first use and kept for
 /// the life of the app (so injections can borrow them from any thread).
 fn config(lang: &'static Lang) -> Option<&'static HighlightConfiguration> {
+    if lang.id == GENERIC.id {
+        return None;
+    }
     static CONFIGS: OnceLock<Mutex<HashMap<&'static str, Option<&'static HighlightConfiguration>>>> =
         OnceLock::new();
     let mut map = CONFIGS.get_or_init(Default::default).lock().ok()?;
@@ -451,6 +483,9 @@ fn build_with(lang: &Lang, mine: Option<String>) -> Option<HighlightConfiguratio
 }
 
 fn spans_for(lang: &'static Lang, source: &str) -> Option<Vec<LineSpans>> {
+    if lang.id == GENERIC.id {
+        return Some(generic(source));
+    }
     let cfg = config(lang)?;
     let mut highlighter = Highlighter::new();
     let events = highlighter
@@ -495,6 +530,169 @@ fn spans_for(lang: &'static Lang, source: &str) -> Option<Vec<LineSpans>> {
         }
     }
     Some(out)
+}
+
+/// Words most languages reserve (a union: one list for every language).
+const KEYWORDS: &[&str] = &[
+    "abstract", "and", "as", "assert", "async", "await", "break", "case", "catch", "class", "const", "continue",
+    "covariant", "def", "default", "defer", "del", "delete", "deferred", "do", "elif", "else", "elsif", "enum",
+    "except", "export", "extends", "extension", "extern", "external", "factory", "final", "finally", "fn", "for",
+    "foreach", "from", "fun", "func", "function", "go", "goto", "guard", "hide", "if", "impl", "implements",
+    "import", "in", "include", "inline", "interface", "internal", "is", "late", "let", "library", "loop", "match",
+    "mixin", "mod", "module", "mut", "namespace", "new", "not", "on", "operator", "or", "override", "package",
+    "part", "private", "protected", "pub", "public", "raise", "readonly", "required", "rescue", "return", "sealed",
+    "self", "show", "static", "struct", "super", "switch", "sync", "this", "throw", "throws", "trait", "try",
+    "typedef", "typeof", "union", "unless", "unsafe", "until", "use", "using", "val", "var", "virtual", "volatile",
+    "when", "where", "while", "with", "yield",
+];
+const CONSTANTS: &[&str] = &["true", "false", "null", "nil", "None", "True", "False", "undefined", "NaN"];
+const PRIMITIVES: &[&str] = &[
+    "int", "float", "double", "bool", "boolean", "char", "string", "str", "byte", "long", "short", "void",
+    "num", "dynamic", "any", "unknown", "never", "usize", "isize", "u8", "u16", "u32", "u64", "i8", "i16",
+    "i32", "i64", "f32", "f64",
+];
+const OPERATORS: &[u8] = b"+-*/%=<>!&|^~?:";
+
+/// Colours for code in a language without a grammar here, from what
+/// nearly all share: comments (`//`, `/* */`, `#`, `--`), strings
+/// (`"…"`, `'…'`, `` `…` ``, triple-quoted), numbers, `@annotations`,
+/// common keywords, calls (`name(`), types (`Capitalised`), constants
+/// (`ALL_CAPS`), `.fields`, operators and punctuation. One pass.
+// ponytail: a guess, not a parse: `#` starts a comment unless a word or
+// `[` follows it (`#include`, `#[..]`), `--` only before a space.
+fn generic(source: &str) -> Vec<LineSpans> {
+    let b = source.as_bytes();
+    let len = b.len();
+    let starts: Vec<usize> = std::iter::once(0).chain(source.match_indices('\n').map(|(i, _)| i + 1)).collect();
+    let mut out: Vec<LineSpans> = vec![Vec::new(); starts.len()];
+    // `from..to` (byte offsets), split into each line it covers.
+    let mut push = |from: usize, to: usize, t: Token| {
+        let mut line = starts.partition_point(|&s| s <= from).saturating_sub(1);
+        let mut pos = from;
+        while pos < to {
+            let Some(&start) = starts.get(line) else { break };
+            let end = starts.get(line + 1).map_or(len, |&s| s - 1);
+            let stop = to.min(end);
+            if stop > pos
+                && let (Some(spans), Ok(a), Ok(z)) =
+                    (out.get_mut(line), u32::try_from(pos - start), u32::try_from(stop - start))
+            {
+                spans.push((a..z, t));
+            }
+            line += 1;
+            pos = starts.get(line).copied().unwrap_or(len);
+        }
+    };
+    let at = |i: usize| b.get(i).copied();
+    let has = |i: usize, s: &str| b.get(i..).is_some_and(|r| r.starts_with(s.as_bytes()));
+    let find = |i: usize, s: &str| source.get(i..).and_then(|r| r.find(s)).map(|k| i + k);
+    let line_end = |i: usize| find(i, "\n").unwrap_or(len);
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80;
+    let word_end = |mut j: usize| {
+        while at(j).is_some_and(ident) {
+            j += 1;
+        }
+        j
+    };
+    let mut i = 0;
+    while let Some(c) = at(i) {
+        let next = at(i + 1);
+        if has(i, "/*") {
+            let end = find(i + 2, "*/").map_or(len, |e| e + 2);
+            push(i, end, Token::Comment);
+            i = end;
+        } else if has(i, "//")
+            || (c == b'#' && !next.is_some_and(|n| n.is_ascii_alphabetic() || n == b'['))
+            || (has(i, "--") && at(i + 2).is_none_or(|n| n == b' ' || n == b'\n' || n == b'-'))
+        {
+            let end = line_end(i);
+            push(i, end, Token::Comment);
+            i = end;
+        } else if c == b'#' || (c == b'@' && next.is_some_and(|n| n.is_ascii_alphabetic())) {
+            let end = if next == Some(b'[') {
+                find(i, "]").filter(|&e| e < line_end(i)).map_or(i + 1, |e| e + 1)
+            } else {
+                word_end(i + 1)
+            };
+            push(i, end, Token::Attribute);
+            i = end;
+        } else if let Some(q) = ["\"\"\"", "'''"].into_iter().find(|q| has(i, q)) {
+            let end = find(i + 3, q).map_or(len, |e| e + 3);
+            push(i, end, Token::String);
+            i = end;
+        } else if (c == b'"' || c == b'`' || c == b'\'') && !(c == b'\'' && i > 0 && at(i - 1).is_some_and(ident)) {
+            // To the closing quote; `"` and `'` end with their line.
+            let mut j = i + 1;
+            while let Some(d) = at(j) {
+                if d == b'\\' {
+                    j += 2;
+                    continue;
+                }
+                if d == c {
+                    j += 1;
+                    break;
+                }
+                if d == b'\n' && c != b'`' {
+                    break;
+                }
+                j += 1;
+            }
+            let end = j.min(len);
+            push(i, end, Token::String);
+            i = end;
+        } else if c.is_ascii_digit() {
+            let mut j = i + 1;
+            while at(j).is_some_and(ident) || (at(j) == Some(b'.') && at(j + 1).is_some_and(|d| d.is_ascii_digit())) {
+                j += 1;
+            }
+            push(i, j, Token::Number);
+            i = j;
+        } else if ident(c) {
+            let j = word_end(i);
+            let word = source.get(i..j).unwrap_or("");
+            let mut k = j;
+            while matches!(at(k), Some(b' ' | b'\t')) {
+                k += 1;
+            }
+            let after_dot = source.get(..i).is_some_and(|s| s.trim_end_matches([' ', '\t']).ends_with('.'));
+            let mut letters = word.chars().filter(|c| c.is_alphabetic()).peekable();
+            let all_caps = word.len() > 1 && letters.peek().is_some() && letters.all(char::is_uppercase);
+            let token = if KEYWORDS.contains(&word) {
+                Some(Token::Keyword)
+            } else if CONSTANTS.contains(&word) {
+                Some(Token::Constant)
+            } else if PRIMITIVES.contains(&word) {
+                Some(Token::Type)
+            } else if at(k) == Some(b'(') {
+                Some(Token::Function)
+            } else if all_caps {
+                Some(Token::Constant)
+            } else if word.chars().next().is_some_and(char::is_uppercase) {
+                Some(Token::Type)
+            } else if after_dot {
+                Some(Token::Property)
+            } else {
+                None
+            };
+            if let Some(t) = token {
+                push(i, j, t);
+            }
+            i = j;
+        } else if OPERATORS.contains(&c) {
+            let mut j = i + 1;
+            while at(j).is_some_and(|d| OPERATORS.contains(&d)) && !has(j, "//") && !has(j, "/*") {
+                j += 1;
+            }
+            push(i, j, Token::Operator);
+            i = j;
+        } else if b"(){}[],;.".contains(&c) {
+            push(i, i + 1, Token::Punctuation);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// The pieces of a language that colour the same alone as in their file
@@ -661,6 +859,64 @@ fn typescript(language: impl Into<tree_sitter::Language>) -> Grammar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `generic` calls each of `words` in `source` (where it's first seen).
+    fn generic_tokens(source: &str, words: &[&str]) -> Vec<Option<Token>> {
+        let spans = generic(source);
+        words
+            .iter()
+            .map(|w| {
+                let (n, line) = source.split('\n').enumerate().find(|(_, l)| l.contains(w)).unwrap();
+                let at = line.find(w).unwrap() as u32;
+                spans[n].iter().find(|(r, _)| r.start <= at && at < r.end).map(|(_, t)| *t)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn any_other_code_gets_colours() {
+        let dart = "/// Shared widgets\nlibrary;\n\nimport 'package:flutter/material.dart';\n@override\nWidget build(BuildContext context) {\n  final count = 42; // the answer\n  return Text(\"hi $count\", style: theme.body);\n}\n/* a\n   block */\nconst MAX_ITEMS = null;";
+        let words = [
+            "Shared", "library", "package:flutter", "@override", "Widget", "build", "final", "42", "the answer",
+            "return", "\"hi", "body", "block */", "MAX_ITEMS", "null", "count =",
+        ];
+        use Token::*;
+        assert_eq!(
+            generic_tokens(dart, &words),
+            [
+                Some(Comment), Some(Keyword), Some(String), Some(Attribute), Some(Type), Some(Function),
+                Some(Keyword), Some(Number), Some(Comment), Some(Keyword), Some(String), Some(Property),
+                Some(Comment), Some(Constant), Some(Constant), None,
+            ]
+        );
+        // Python's and the shell's comments, strings over lines, `#include`,
+        // an apostrophe in a word.
+        let py = "# note\nx = \"\"\"one\ntwo\"\"\"\ny = don't\n#include <a.h>";
+        assert_eq!(generic_tokens(py, &["note", "two", "#include"]), [Some(Comment), Some(String), Some(Attribute)]);
+        assert!(generic(py)[3].iter().all(|(_, t)| *t != String), "don't isn't a string");
+        // Every span within its line, in order, on character boundaries.
+        let odd = "é = \"ü\\\"x\" // ñ\n'unclosed\n`multi\nline`";
+        let spans = generic(odd);
+        assert_eq!(spans.len(), 4);
+        for (spans, line) in spans.iter().zip(odd.split('\n')) {
+            let mut last = 0;
+            for (r, _) in spans {
+                let (a, z) = (r.start as usize, r.end as usize);
+                assert!(r.start >= last && z <= line.len() && line.is_char_boundary(a) && line.is_char_boundary(z), "{line:?} {r:?}");
+                last = r.end;
+            }
+        }
+    }
+
+    #[test]
+    fn code_without_a_grammar_is_generic_prose_is_plain() {
+        assert_eq!(Lang::detect(Path::new("a.dart")).map(|l| l.id), Some("generic"));
+        assert_eq!(Lang::detect(Path::new("a.rs")).map(|l| l.id), Some("rust"));
+        assert!(Lang::detect(Path::new("notes.txt")).is_none() && Lang::detect(Path::new("Makefile")).is_none());
+        assert_eq!(Lang::label(Lang::detect(Path::new("x.dart")), Some(Path::new("x.dart"))), "Dart");
+        assert_eq!(Lang::label(None, None), "Plain Text");
+        assert!(!highlight("final x = 1;", Lang::detect(Path::new("a.kt"))).spans[0].is_empty());
+    }
 
     /// Colouring piece by piece (`Incremental`) gives exactly what
     /// colouring the whole file does, after every kind of edit, one after

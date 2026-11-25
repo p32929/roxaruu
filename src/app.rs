@@ -56,6 +56,8 @@ struct SearchState {
 /// A project's files (relative, each with whether it's ignored) and their
 /// matcher, from a background walk.
 type Index = (Vec<(String, bool, bool)>, FileMatcher);
+/// Git's answer: the repositories asked, and what changed (none: no repository).
+type GitAnswer = (crate::git::Repos, Option<std::collections::HashMap<PathBuf, crate::git::Change>>);
 
 /// Search results shown at most — more is noise, and costs layout.
 pub(crate) const MAX_RESULTS: usize = 300;
@@ -64,14 +66,23 @@ pub struct Project {
     pub root: PathBuf,
     pub name: String,
     pub tree: FileTree,
-    /// Project-relative paths (with `/`) and their gitignored flag, once the
-    /// background walk finishes.
     /// The tree search's list: (path from the root, ignored, is a folder).
     pub(crate) files: Vec<(String, bool, bool)>,
     pub(crate) matcher: Option<FileMatcher>,
     /// The walk's result, with its matcher built there too (a big repo's
     /// would hold the window up).
     indexing: Option<Receiver<Index>>,
+    /// What git says changed (files and the folders they're in), for the
+    /// tree's colours: asked off this thread (`git_job`), again when stale.
+    pub(crate) git: std::collections::HashMap<PathBuf, crate::git::Change>,
+    git_job: Option<Receiver<GitAnswer>>,
+    git_stale: bool,
+    /// The repositories git is asked about: found again only when files
+    /// come or go (`index`), not on every look.
+    git_repos: Option<crate::git::Repos>,
+    /// When git was last asked, and whether there's a repository to ask.
+    git_at: Option<Instant>,
+    git_found: bool,
 }
 
 /// Closing tabs that may hold unsaved work: they're worked through one at a
@@ -191,6 +202,9 @@ pub struct App {
     missed: Vec<String>,
     /// Text copied in the app this session, newest first (⌥V).
     pub clips: Vec<String>,
+    /// Whether the window had the keyboard last frame (coming back to it
+    /// asks git again).
+    was_focused: bool,
     /// The to-do list, as last read from (and written to) `todos.md`.
     pub todos: Vec<crate::todo::Entry>,
     /// The F1 shortcuts sheet is up.
@@ -308,6 +322,7 @@ impl App {
             toasts: Vec::new(),
             missed: Vec::new(),
             clips: Vec::new(),
+            was_focused: true,
             todos: Vec::new(),
             help: false,
             welcome_selected: 0,
@@ -484,6 +499,7 @@ impl App {
     /// Per-frame housekeeping before drawing.
     pub fn tick(&mut self, ctx: &egui::Context) {
         self.expire_toasts();
+        self.poll_git(ctx);
         // FPS is this window's own: a browser's frames don't count.
         self.frames += u32::from(!self.remote_pass);
         let elapsed = self.fps_window_start.elapsed();
@@ -737,7 +753,12 @@ impl App {
                 let path = self.active_tab().and_then(|t| t.path().cloned());
                 self.begin_close(path.into_iter().collect(), After::Nothing, ctx);
             }
-            Command::CloseAllTabs => self.begin_close(self.tab_paths(), After::Nothing, ctx),
+            Command::CloseAllTabs => {
+                // Pinned ones stay (⌘W on one closes it).
+                let paths = self.tabs.iter().filter(|t| !t.pinned).filter_map(|t| t.path().cloned()).collect();
+                self.begin_close(paths, After::Nothing, ctx);
+            }
+            Command::TogglePinTab => self.toggle_pin(self.terminal_focused()),
             Command::CloseOtherTabs
             | Command::CloseTabsToRight
             | Command::CloseTabsToLeft
@@ -835,6 +856,17 @@ impl App {
                     self.notify("Not while a full-screen program is running");
                 }
             }
+            Command::CopyTerminalOutput => {
+                let text = self.terminals.get_mut(self.active_terminal).and_then(|t| t.pane.last_output());
+                match text {
+                    Some(text) if !text.is_empty() => {
+                        let n = text.lines().count();
+                        self.copy(ctx, text);
+                        self.notify(format!("Copied the last command's output ({n} line{})", if n == 1 { "" } else { "s" }));
+                    }
+                    _ => self.notify("The last command printed nothing"),
+                }
+            }
             Command::FocusSidebar => self.focus_sidebar(),
             Command::CollapseFolders => self.collapse_folders(),
             Command::ZoomIn => self.zoom(Some(1.0), ctx),
@@ -924,6 +956,9 @@ impl App {
     /// Whether a command makes sense right now (e.g. Go to File needs a folder).
     pub fn available(&self, command: Command) -> bool {
         match command {
+            Command::TogglePinTab => {
+                if self.terminal_focused() { !self.terminals.is_empty() } else { self.active.is_some() }
+            }
             Command::GoToFile
             | Command::CloseFolder
             | Command::NewFile
@@ -976,6 +1011,7 @@ impl App {
                 n == 9 && !self.tabs.is_empty() || (n as usize) <= self.tabs.len()
             }
             Command::ClearTerminal => self.terminal_focused(),
+            Command::CopyTerminalOutput => self.terminal_focused() && self.terminal().is_some_and(|t| t.pane.has_run()),
             Command::SwitchFocus => {
                 self.active.is_some() || !self.terminals.is_empty() || self.project.is_some()
             }
@@ -1069,6 +1105,12 @@ impl App {
             files: Vec::new(),
             matcher: None,
             indexing: None,
+            git: Default::default(),
+            git_job: None,
+            git_stale: true,
+            git_repos: None,
+            git_at: None,
+            git_found: false,
         });
         self.index(ctx);
         self.reload_config(ctx); // with the project's own settings
@@ -1083,7 +1125,11 @@ impl App {
             let (files, active) = crate::session::load(&root);
             // Each is read when it's first shown, not now: fifty restored
             // tabs cost what the one in front does.
-            self.tabs.extend(files.iter().map(|f| Tab::lazy(f)));
+            self.tabs.extend(files.iter().map(|(f, pinned)| {
+                let mut t = Tab::lazy(f);
+                t.pinned = *pinned;
+                t
+            }));
             if !self.tabs.is_empty() {
                 self.active = Some(active.min(self.tabs.len() - 1));
             }
@@ -1172,6 +1218,54 @@ impl App {
             ctx2.request_repaint();
         });
         p.indexing = Some(rx);
+        p.git_stale = true; // files came or went: the repositories too, maybe
+        p.git_repos = None;
+    }
+
+    /// Ask git again soon (a save, a command finished): the tree's colours.
+    pub(crate) fn git_changed(&mut self) {
+        if let Some(p) = &mut self.project {
+            p.git_stale = true;
+        }
+    }
+
+    /// Git's answer in, or asked again: when something may have changed it
+    /// (`git_stale`), on coming back to the window, and every `GIT_EVERY`
+    /// while you're at it (an agent in a terminal edits behind its back).
+    /// One ask at a time; none while there's no repository but on those.
+    fn poll_git(&mut self, ctx: &egui::Context) {
+        const GIT_EVERY: Duration = Duration::from_secs(10);
+        let focused = !self.remote_pass && ctx.input(|i| i.focused);
+        let back = focused && !std::mem::replace(&mut self.was_focused, focused);
+        if self.remote_pass {
+            self.was_focused = true;
+        }
+        let Some(p) = &mut self.project else { return };
+        if let Some((repos, answer)) = p.git_job.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            p.git_job = None;
+            p.git_found = answer.is_some();
+            p.git = answer.unwrap_or_default();
+            p.git_repos = Some(repos);
+        }
+        let due = focused && p.git_found && p.git_at.is_none_or(|t| t.elapsed() >= GIT_EVERY);
+        if p.git_job.is_some() || !(p.git_stale || back || due) {
+            if focused && p.git_found {
+                ctx.request_repaint_after(GIT_EVERY);
+            }
+            return;
+        }
+        p.git_stale = false;
+        p.git_at = Some(Instant::now());
+        // The answer shows at the next frame (a second at most, idle): no
+        // frame of its own, so asking costs nothing on screen.
+        let (tx, rx) = channel();
+        let (root, repos) = (p.root.clone(), p.git_repos.clone());
+        std::thread::spawn(move || {
+            let repos = repos.unwrap_or_else(|| crate::git::find(&root));
+            let answer = crate::git::status(&root, &repos);
+            let _ = tx.send((repos, answer));
+        });
+        p.git_job = Some(rx);
     }
 
     /// Pick up the background file walk when it finishes.
@@ -1215,7 +1309,7 @@ impl App {
             Ok(mut tab) => {
                 recall_place(&mut tab);
                 // New tabs open beside the current one.
-                let at = self.active.map_or(self.tabs.len(), |a| a + 1);
+                let at = self.active.map_or(self.tabs.len(), |a| a + 1).max(self.pinned(false));
                 self.tabs.insert(at, tab);
                 self.active = Some(at);
                 self.save_session();
@@ -1312,7 +1406,9 @@ impl App {
 
     pub fn save_session(&self) {
         if let Some(p) = &self.project {
-            crate::session::save(&p.root, &self.tab_paths(), self.active.unwrap_or(0));
+            let files: Vec<(PathBuf, bool)> =
+                self.tabs.iter().filter_map(|t| t.path().map(|p| (p.clone(), t.pinned))).collect();
+            crate::session::save(&p.root, &files, self.active.unwrap_or(0));
         }
         remember_places(self.tabs.iter());
     }
@@ -1332,6 +1428,7 @@ impl App {
                 tab.gone = false; // saved back
                 tab.disk_news = None;
                 self.notify(format!("Saved {name}"));
+                self.git_changed();
                 true
             }
             Err(e) => {
@@ -1385,6 +1482,48 @@ impl App {
     /// Move editor tab (or terminal) `from` to `to`, the active one going
     /// with it: ⇧⌘, / ⇧⌘. or a drag.
     pub fn reorder(&mut self, terminal: bool, from: usize, to: usize) {
+        // Pinned ones stay at the left, the rest after them.
+        let (pinned, n) = (self.pinned(terminal), if terminal { self.terminals.len() } else { self.tabs.len() });
+        let is_pinned = if terminal { self.terminals.get(from).is_some_and(|t| t.pinned) } else { self.tabs.get(from).is_some_and(|t| t.pinned) };
+        let to = if is_pinned { to.min(pinned.saturating_sub(1)) } else { to.max(pinned).min(n.saturating_sub(1)) };
+        self.move_raw(terminal, from, to);
+    }
+
+    /// How many tabs (or terminals) are pinned: the first that many.
+    pub(crate) fn pinned(&self, terminal: bool) -> usize {
+        if terminal {
+            self.terminals.iter().filter(|t| t.pinned).count()
+        } else {
+            self.tabs.iter().filter(|t| t.pinned).count()
+        }
+    }
+
+    /// Pin the tab (or terminal) in front, or unpin it: to the end of the
+    /// pinned ones, or just after them.
+    fn toggle_pin(&mut self, terminal: bool) {
+        let i = if terminal { self.active_terminal } else { self.active.unwrap_or(usize::MAX) };
+        let flip = |p: &mut bool| {
+            *p = !*p;
+        };
+        if terminal {
+            let Some(t) = self.terminals.get_mut(i) else { return };
+            flip(&mut t.pinned);
+        } else {
+            let Some(t) = self.tabs.get_mut(i) else { return };
+            flip(&mut t.pinned);
+        }
+        let others = if terminal {
+            self.terminals.iter().enumerate().filter(|(j, t)| *j != i && t.pinned).count()
+        } else {
+            self.tabs.iter().enumerate().filter(|(j, t)| *j != i && t.pinned).count()
+        };
+        self.move_raw(terminal, i, others);
+        if !terminal {
+            self.save_session();
+        }
+    }
+
+    fn move_raw(&mut self, terminal: bool, from: usize, to: usize) {
         use crate::ui::tabstrip::moved_index;
         if terminal {
             if from < self.terminals.len() && to < self.terminals.len() {
@@ -1564,9 +1703,9 @@ impl App {
         let b = &mut t.buf;
         match command {
             Command::ToggleComment => {
-                let token = match b.lang {
+                let token = match b.lang.filter(|l| l.id != crate::syntax::GENERIC.id) {
                     Some(l) => l.comment,
-                    // Not highlighted: guess from the extension.
+                    // No grammar here: guess from the extension.
                     None => match b
                         .path
                         .as_ref()
@@ -1865,7 +2004,7 @@ impl App {
                 let at = if self.terminals.is_empty() {
                     0
                 } else {
-                    self.active_terminal + 1
+                    (self.active_terminal + 1).max(self.pinned(true))
                 };
                 self.terminals.insert(at, t);
                 self.active_terminal = at;
@@ -1934,7 +2073,7 @@ impl App {
         };
         if self.terminal_focused() && command != Command::CloseSavedTabs {
             let a = self.active_terminal;
-            let ids = self.terminals.iter().enumerate().filter(|&(i, _)| hit(i, a)).map(|(_, t)| t.id).collect();
+            let ids = self.terminals.iter().enumerate().filter(|&(i, t)| hit(i, a) && !t.pinned).map(|(_, t)| t.id).collect();
             return self.begin_close_terminals(ids);
         }
         let a = self.active.unwrap_or(0);
@@ -1942,7 +2081,7 @@ impl App {
             .tabs
             .iter()
             .enumerate()
-            .filter(|(i, t)| match command {
+            .filter(|(i, t)| !t.pinned && match command {
                 Command::CloseSavedTabs => !t.buf.modified,
                 _ => hit(*i, a),
             })
@@ -2472,12 +2611,26 @@ impl App {
             .collect()
     }
 
+    /// Each editor tab's folders that tell it from same-named files.
+    pub(crate) fn tab_details(&self) -> Vec<String> {
+        let names: Vec<String> = self.tabs.iter().map(|t| t.buf.name()).collect();
+        let items: Vec<(&str, Option<&Path>)> =
+            self.tabs.iter().zip(&names).map(|(t, n)| (n.as_str(), t.path().and_then(|p| p.parent()))).collect();
+        fstree::tell_apart(&items)
+    }
+
+    /// Each terminal's name, its folder told apart from same-named folders
+    /// elsewhere ("Codes/thr"); the same folder twice is numbered (`labels`).
+    pub(crate) fn terminal_names(&self) -> Vec<String> {
+        let folders: Vec<String> = self.terminals.iter().map(|t| t.pane.folder_name()).collect();
+        let items: Vec<(&str, Option<&Path>)> =
+            self.terminals.iter().zip(&folders).map(|(t, f)| (f.as_str(), t.pane.dir.parent())).collect();
+        let apart = fstree::tell_apart(&items);
+        self.terminals.iter().zip(&apart).map(|(t, a)| t.pane.display_name_in(a)).collect()
+    }
+
     fn terminal_items(&self, query: &str) -> Vec<Item> {
-        let names: Vec<String> = self
-            .terminals
-            .iter()
-            .map(|t| t.pane.display_name())
-            .collect();
+        let names = self.terminal_names();
         // Led by the terminal's number (as on its tab and its ⌥N key), which,
         // unlike a name, doesn't shift as commands start and stop.
         terminal::labels(&names)

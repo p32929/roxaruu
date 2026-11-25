@@ -21,8 +21,9 @@ fn hash(p: &Path) -> u64 {
     h.finish()
 }
 
-/// Save the open `files` (and the `active` index) for `root`.
-pub fn save(root: &Path, files: &[PathBuf], active: usize) {
+/// Save the open `files` (pinned or not, in tab order) and the `active`
+/// index for `root`.
+pub fn save(root: &Path, files: &[(PathBuf, bool)], active: usize) {
     if let Some(path) = session_path(root) {
         save_to(&path, files, active);
     }
@@ -30,7 +31,7 @@ pub fn save(root: &Path, files: &[PathBuf], active: usize) {
 
 /// Load the previously-open files for `root` (skipping any that no longer exist)
 /// and the active index.
-pub fn load(root: &Path) -> (Vec<PathBuf>, usize) {
+pub fn load(root: &Path) -> (Vec<(PathBuf, bool)>, usize) {
     session_path(root)
         .map(|p| load_from(&p))
         .unwrap_or_default()
@@ -104,20 +105,27 @@ fn recall_from(store: &Path, file: &Path) -> Option<Place> {
     read_places(store).into_iter().find(|(p, _)| p == file).map(|(_, pl)| pl)
 }
 
-fn save_to(path: &Path, files: &[PathBuf], active: usize) {
+/// What leads a pinned tab's line (no path starts so).
+const PINNED: &str = "pin:";
+
+fn save_to(path: &Path, files: &[(PathBuf, bool)], active: usize) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // Line 0 is the active index; the rest are file paths, in tab order.
+    // Line 0 is the active index; the rest are file paths, in tab order,
+    // a pinned one's after `PINNED`.
     let mut body = format!("{active}\n");
-    for f in files {
+    for (f, pinned) in files {
+        if *pinned {
+            body.push_str(PINNED);
+        }
         body.push_str(&f.to_string_lossy());
         body.push('\n');
     }
     let _ = std::fs::write(path, body);
 }
 
-fn load_from(path: &Path) -> (Vec<PathBuf>, usize) {
+fn load_from(path: &Path) -> (Vec<(PathBuf, bool)>, usize) {
     let Ok(text) = std::fs::read_to_string(path) else {
         return (Vec::new(), 0);
     };
@@ -126,11 +134,14 @@ fn load_from(path: &Path) -> (Vec<PathBuf>, usize) {
         .next()
         .and_then(|l| l.trim().parse().ok())
         .unwrap_or(0);
-    let files: Vec<PathBuf> = lines
+    let files: Vec<(PathBuf, bool)> = lines
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .map(PathBuf::from)
-        .filter(|p| p.is_file())
+        .map(|l| match l.strip_prefix(PINNED) {
+            Some(l) => (PathBuf::from(l), true),
+            None => (PathBuf::from(l), false),
+        })
+        .filter(|(p, _)| p.is_file())
         .collect();
     let active = active.min(files.len().saturating_sub(1));
     (files, active)
@@ -149,10 +160,13 @@ mod tests {
         std::fs::write(&a, "").unwrap();
         std::fs::write(&b, "").unwrap();
 
-        save_to(&store, &[a.clone(), b.clone()], 1);
+        save_to(&store, &[(a.clone(), true), (b.clone(), false)], 1);
         let (files, active) = load_from(&store);
-        assert_eq!(files, vec![a, b]);
+        assert_eq!(files, vec![(a, true), (b, false)], "a pinned, b not");
         assert_eq!(active, 1);
+        // A session from before pins: none pinned.
+        std::fs::write(&store, format!("0\n{}\n", dir.path().join("b.rs").display())).unwrap();
+        assert_eq!(load_from(&store).0, vec![(dir.path().join("b.rs"), false)]);
     }
 
     #[test]
@@ -182,9 +196,9 @@ mod tests {
         std::fs::write(&real, "").unwrap();
         let ghost = dir.path().join("ghost.rs");
 
-        save_to(&store, &[ghost, real.clone()], 1);
+        save_to(&store, &[(ghost, false), (real.clone(), false)], 1);
         let (files, active) = load_from(&store);
-        assert_eq!(files, vec![real]);
+        assert_eq!(files, vec![(real, false)]);
         assert_eq!(active, 0, "active index clamped to surviving files");
     }
 }

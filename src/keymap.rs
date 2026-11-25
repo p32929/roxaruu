@@ -38,6 +38,7 @@ pub enum Command {
     SaveAll,
     CloseTab,
     CloseAllTabs,
+    TogglePinTab,
     CloseOtherTabs,
     CloseTabsToRight,
     CloseTabsToLeft,
@@ -95,6 +96,7 @@ pub enum Command {
     GoToTab(u8),
     SwitchFocus,
     ClearTerminal,
+    CopyTerminalOutput,
     ToggleTerminal,
     NewTerminal,
     CloseTerminal,
@@ -155,6 +157,7 @@ const KEYLESS: &[Command] = &[
     Command::CloseTabsToRight,
     Command::CloseTabsToLeft,
     Command::CloseSavedTabs,
+    Command::TogglePinTab,
     Command::MaximizeWindow,
     Command::InstallRox,
 ];
@@ -197,6 +200,7 @@ commands! {
     SaveAll, "file.saveAll", "Save All", ["ctrl+shift+s"];
     CloseTab, "tab.close", "Close Tab", ["ctrl+w"];
     CloseAllTabs, "tab.closeAll", "Close All Tabs", ["ctrl+shift+w"];
+    TogglePinTab, "tab.pin", "Pin / Unpin Tab", [];
     CloseOtherTabs, "tab.closeOthers", "Close Other Tabs", ["ctrl+alt+t"];
     CloseTabsToRight, "tab.closeRight", "Close Tabs to the Right", [];
     CloseTabsToLeft, "tab.closeLeft", "Close Tabs to the Left", [];
@@ -264,6 +268,7 @@ commands! {
     ToggleTerminal, "terminal.toggle", "Show / Hide Terminal", ["alt+t"];
     NewTerminal, "terminal.new", "New Terminal", ["alt+n"];
     ClearTerminal, "terminal.clear", "Clear Terminal", ["ctrl+k"];
+    CopyTerminalOutput, "terminal.copyOutput", "Copy the Last Command's Output", ["alt+c"];
     CloseTerminal, "terminal.close", "Close Terminal", ["alt+w"];
     ToggleTerminalGrid, "terminal.grid", "Terminals Side by Side / as Tabs", ["alt+g"];
     MaximizeTerminal, "terminal.maximize", "Maximize / Restore Terminal", ["alt+m"];

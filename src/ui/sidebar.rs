@@ -132,7 +132,7 @@ impl App {
     }
 
     /// ⇧⌘E: into the tree, on the active file (showing the sidebar if
-    /// needed); again to go back to the editor.
+    /// needed), else its first row; again to go back to the editor.
     pub fn focus_sidebar(&mut self) {
         if self.focus == Focus::Sidebar && self.sidebar_shown() {
             self.focus = Focus::Editor;
@@ -146,7 +146,8 @@ impl App {
         self.focus = Focus::Sidebar;
         self.sidebar.searching = false; // walking the rows; typing searches
         self.sidebar.revealed = None; // reveal the active file again
-        if self.sidebar.selected.is_none() {
+        // No file in front to reveal: the first row.
+        if self.active_tab().and_then(|t| t.path()).is_none() {
             self.sidebar.selected = self
                 .project
                 .as_ref()
@@ -159,6 +160,28 @@ impl App {
     fn sidebar_row(&self) -> Option<usize> {
         let p = self.project.as_ref()?;
         p.tree.index_of(self.sidebar.selected.as_deref()?)
+    }
+
+    /// Show `path` in the tree, the keyboard on it: the tree shown, its
+    /// folders opened (a folder itself too, what's in it below it), chosen
+    /// and in the middle. The project folder: the top row.
+    pub(crate) fn reveal_in_tree(&mut self, path: &Path, ctx: &egui::Context) {
+        self.sidebar.query.clear();
+        self.sidebar.searching = false;
+        if !self.sidebar_shown() {
+            self.toggle_sidebar(ctx); // shown as if by ⌘B, and saved so
+        }
+        self.focus = Focus::Sidebar;
+        let Some(p) = &mut self.project else { return };
+        let row = if path == p.root { (!p.tree.entries.is_empty()).then_some(0) } else { p.tree.reveal(path) };
+        if let Some(i) = row {
+            if path != p.root {
+                p.tree.expand(i);
+            }
+            self.select_row(i);
+            self.sidebar.revealed = self.active_tab().and_then(|t| t.path().cloned()); // not undone by following the tab
+            self.sidebar.center = true;
+        }
     }
 
     fn select_row(&mut self, i: usize) {
@@ -501,7 +524,9 @@ impl App {
             && let Some(i) = selected.and_then(|p| project.tree.index_of(p))
         {
             let (top, bottom) = (i as f32 * row_h, (i + 1) as f32 * row_h);
-            let (off, view) = (self.sidebar.offset, self.sidebar.view);
+            // The height it has now: a tree not drawn before (hidden since the
+            // window opened) has none from last frame.
+            let (off, view) = (self.sidebar.offset, ui.available_height());
             let out_of_view = top < off || (bottom > off + view && view > 0.0);
             if out_of_view && center {
                 area = area.vertical_scroll_offset((top + row_h / 2.0 - view / 2.0).max(0.0));
@@ -587,8 +612,18 @@ impl App {
                     pt.font(14.0, Weight::Regular),
                     tint,
                 );
+                // What git says changed: the name in its colour, a file's letter
+                // at the right (M, U, A; ! for a conflict).
+                let change = project.git.get(&e.path).copied().filter(|_| !e.ignored);
+                let changed = change.map(|ch| match ch {
+                    crate::git::Change::Modified => c.ansi_3,
+                    crate::git::Change::Added | crate::git::Change::Untracked => c.ansi_2,
+                    crate::git::Change::Conflict => c.error,
+                });
                 let color = if e.ignored {
                     c.text_subtle
+                } else if let Some(git) = changed {
+                    if is_active || is_sel { git } else { git.gamma_multiply(0.9) }
                 } else if is_active || is_sel {
                     c.text
                 } else {
@@ -601,7 +636,8 @@ impl App {
                 };
                 let lx = x + 36.0 * s;
                 let dot = unsaved.contains(&e.path.as_path());
-                let room = (r.right() - 14.0 * s - lx - if dot { 16.0 * s } else { 0.0 }).max(0.0);
+                let letter = change.filter(|_| !e.is_dir);
+                let room = (r.right() - 14.0 * s - lx - if dot { 16.0 * s } else { 0.0 } - if letter.is_some() { 14.0 * s } else { 0.0 }).max(0.0);
                 let mut job =
                     LayoutJob::simple_singleline(e.name.clone(), pt.font(13.0, weight), color);
                 job.wrap = egui::text::TextWrapping {
@@ -612,12 +648,18 @@ impl App {
                 };
                 let g = ui.fonts_mut(|f| f.layout_job(job));
                 p.galley(pos2(lx, r.center().y - g.size().y / 2.0), g, color);
-                if dot {
-                    p.circle_filled(
-                        pos2(r.right() - 20.0 * s, r.center().y),
-                        3.5 * s,
-                        c.text_muted,
+                if let (Some(ch), Some(git)) = (letter, changed) {
+                    p.text(
+                        pos2(r.right() - 16.0 * s, r.center().y),
+                        Align2::CENTER_CENTER,
+                        ch.letter(),
+                        pt.font(11.5, Weight::Medium),
+                        git,
                     );
+                }
+                if dot {
+                    let x = r.right() - if letter.is_some() { 34.0 } else { 20.0 } * s;
+                    p.circle_filled(pos2(x, r.center().y), 3.5 * s, c.text_muted);
                 }
 
                 if resp.hovered() {
@@ -689,17 +731,7 @@ impl App {
                     self.focus = Focus::Editor;
                 }
             }
-            Some(Act::Reveal(path)) => {
-                self.sidebar.query.clear();
-                self.sidebar.searching = false;
-                self.focus = Focus::Sidebar;
-                let Some(p) = &mut self.project else { return };
-                if let Some(i) = p.tree.reveal(&path) {
-                    p.tree.expand(i);
-                    self.select_row(i);
-                    self.sidebar.center = true; // in the middle, what's in it below
-                }
-            }
+            Some(Act::Reveal(path)) => self.reveal_in_tree(&path, ctx),
             Some(Act::Toggle(i)) => {
                 if let Some(p) = &mut self.project {
                     p.tree.toggle(i);

@@ -42,7 +42,7 @@ pub struct Settings {
     pub insert_spaces: bool,
     /// The file tree beside the editor (⌘B).
     pub sidebar: bool,
-    /// A system notification when a terminal's agent finishes or needs you
+    /// A system notification when a terminal's agent finishes or needs you, or a long command finishes
     /// while you're in another app (the toast in the window comes anyway).
     pub notifications: bool,
     /// Check for updates now and then, download them, and install them
@@ -544,7 +544,7 @@ pub(crate) fn settings_template() -> String {
            // Indent with spaces (false: tabs) where a file doesn't show its own style\n  \
            // \"insertSpaces\": {},\n\n  \
            // \"sidebar\": {},\n\n  \
-           // A notification when a terminal's agent finishes or needs you, while you're in another app\n  \
+           // A notification when a terminal's agent finishes or needs you, or a command that ran 10 s or more finishes, while you're in another app\n  \
            // \"notifications\": {},\n\n  \
            // Download updates from GitHub and install them when you close the last window\n  \
            // \"updates\": {},\n\n  \

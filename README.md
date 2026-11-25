@@ -25,14 +25,17 @@ I looked for something that already solved this, didn't like what I found, so I 
 1. Built in, as tabs, or all of a project's terminals at once in a grid.
 2. On macOS, a script that opens new Terminal windows opens tabs in Roxaruu instead (exactly my problem above).
 3. Each tab says what its program is doing: printing, running, or gone quiet (maybe stuck, maybe waiting for you).
-4. Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else (a conversation, not a script's `claude -p`).
-5. Closing a terminal that's still running something asks first. **Ctrl+click** (**⌘-click**) a link to open it, or a `file:line` in an error to open that file at that line.
+4. Works with Claude Code and other coding agents: you're told when one has finished or needs you, even when you're looking at something else (a conversation, not a script's `claude -p`). Any command that ran 10 seconds or more says so too when it finishes, unless you were watching it.
+5. Closing a terminal that's still running something asks first. **Ctrl+click** (**⌘-click**) a link to open it, or a `file:line` in an error to open that file at that line. **Alt+C** (**⌥C**) copies what the last command printed.
 6. **Ctrl+O** (**⌘O** on a Mac) opens one list of every folder you've opened, as a project or with a terminal in it, newest first (**Ctrl+S** / **⌘S** sorts them by name). **Enter** opens the folder (in a window that already has one, or terminals, it asks: here in its place, or a new window); **Ctrl+Enter** (**⌘↵**) opens a terminal in it instead. Select several (numbered in the order they'll open) and **Ctrl+Enter** opens a terminal in each, side by side, filling the window. In a window that already has things open, a terminal asks too, one or several: here, or a new window. Type a path, or pick **Browse…**, to go to any other folder (**Tab** goes into a folder, **Shift+Tab** up); its last row is **New Window** (**Alt+Shift+N** / **⌥⇧N**), an empty one with no folder.
 
 **Editor**
-1. Syntax highlighting for 23 languages, tabs, split view, find and replace, go to line, go to a file or folder by name, search across the whole project.
+1. Syntax highlighting for 23 languages (and the basics — comments, strings, keywords, calls, types — for any other code), tabs, split view, find and replace, go to line, go to a file or folder by name, search across the whole project.
 2. Opens huge files instantly: it reads only what's on screen.
 3. Files reopen where you left them, with the cursor and scroll position.
+4. The file tree shows what git says changed (a changed file yellow with M, a new one green with U, and the folders they're in), for the folder's own repository and any projects inside it.
+5. The path in the title bar is clickable: any folder in it, or the file, shows it in the file tree.
+6. Pin a tab (right-click it) to keep it at the left: Close Others and Close All leave it open, and it stays pinned next time. Terminals too.
 
 **Remote access**
 1. Turn it on, set a password, and open the address in any browser, on another computer or a phone. You get the same window, with all its files and terminals.

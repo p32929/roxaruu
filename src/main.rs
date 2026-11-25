@@ -22,6 +22,7 @@ mod foldermenu;
 mod fonts;
 mod fstree;
 mod fuzzy;
+mod git;
 mod history;
 mod huge;
 // The UI walkthroughs drive real Unix shells (zsh), symlinks and file modes

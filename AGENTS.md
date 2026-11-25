@@ -318,6 +318,7 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
 | `terminal.rs` / `terminalpane.rs` | terminal input / one PTY + screen, agent watching, what its program is doing (`Pulse`: printing, running, quiet) |
 | `termbridge.rs` | scripts' "open a Terminal" requests become tabs here |
 | `palette.rs`, `fuzzy.rs`, `search.rs`, `fstree.rs` | lists, matching, search in files, the tree |
+| `git.rs` | what git says changed, for the tree's colours: the folder's repository and those in its folders (`find`, once per folder / files changing), asked with `git status` (`status`, off the window's thread, again on a save, a command finishing, coming back to the window, every 10 s while you're at it) |
 | `remote/` | remote access: lifecycle (`mod`), in-memory password + sessions (`auth`), HTTPS server for all windows, run by the window that turned it on (`hub`), a window's private link and its flow control (`endpoint`), browser input (`input`), what to draw — egui's meshes and textures, drawn by the page with WebGL (`meshes`), compressed and sent on their own thread (`frames`), waking the window at full rate even hidden (`clock`), the page (`page.html`: its window list is the name's button, or Switch Window's key; `login.html`) |
 | `sys.rs` | all `unsafe` and OS calls, for macOS, Windows and Linux |
 | `foldermenu.rs` | the file manager's "Open in Roxaruu" on folders: Finder's Quick Action, Dolphin, Nemo; written by an installed copy as it starts (Windows': the installer's) |

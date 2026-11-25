@@ -25,6 +25,9 @@ const PROC_POLL: Duration = Duration::from_millis(400);
 /// mark, agent alerts), just less often. Asking the system costs: on
 /// Windows it lists every process there is.
 const PROC_POLL_UNSEEN: Duration = Duration::from_secs(2);
+/// A command that ran this long (ms) says when it finishes, unless you saw
+/// it (a test sets it shorter).
+pub static LONG_COMMAND_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(10_000);
 
 /// Floor between working-directory reads for one pane. Slower than
 /// [`PROC_POLL`] because each read forks `lsof`, and it only fires at all after
@@ -238,6 +241,9 @@ pub struct Watch {
     name: Mutex<String>,
     /// Alerts the UI hasn't shown yet.
     fired: Mutex<Vec<String>>,
+    /// Long commands finished (set by the UI's polling), for the watcher to
+    /// raise like anything else said here.
+    done: Mutex<Vec<String>>,
     /// How the last notification went (the UI takes it with the alert).
     notified: Mutex<Option<crate::sys::Delivery>>,
     /// This terminal's inbox for what Claude Code's hooks say
@@ -293,6 +299,7 @@ fn watch(
                 said.extend(lines);
             }
         }
+        said.extend(std::mem::take(&mut *w.done.lock().unwrap_or_else(|e| e.into_inner())));
         let recent = spoke.is_some_and(|t| t.elapsed() < Duration::from_secs(5));
         if said.is_empty() && quiet && !recent && w.agent.load(Ordering::Relaxed) {
             said.push("finished, or waiting for you".into());
@@ -334,6 +341,16 @@ fn watch(
         if let Some(waker) = &waker {
             waker(true);
         }
+    }
+}
+
+/// How long something took, as said: "12 s", "2 min 14 s", "1 h 3 min".
+fn took_for(d: Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0..60 => format!("{s} s"),
+        60..3600 => format!("{} min {} s", s / 60, s % 60),
+        _ => format!("{} h {} min", s / 3600, s % 3600 / 60),
     }
 }
 
@@ -430,6 +447,16 @@ pub struct TerminalPane {
     /// [`Self::mark_viewed`]. Lets the tab strip flag "something finished
     /// running here" separately from "something is running right now".
     finished_unseen: bool,
+    /// Since when the command in front has run, and whether it took the
+    /// whole screen (vim, less, htop: you were in it, not waiting for it).
+    running_since: Option<Instant>,
+    full_screen: bool,
+    /// The line (above the live bottom) where Enter last ran a command at
+    /// the prompt, and the prompt's lines above it (a prompt of two lines
+    /// draws its first again below the output): the last command's output
+    /// is between there and the prompt now.
+    ran_at: Option<usize>,
+    ran_head: Vec<String>,
     /// Test-only recorder of every byte handed to `send_input`, so tests can
     /// assert the exact escape sequences a key/mouse action produces without
     /// racing the shell's echo.
@@ -657,11 +684,23 @@ impl TerminalPane {
 
     /// The tab label: the folder, plus the running command when one is active.
     pub fn display_name(&self) -> String {
+        self.display_name_in("")
+    }
+
+    /// `display_name`, the folder led by `up` (what tells it from a
+    /// same-named folder elsewhere: "Codes" → "Codes/thr").
+    pub fn display_name_in(&self, up: &str) -> String {
+        let folder = if up.is_empty() { self.folder.clone() } else { format!("{up}/{}", self.folder) };
         if self.proc.is_empty() {
-            self.folder.clone()
+            folder
         } else {
-            format!("{} \u{00b7} {}", self.folder, self.proc)
+            format!("{folder} \u{00b7} {}", self.proc)
         }
+    }
+
+    /// The folder it's in, as its tab names it.
+    pub fn folder_name(&self) -> String {
+        self.folder.clone()
     }
 
     pub fn spawn(
@@ -826,6 +865,10 @@ impl TerminalPane {
             sel_cursor: None,
             copy_mode: false,
             finished_unseen: false,
+            running_since: None,
+            full_screen: false,
+            ran_at: None,
+            ran_head: Vec::new(),
             #[cfg(test)]
             sent: Vec::new(),
         })
@@ -884,6 +927,9 @@ impl TerminalPane {
                     .into_iter()
                     .flatten()
                 {
+                    *lid = (*lid + arrived).min(ceiling);
+                }
+                if let Some(lid) = &mut self.ran_at {
                     *lid = (*lid + arrived).min(ceiling);
                 }
             }
@@ -1386,7 +1432,20 @@ impl TerminalPane {
     /// directly instead of needing a real OS process check.
     fn set_proc(&mut self, proc: String) {
         let was_running = self.is_running();
-        self.proc = proc;
+        let was = std::mem::replace(&mut self.proc, proc);
+        if self.is_running() {
+            self.running_since.get_or_insert_with(Instant::now);
+            self.full_screen |= self.on_alternate_screen();
+        } else if let Some(since) = self.running_since.take() {
+            // A long one, not an agent (they say so themselves) or a
+            // full-screen program: "cargo finished after 2 min 14 s".
+            let took = since.elapsed();
+            let long = Duration::from_millis(LONG_COMMAND_MS.load(Ordering::Relaxed));
+            if took >= long && !AGENTS.contains(&was.as_str()) && !std::mem::take(&mut self.full_screen) {
+                self.watch.done.lock().unwrap_or_else(|e| e.into_inner()).push(format!("{was} finished after {}", took_for(took)));
+            }
+            self.full_screen = false;
+        }
         self.watch
             .agent
             .store(AGENTS.contains(&self.proc.as_str()), Ordering::Relaxed);
@@ -1469,6 +1528,10 @@ impl TerminalPane {
     pub fn send_input(&mut self, bytes: &[u8]) {
         #[cfg(test)]
         self.sent.extend_from_slice(bytes);
+        // Enter at the prompt: a command starts here.
+        if bytes == b"\r" && !self.is_running() && !self.on_alternate_screen() {
+            self.mark_command();
+        }
         // XOFF (Ctrl+S) suspends the program's output until XON — the classic
         // "terminal froze, a keypress un-froze it" cause. Log it so we can catch it.
         if bytes.contains(&0x13) {
@@ -1484,6 +1547,56 @@ impl TerminalPane {
         if let Err(e) = w.write_all(bytes).and_then(|()| w.flush()) {
             tracing::warn!(error = %e, bytes = bytes.len(), "terminal write failed");
         }
+    }
+
+    /// Remember where the command line is (see `ran_at`).
+    fn mark_command(&mut self) {
+        let p = self.parser.lock().unwrap_or_else(|e| e.into_inner());
+        let screen = p.screen();
+        let (row, _) = screen.cursor_position();
+        let lines: Vec<String> = screen.rows(0, self.cols).collect();
+        self.ran_head = lines.get(row.saturating_sub(2) as usize..row as usize).map(<[String]>::to_vec).unwrap_or_default();
+        self.ran_at = Some(self.rows.saturating_sub(1).saturating_sub(row) as usize);
+    }
+
+    /// Whether a command has run here since it opened (or was cleared).
+    pub fn has_run(&self) -> bool {
+        self.ran_at.is_some()
+    }
+
+    /// What the last command printed: the lines after its command line, up
+    /// to the prompt that came back (or, still running, so far).
+    // ponytail: found by where Enter was pressed, not by the shell marking
+    // its prompts (OSC 133): a prompt whose first line changes each time
+    // (a clock) comes along at the end.
+    pub fn last_output(&mut self) -> Option<String> {
+        let ran = self.ran_at?;
+        let (row, _) = self.parser.lock().unwrap_or_else(|e| e.into_inner()).screen().cursor_position();
+        let now = self.rows.saturating_sub(1).saturating_sub(row) as usize;
+        let running = self.is_running();
+        let (first, last) = (ran.checked_sub(1)?, if running { now } else { now + 1 });
+        if first < last {
+            return Some(String::new());
+        }
+        let saved = (self.sel_anchor, self.sel_cursor);
+        self.sel_anchor = Some((first, 0));
+        self.sel_cursor = Some((last, self.cols));
+        let text = self.selection_text().unwrap_or_default();
+        (self.sel_anchor, self.sel_cursor) = saved;
+        let mut lines: Vec<&str> = text.lines().collect();
+        if !running {
+            for head in self.ran_head.iter().rev().filter(|h| !h.trim().is_empty()) {
+                if lines.last().is_some_and(|l| l.trim_end() == head.trim_end()) {
+                    lines.pop();
+                } else {
+                    break;
+                }
+            }
+        }
+        while lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.pop();
+        }
+        Some(lines.join("\n"))
     }
 
     /// Paste `text` into the shell. Snaps to the live bottom first, and — when
@@ -1542,6 +1655,7 @@ impl TerminalPane {
         }
         *p = new_parser(self.rows, self.cols);
         drop(p);
+        self.ran_at = None;
         self.scroll = 0;
         self.seen = 0;
         self.replay = None;
@@ -2808,6 +2922,13 @@ mod tests {
             last: ago(0.3),
         };
         assert!(!a.went_quiet(), "still going");
+    }
+
+    #[test]
+    fn took_reads_like_speech() {
+        assert_eq!(took_for(Duration::from_secs(12)), "12 s");
+        assert_eq!(took_for(Duration::from_secs(134)), "2 min 14 s");
+        assert_eq!(took_for(Duration::from_secs(3780)), "1 h 3 min");
     }
 
     #[test]

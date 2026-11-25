@@ -1705,6 +1705,15 @@ fn headless_every_shortcut() {
     }
     eprintln!("{from_editor} work from the editor, {from_terminal} from a terminal");
 
+    // Copy the last output: once a command has run there.
+    run(&mut h, "echo ran");
+    wait_for(&mut h, "the echo", screen_line("ran"));
+    let (_, _, (key, mods)) = sheet.iter().find(|s| s.0 == Command::CopyTerminalOutput).copied().unwrap();
+    crate::app::dry_run(true);
+    press(&mut h, mods, key);
+    assert_eq!(crate::app::dry_run(false), [Command::CopyTerminalOutput]);
+    done.push(Command::CopyTerminalOutput);
+
     // From the file tree: its own keys get through.
     h.state_mut().0.focus_sidebar();
     h.step();
@@ -2619,6 +2628,218 @@ fn headless_project_home_and_file_browser() {
     // The welcome launcher is for no folder only.
     let mut h = harness(None);
     shot(&mut h, "k5-no-folder");
+}
+
+/// The tree shows what git says changed: a changed file yellow with M, a
+/// new one green with U, the folders they're in coloured too, in a folder
+/// holding a repository of its own; saving a change shows at once.
+#[test]
+#[ignore]
+fn headless_git_colours_in_the_tree() {
+    use crate::git::Change;
+    if which::which("git").is_err() {
+        return;
+    }
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        assert!(std::process::Command::new("git").arg("-C").arg(dir).args(args).output().unwrap().status.success(), "git {args:?}");
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("work");
+    let app_dir = root.join("app");
+    std::fs::create_dir_all(app_dir.join("src")).unwrap();
+    git(&app_dir, &["init", "-q"]);
+    git(&app_dir, &["config", "user.email", "t@t"]);
+    git(&app_dir, &["config", "user.name", "t"]);
+    for f in ["src/changed.rs", "src/clean.rs", "same.rs"] {
+        std::fs::write(app_dir.join(f), "fn x() {}\n").unwrap();
+    }
+    git(&app_dir, &["add", "."]);
+    git(&app_dir, &["commit", "-qm", "one"]);
+    std::fs::write(app_dir.join("src/changed.rs"), "fn y() {}\n").unwrap();
+    std::fs::write(app_dir.join("new.rs"), "").unwrap();
+    let mut h = harness(Some(root.clone()));
+    let change = |h: &Harness<'static, Root>, p: &std::path::Path| app(h).project.as_ref().unwrap().git.get(p).copied();
+    wait_for(&mut h, "git's answer", |a| a.project.as_ref().is_some_and(|p| !p.git.is_empty()));
+    assert_eq!(change(&h, &app_dir.join("src/changed.rs")), Some(Change::Modified));
+    assert_eq!(change(&h, &app_dir.join("new.rs")), Some(Change::Untracked));
+    assert_eq!(change(&h, &app_dir), Some(Change::Modified), "the folder: the strongest inside");
+    assert_eq!(change(&h, &app_dir.join("same.rs")), None);
+    let tree = &mut h.state_mut().0.project.as_mut().unwrap().tree;
+    let i = tree.index_of(&app_dir).unwrap();
+    tree.expand(i);
+    let i = tree.index_of(&app_dir.join("src")).unwrap();
+    tree.expand(i);
+    h.step();
+    shot(&mut h, "git0-tree");
+    // Saved here: told at once, not at the next look.
+    h.state_mut().0.open_file(&app_dir.join("src/clean.rs"));
+    type_text(&mut h, "y");
+    press(&mut h, CMD, Key::S);
+    wait_for(&mut h, "clean.rs changed", |a| a.project.as_ref().unwrap().git.get(&app_dir.join("src/clean.rs")) == Some(&Change::Modified));
+}
+
+/// Pinned tabs: kept at the left (a move or a drag can't take one past
+/// the others or another one in among them), left open by Close Others /
+/// All, closed by ⌘W, still pinned when the folder opens again; terminals
+/// alike.
+#[test]
+#[ignore]
+fn headless_pinned_tabs() {
+    use crate::keymap::Command;
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%~ $ '\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    let [a, b, c, d] = ["a.rs", "b.rs", "c.rs", "d.rs"].map(|n| root.join(n));
+    for f in [&a, &b, &c, &d] {
+        std::fs::write(f, "x\n").unwrap();
+    }
+    let names = |h: &Harness<'static, Root>| app(h).tabs.iter().map(|t| t.buf.name()).collect::<Vec<_>>();
+    let mut h = harness(Some(root.clone()));
+    for f in [&a, &b, &c, &d] {
+        h.state_mut().0.open_file(f);
+    }
+    h.step();
+    assert_eq!(names(&h), ["a.rs", "b.rs", "c.rs", "d.rs"]);
+    h.state_mut().0.select_tab(2);
+    run_command(&mut h, Command::TogglePinTab);
+    assert_eq!(names(&h), ["c.rs", "a.rs", "b.rs", "d.rs"], "to the left");
+    assert_eq!(app(&h).active, Some(0), "still the one in front");
+    shot(&mut h, "pin0-pinned");
+    // Moved left from the first unpinned one: stays after the pinned.
+    h.state_mut().0.select_tab(1);
+    run_command(&mut h, Command::MoveTabLeft);
+    assert_eq!(names(&h), ["c.rs", "a.rs", "b.rs", "d.rs"]);
+    // A new tab opens after the pinned ones even from a pinned one.
+    h.state_mut().0.select_tab(0);
+    std::fs::write(root.join("e.rs"), "x\n").unwrap();
+    h.state_mut().0.open_file(&root.join("e.rs"));
+    assert_eq!(names(&h), ["c.rs", "e.rs", "a.rs", "b.rs", "d.rs"]);
+    // Close Others from d, then Close All: the pinned one stays.
+    h.state_mut().0.select_tab(4);
+    run_command(&mut h, Command::CloseOtherTabs);
+    assert_eq!(names(&h), ["c.rs", "d.rs"]);
+    run_command(&mut h, Command::CloseAllTabs);
+    assert_eq!(names(&h), ["c.rs"]);
+    // Opened again: still pinned.
+    h.state_mut().0.open_file(&a);
+    drop(h);
+    let mut h = harness(Some(root.clone()));
+    h.step();
+    assert_eq!(app(&h).tabs.iter().map(|t| (t.buf.name(), t.pinned)).collect::<Vec<_>>(), [("c.rs".to_string(), true), ("a.rs".to_string(), false)]);
+    // ⌘W on it closes it.
+    h.state_mut().0.select_tab(0);
+    run_command(&mut h, Command::CloseTab);
+    assert_eq!(names(&h), ["a.rs"]);
+
+    // Terminals: the second pinned goes first; Close Others leaves it.
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "the prompt", screen_has("$ "));
+    press(&mut h, ALT, Key::N);
+    press(&mut h, ALT, Key::N);
+    let ids = |h: &Harness<'static, Root>| app(h).terminals.iter().map(|t| t.id).collect::<Vec<_>>();
+    let before = ids(&h);
+    h.state_mut().0.active_terminal = 1;
+    run_command(&mut h, Command::TogglePinTab);
+    assert_eq!(ids(&h), [before[1], before[0], before[2]]);
+    assert!(app(&h).terminals[0].pinned && app(&h).active_terminal == 0);
+    shot(&mut h, "pin1-terminal");
+    h.state_mut().0.active_terminal = 2;
+    run_command(&mut h, Command::CloseOtherTabs);
+    if matches!(app(&h).ask, Some(crate::app::Ask::CloseTerminals { .. })) {
+        press(&mut h, Modifiers::NONE, Key::Enter);
+    }
+    wait_for(&mut h, "the other closed", |a| a.terminals.len() == 2);
+    assert_eq!(ids(&h), [before[1], before[2]], "the pinned one stays");
+}
+
+/// ⌥C in a terminal copies what the last command printed (to the clipboard
+/// and ⌥V's history): not its command line, not the prompt after it, a
+/// prompt of two lines included.
+#[test]
+#[ignore]
+fn headless_copy_last_output() {
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    // Two lines: the folder, then "$ ".
+    std::fs::write(home.join(".zshrc"), "PROMPT=$'%~\\n$ '\n").unwrap();
+    let mut h = harness(None);
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "the prompt", screen_has("$ "));
+    assert!(!app(&h).available(crate::keymap::Command::CopyTerminalOutput), "nothing run yet");
+    run(&mut h, "echo one; echo two; echo three");
+    wait_for(&mut h, "the output", screen_line("three"));
+    wait_for(&mut h, "the prompt back", |a| a.terminal().is_some_and(|t| !t.pane.is_running()));
+    for _ in 0..10 {
+        h.step();
+    }
+    press(&mut h, ALT, Key::C);
+    assert_eq!(app(&h).clips.first().map(String::as_str), Some("one\ntwo\nthree"), "{:?}", app(&h).note_text());
+    shot(&mut h, "co-copied");
+    // Nothing printed: said so, nothing copied.
+    run(&mut h, "true");
+    for _ in 0..10 {
+        h.step();
+    }
+    press(&mut h, ALT, Key::C);
+    assert_eq!(app(&h).note_text(), Some("The last command printed nothing"));
+    assert_eq!(app(&h).clips.len(), 1);
+    // Cleared: nothing to copy until the next command.
+    press(&mut h, CMD, Key::K);
+    assert!(!app(&h).available(crate::keymap::Command::CopyTerminalOutput));
+}
+
+/// A command that ran a while says when it finishes, if you weren't
+/// watching it: a toast (and a bell on its tab); not a full-screen program
+/// (you were in it), and nothing at all if you were looking.
+#[test]
+#[ignore]
+fn headless_long_command_says_it_finished() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let home = PathBuf::from(std::env::var("HOME").unwrap());
+    std::fs::write(home.join(".zshrc"), "PROMPT='%~ $ '\n").unwrap();
+    crate::terminalpane::LONG_COMMAND_MS.store(1500, Relaxed);
+    // Back to 10 s however this ends (the agent test, in the same process,
+    // runs `sleep 1` unwatched).
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::terminalpane::LONG_COMMAND_MS.store(10_000, Relaxed);
+        }
+    }
+    let _restore = Restore;
+    let toast = |needle: &'static str| move |app: &App| app.toasts.iter().any(|t| t.msg.contains(needle));
+    let mut h = harness(None);
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "the prompt", screen_has("$ "));
+    // Watched as it ran: nothing to say.
+    run(&mut h, "sleep 3; echo watched");
+    wait_for(&mut h, "the sleep", screen_line("watched"));
+    for _ in 0..40 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!toast("finished after")(app(&h)), "you saw it");
+    // Not watched (the panel hidden): told, with how long it took.
+    run(&mut h, "sleep 3");
+    wait_for(&mut h, "sleep seen running", |a| a.terminals[0].pane.is_running());
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "the toast", toast("sleep finished after"));
+    let msg = app(&h).toasts.last().unwrap().msg.clone();
+    assert!(msg.contains("finished after 3 s") || msg.contains("finished after 2 s") || msg.contains("finished after 4 s"), "{msg}");
+    assert!(app(&h).terminals[0].pane.attention, "a bell on its tab");
+    // A full-screen program (less) that ran as long: you were in it.
+    press(&mut h, ALT, Key::T);
+    h.state_mut().0.toasts.clear();
+    run(&mut h, "printf '\\033[?1049h'; sleep 3; printf '\\033[?1049l'; echo back");
+    wait_for(&mut h, "full screen, running", |a| a.terminals[0].pane.on_alternate_screen() && a.terminals[0].pane.is_running());
+    press(&mut h, ALT, Key::T);
+    wait_for(&mut h, "back", screen_line("back"));
+    for _ in 0..40 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(!toast("finished after")(app(&h)), "full screen: not told");
 }
 
 /// Agents asking for you: a notification escape or the bell from a terminal
@@ -3776,6 +3997,27 @@ fn headless_files_reopen_where_you_were() {
     shot(&mut h, "p1-restored");
 }
 
+/// Code in a language without a grammar here (Dart) is coloured anyway,
+/// and the status bar names it by its extension; prose stays plain.
+#[test]
+#[ignore]
+fn headless_code_without_a_grammar() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("thrive_shared.dart");
+    std::fs::write(&file, "/// Shared widgets\nlibrary;\n\nimport 'src/utils/route_logger.dart';\n\n@override\nWidget build(BuildContext context) {\n  final count = 42; // the answer\n  return Text(\"hi $count\", style: theme.body);\n}\n").unwrap();
+    let mut h = harness(Some(file));
+    wait_for(&mut h, "the colours", |a| a.active_tab().is_some_and(|t| t.highlighted()));
+    let tab = app(&h).active_tab().unwrap();
+    let coloured = (0..tab.line_count()).filter(|&l| !tab.line_spans(l).is_empty()).count();
+    assert!(coloured >= 6, "coloured lines: {coloured}");
+    assert_eq!(crate::syntax::Lang::label(tab.buf.lang, tab.path().map(|p| p.as_path())), "Dart", "what the status bar says");
+    shot(&mut h, "gx-dart");
+    // ⌘/ still knows Dart's comment.
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    press(&mut h, CMD, Key::Slash);
+    assert_eq!(app(&h).active_tab().unwrap().line_text(1), "// library;");
+}
+
 /// The tree follows the file in front: switching tabs (or opening one, from
 /// anywhere) opens its folders, selects it and scrolls to it, while the
 /// tree stays where the keyboard isn't.
@@ -3867,6 +4109,105 @@ fn headless_tree_follows_the_active_file() {
         assert!(row_visible(&h, &found), "{query}: in view: {:?} offset {}", app(&h).sidebar.selected, app(&h).sidebar.offset);
     }
     shot(&mut h, "tf2-found-in-view");
+
+    // ⌘B with the tree hidden: it shows, the active file chosen and in view,
+    // the keyboard on it; the same after switching tabs while it was hidden.
+    let tab_of = |h: &Harness<'static, Root>, f: &std::path::Path| app(h).tabs.iter().position(|t| t.path().map(|p| p.as_path()) == Some(f)).unwrap();
+    for n in [1, 0] {
+        h.state_mut().0.config.settings.sidebar = false;
+        h.state_mut().0.focus = Focus::Editor;
+        h.step();
+        let t = tab_of(&h, &files[n]);
+        h.state_mut().0.select_tab(t);
+        h.step();
+        let ctx = h.ctx.clone();
+        h.state_mut().0.run(crate::keymap::Command::CollapseFolders, &ctx);
+        press(&mut h, CMD, Key::B);
+        for _ in 0..4 {
+            h.step();
+        }
+        assert_eq!(app(&h).focus, Focus::Sidebar);
+        assert!(row_visible(&h, &files[n]), "⌘B, tab {n}: in view: {:?} offset {} view {}", app(&h).sidebar.selected, app(&h).sidebar.offset, app(&h).sidebar.view);
+    }
+    // The title's path: each folder a part, a click shows it in the tree
+    // (opened, chosen, in view); the file's part shows the file.
+    h.state_mut().0.config.settings.sidebar = false;
+    h.state_mut().0.focus = Focus::Editor;
+    let t = tab_of(&h, &files[1]);
+    h.state_mut().0.select_tab(t);
+    h.step();
+    let names: Vec<String> = app(&h).crumbs().iter().map(|c| c.text.clone()).collect();
+    assert_eq!(names, ["shop", "pkg27", "src", "deep", "mod.rs"]);
+    shot(&mut h, "tf3-title-path");
+    h.get_by_label("src").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    let src = root.join("pkg27/src");
+    assert_eq!(app(&h).focus, Focus::Sidebar);
+    assert!(row_visible(&h, &src), "the folder chosen, in view: {:?}", app(&h).sidebar.selected);
+    let tree = &app(&h).project.as_ref().unwrap().tree;
+    assert!(tree.entries[tree.index_of(&src).unwrap()].expanded, "and opened");
+    h.get_by_label("mod.rs").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(row_visible(&h, &files[1]), "the file's part: the file");
+    // Two mod.rs in folders both called deep: told apart by the folder
+    // that differs, not just "deep".
+    let a = app(&h);
+    let details = a.tab_details();
+    let mods: Vec<&String> = a.tabs.iter().zip(&details).filter(|(t, _)| t.buf.name() == "mod.rs").map(|(_, d)| d).collect();
+    assert_eq!(mods.len(), 2);
+    assert!(mods.contains(&&"pkg03/…/deep".to_string()) && mods.contains(&&"pkg27/…/deep".to_string()), "{mods:?}");
+    // Switching tabs with the tree showing: each file chosen and in view.
+    h.state_mut().0.focus = Focus::Editor;
+    for n in [1, 2, 0, 1] {
+        let t = tab_of(&h, &files[n]);
+        h.state_mut().0.select_tab(t);
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(row_visible(&h, &files[n]), "tab {n}: in view: {:?} offset {}", app(&h).sidebar.selected, app(&h).sidebar.offset);
+    }
+
+    // A window whose tree has been hidden since it opened: ⌘B the first
+    // time already shows the file in view.
+    let cfg = crate::config::dir();
+    std::fs::create_dir_all(&cfg).unwrap();
+    let settings = cfg.join("settings.json");
+    let before = std::fs::read_to_string(&settings).ok();
+    std::fs::write(&settings, "{ \"sidebar\": false }").unwrap();
+    let mut h2 = harness(Some(files[1].clone()));
+    match &before {
+        Some(b) => std::fs::write(&settings, b).unwrap(),
+        None => std::fs::remove_file(&settings).unwrap(),
+    }
+    assert!(!app(&h2).sidebar_shown() && app(&h2).sidebar.view == 0.0, "never drawn");
+    for _ in 0..3 {
+        h2.step();
+    }
+    press(&mut h2, CMD, Key::B);
+    for _ in 0..4 {
+        h2.step();
+    }
+    assert!(row_visible(&h2, &files[1]), "first ⌘B: in view: {:?} offset {} view {}", app(&h2).sidebar.selected, app(&h2).sidebar.offset, app(&h2).sidebar.view);
+    drop(h2);
+
+    // No tabs: ⌘B shows the tree with its first row chosen.
+    let ctx = h.ctx.clone();
+    h.state_mut().0.run(crate::keymap::Command::CloseAllTabs, &ctx);
+    h.step();
+    assert!(app(&h).tabs.is_empty());
+    h.state_mut().0.config.settings.sidebar = false;
+    h.state_mut().0.focus = Focus::Editor;
+    assert!(app(&h).sidebar.selected.is_some(), "a row chosen before");
+    h.step();
+    press(&mut h, CMD, Key::B);
+    h.step();
+    let first = app(&h).project.as_ref().unwrap().tree.entries[0].path.clone();
+    assert_eq!(app(&h).focus, Focus::Sidebar);
+    assert!(row_visible(&h, &first), "no tabs: the first row: {:?}", app(&h).sidebar.selected);
 }
 
 /// A terminal's tab says what its program is doing: printing, running,
@@ -5684,6 +6025,7 @@ fn headless_measure_open() {
             .filter(|p| p.extension().is_some_and(|x| x == "rs"))
             .collect();
         files.sort();
+        let files: Vec<(PathBuf, bool)> = files.into_iter().map(|f| (f, false)).collect();
         crate::session::save(&target, &files, 0);
     }
     let footprint = || crate::sys::usage(std::process::id() as i32).unwrap().footprint_kb / 1024;
@@ -5717,7 +6059,8 @@ fn project_with_session(n: usize) -> (tempfile::TempDir, PathBuf, Vec<PathBuf>) 
             f
         })
         .collect();
-    crate::session::save(&root, &files, 0);
+    let saved: Vec<(PathBuf, bool)> = files.iter().map(|f| (f.clone(), false)).collect();
+    crate::session::save(&root, &saved, 0);
     (dir, root, files)
 }
 
@@ -5999,7 +6342,7 @@ fn headless_every_key_that_applies_shows() {
     let elsewhere = [
         // App-wide: the palette and F1.
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
-        OpenProjectSettings, OpenConfigFolder, Todos, ClipboardHistory, ZoomIn, ZoomOut, ResetZoom, FullScreen,
+        OpenProjectSettings, OpenConfigFolder, ZoomIn, ZoomOut, ResetZoom, FullScreen,
         MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
         ToggleTerminal, NewWindow, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
         // A tab's or the tree's right-click menu.

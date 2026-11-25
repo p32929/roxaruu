@@ -116,7 +116,7 @@ impl Setting {
             Setting::CurrentLine => "Highlight the current line",
             Setting::IndentGuides => "Indent guides",
             Setting::Sidebar => "Show file tree",
-            Setting::Notifications => "Notify when an agent finishes",
+            Setting::Notifications => "Notify when an agent or a long command finishes",
             Setting::Updates => "Install updates when you quit",
             Setting::ConfirmCloseTerminal => "Ask before closing a running terminal",
             Setting::SearchIgnored => "Search ignored files too (.gitignore, node_modules…)",
@@ -158,13 +158,17 @@ impl App {
             crate::terminalpane::APP_FOCUSED.store(focused, Relaxed);
             crate::terminalpane::NOTIFY.store(self.config.settings.notifications, Relaxed);
         }
+        let mut finished = false;
         for i in 0..self.terminals.len() {
             let shown = self.terminal_open && (self.terminal_grid || i == self.active_terminal);
             let Some(t) = self.terminals.get_mut(i) else { continue };
             if own {
                 t.pane.in_sight = focused && shown;
             }
+            let was = t.pane.is_running();
             t.pane.refresh_foreground();
+            // A command finished: it may have changed files (git's colours).
+            finished |= was && !t.pane.is_running();
             if own {
                 t.pane.watch.looking.store(focused && shown, Relaxed);
             }
@@ -188,6 +192,9 @@ impl App {
             for msg in std::mem::take(&mut self.missed) {
                 self.notify(msg);
             }
+        }
+        if finished {
+            self.git_changed();
         }
     }
 
@@ -639,7 +646,7 @@ impl App {
             }
         };
         self.notify(msg);
-        crate::sys::notify("Roxaruu", "Notifications are on: you'll hear when an agent finishes or needs you.");
+        crate::sys::notify("Roxaruu", "Notifications are on: you'll hear when an agent finishes or needs you, or a long command finishes.");
     }
 
     /// Enter on a setting: themes and fonts open their (previewing) picker;

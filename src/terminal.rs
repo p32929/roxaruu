@@ -53,6 +53,8 @@ impl Throttle {
 pub struct Terminal {
     /// Which terminal this is, while others come and go (a dialog about it).
     pub id: u64,
+    /// Pinned: kept at the left, left open by Close Others.
+    pub pinned: bool,
     pub pane: TerminalPane,
     throttle: Arc<Throttle>,
     /// Whether this terminal is on screen; output from hidden ones doesn't
@@ -105,6 +107,7 @@ impl Terminal {
             wheel: 0.0,
             swallow_text: false,
             mouse_forward: false,
+            pinned: false,
         })
     }
 
