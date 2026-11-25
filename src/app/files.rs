@@ -604,7 +604,7 @@ fn clipboard_files() -> Option<Vec<PathBuf>> {
 
 /// Move to the Trash. Tests delete outright, so nothing lands in the real Trash.
 #[cfg(not(test))]
-fn trash(path: &Path) -> std::io::Result<()> {
+pub(crate) fn trash(path: &Path) -> std::io::Result<()> {
     let (cmd, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
         ("/usr/bin/trash", &[])
     } else {
@@ -627,7 +627,7 @@ fn trash(path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-fn trash(path: &Path) -> std::io::Result<()> {
+pub(crate) fn trash(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         std::fs::remove_dir_all(path)
     } else {

@@ -623,6 +623,27 @@ pub fn git(dir: &std::path::Path, args: &[&str]) -> Option<Vec<u8>> {
     out.status.success().then_some(out.stdout)
 }
 
+/// `git` in `dir` that does something (stage, commit, push): its output, or
+/// what it said went wrong. Never waits on a question (a password: it
+/// fails saying so; the terminal is where to answer one).
+pub fn git_run(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(dir).args(args).env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().map_err(|e| format!("couldn't run git: {e}"))?;
+    let text = |b: &[u8]| String::from_utf8_lossy(b).trim_end().to_string();
+    if out.status.success() {
+        return Ok(text(&out.stdout));
+    }
+    let err = text(&out.stderr);
+    tracing::warn!(?args, dir = %dir.display(), %err, "git");
+    Err(if err.is_empty() { text(&out.stdout) } else { err })
+}
+
 /// Windows: the id Roxaruu's notifications go under, so Windows shows them
 /// as Roxaruu's (with its icon), not PowerShell's.
 #[cfg(windows)]

@@ -22,7 +22,7 @@ use crate::ui::icon;
 
 mod extras;
 pub(crate) mod rox;
-mod files;
+pub(crate) mod files;
 mod updates;
 pub use extras::{Setting, Toast};
 pub use files::Ask;
@@ -57,7 +57,7 @@ struct SearchState {
 /// matcher, from a background walk.
 type Index = (Vec<(String, bool, bool)>, FileMatcher);
 /// Git's answer: the repositories asked, and what changed (none: no repository).
-type GitAnswer = (crate::git::Repos, Option<std::collections::HashMap<PathBuf, crate::git::Change>>);
+type GitAnswer = (crate::git::Repos, Option<crate::git::Status>);
 
 /// Search results shown at most — more is noise, and costs layout.
 pub(crate) const MAX_RESULTS: usize = 300;
@@ -75,6 +75,8 @@ pub struct Project {
     /// What git says changed (files and the folders they're in), for the
     /// tree's colours: asked off this thread (`git_job`), again when stale.
     pub(crate) git: std::collections::HashMap<PathBuf, crate::git::Change>,
+    /// Each repository, its branch and changed files (the Changes view).
+    pub(crate) repos: Vec<crate::git::Repo>,
     git_job: Option<Receiver<GitAnswer>>,
     git_stale: bool,
     /// The repositories git is asked about: found again only when files
@@ -1110,6 +1112,7 @@ impl App {
             matcher: None,
             indexing: None,
             git: Default::default(),
+            repos: Vec::new(),
             git_job: None,
             git_stale: true,
             git_repos: None,
@@ -1262,7 +1265,9 @@ impl App {
         if let Some((repos, answer)) = p.git_job.as_ref().and_then(|rx| rx.try_recv().ok()) {
             p.git_job = None;
             p.git_found = answer.is_some();
-            p.git = answer.unwrap_or_default();
+            let answer = answer.unwrap_or_default();
+            p.git = answer.tree;
+            p.repos = answer.repos;
             p.git_repos = Some(repos);
         }
         let due = focused && p.git_found && p.git_at.is_none_or(|t| t.elapsed() >= GIT_EVERY);
