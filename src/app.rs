@@ -1946,9 +1946,11 @@ impl App {
     }
 
     /// A maximized terminal is for working in it: once the keyboard goes
-    /// elsewhere (the editor, the tree, a file opened), it's back to its size.
+    /// elsewhere (the editor, a file opened), it's back to its size. The
+    /// tree beside it isn't elsewhere (a compact view's drawer over it is).
     pub(crate) fn end_maximize(&mut self) {
-        if self.terminal_max && !self.terminal_focused() && self.palette.is_none() && !self.modal_open() {
+        let in_tree = self.focus == Focus::Sidebar && self.sidebar_shown() && !self.view().compact;
+        if self.terminal_max && !self.terminal_focused() && !in_tree && self.palette.is_none() && !self.modal_open() {
             self.terminal_max = false;
         }
     }
@@ -2568,9 +2570,8 @@ impl App {
     }
 
     /// A terminal in each of `dirs`, in that order, side by side. A window
-    /// with nothing open takes them, filling it; one with things open takes
-    /// just one at once, and asks about several: here, or a new window
-    /// (`Ask::OpenTerminals`).
+    /// with nothing open takes them, filling it; one with things open asks,
+    /// even about one: here, or a new window (`Ask::OpenTerminals`).
     pub fn open_terminals(&mut self, dirs: Vec<PathBuf>, ctx: &egui::Context) {
         let dirs: Vec<PathBuf> = dirs.into_iter().filter(|d| d.is_dir()).collect();
         if dirs.is_empty() {
@@ -2578,10 +2579,10 @@ impl App {
         }
         tracing::info!(n = dirs.len(), "open terminals");
         let busy = self.project.is_some() || !self.terminals.is_empty();
-        match (dirs.as_slice(), busy) {
-            ([dir], true) => self.new_terminal_in(Some(dir.clone()), ctx),
-            (_, true) => self.ask = Some(Ask::OpenTerminals { dirs }),
-            _ => self.terminals_here(dirs, ctx),
+        if busy {
+            self.ask = Some(Ask::OpenTerminals { dirs });
+        } else {
+            self.terminals_here(dirs, ctx);
         }
     }
 

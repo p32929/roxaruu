@@ -626,6 +626,7 @@ fn headless_terminals_walkthrough() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("api");
     std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(root.join("a.txt"), "a").unwrap();
 
     let mut h = harness(Some(root.clone()));
     // ⌥M with no terminal yet: one opens, maximized; again: its own size.
@@ -772,19 +773,43 @@ fn headless_terminals_walkthrough() {
     press(&mut h, ALT, Key::M);
     shot(&mut h, "75-tabs-after-close");
 
-    // Maximized, the keyboard going elsewhere brings it back to its size:
-    // to the editor (⌘J), the tree (⇧⌘E); the palette over it doesn't.
-    for (mods, key) in [(CMD, Key::J), (CMD_SHIFT, Key::E)] {
-        press(&mut h, ALT, Key::M);
-        assert!(h.state().0.terminal_max && h.state().0.terminal_focused());
-        press(&mut h, CMD_SHIFT, Key::P);
-        assert!(h.state().0.terminal_max, "the palette leaves it maximized");
-        press(&mut h, Modifiers::NONE, Key::Escape);
-        press(&mut h, mods, key);
-        assert!(!h.state().0.terminal_max, "{mods:?} {key:?} restores it");
-        press(&mut h, CMD, Key::J); // back into the terminal
-        assert!(h.state().0.terminal_focused());
-    }
+    // Maximized, the keyboard going to the editor (⌘J) brings it back to
+    // its size; the palette over it doesn't.
+    press(&mut h, ALT, Key::M);
+    assert!(h.state().0.terminal_max && h.state().0.terminal_focused());
+    press(&mut h, CMD_SHIFT, Key::P);
+    assert!(h.state().0.terminal_max, "the palette leaves it maximized");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    press(&mut h, CMD, Key::J);
+    assert!(!h.state().0.terminal_max, "the editor restores it");
+    press(&mut h, CMD, Key::J); // back into the terminal
+    assert!(h.state().0.terminal_focused());
+
+    // Maximized beside the tree: it takes the editor's room only. ⌘B hides
+    // and shows the tree, the keyboard staying put; into the tree (⇧⌘E)
+    // and back keeps it maximized; a file opened from the tree restores it.
+    assert!(app(&h).config.settings.sidebar, "the tree is showing");
+    press(&mut h, ALT, Key::M);
+    assert!(app(&h).terminal_max && app(&h).sidebar_shown());
+    shot(&mut h, "76-maximized-beside-tree");
+    let left = |h: &Harness<'static, Root>| app(h).terminal_rects.iter().map(|r| r.1.left()).fold(f32::MAX, f32::min);
+    assert!(left(&h) > 100.0, "beside the tree, not under it");
+    press(&mut h, CMD, Key::B);
+    assert!(!app(&h).sidebar_shown() && app(&h).terminal_max && app(&h).terminal_focused(), "full window");
+    assert!(left(&h) < 100.0, "the whole width");
+    shot(&mut h, "77-maximized-full");
+    press(&mut h, CMD, Key::B);
+    assert!(app(&h).sidebar_shown() && app(&h).terminal_max && app(&h).terminal_focused(), "the tree back");
+    press(&mut h, CMD_SHIFT, Key::E);
+    assert!(app(&h).focus == crate::app::Focus::Sidebar && app(&h).terminal_max, "into the tree: still maximized");
+    press(&mut h, CMD, Key::J);
+    assert!(app(&h).terminal_focused() && app(&h).terminal_max);
+    press(&mut h, CMD_SHIFT, Key::E);
+    press(&mut h, Modifiers::NONE, Key::Enter); // a.txt, the only row
+    let open = app(&h).active_tab().and_then(|t| t.path().cloned());
+    assert!(open.as_ref().is_some_and(|p| p.ends_with("a.txt")), "a.txt opened: {open:?} focus {:?}", app(&h).focus);
+    assert!(!app(&h).terminal_max, "a file opened restores it");
+    press(&mut h, CMD, Key::J);
     // Hidden, ⌥M shows it maximized.
     press(&mut h, ALT, Key::T);
     assert!(!app(&h).terminal_open);
@@ -3223,8 +3248,8 @@ fn headless_open_list() {
     h.step();
     assert_eq!(crate::recent::list().len(), 4, "still each folder once");
 
-    // This window has terminals: several, it asks where (N: a new window;
-    // ↵: here, beside them); one goes here at once.
+    // This window has terminals: it asks where (N: a new window; ↵: here,
+    // beside them), about one too.
     let several = |h: &mut Harness<'static, Root>| {
         press(h, CMD, Key::O);
         for name in ["infra", "web"] {
@@ -3256,6 +3281,16 @@ fn headless_open_list() {
     let row = labels(&h).iter().position(|l| l == "infra").unwrap();
     h.state_mut().0.palette.as_mut().unwrap().selected = row;
     press(&mut h, CMD, Key::Enter);
+    assert!(matches!(app(&h).ask, Some(crate::app::Ask::OpenTerminals { .. })), "one: asked too");
+    shot(&mut h, "op2c-where-one");
+    press(&mut h, Modifiers::NONE, Key::N);
+    assert_eq!(App::take_launched(), [vec!["new window".to_string(), "--terminal".into(), s(&infra)]], "one: a new window");
+    assert_eq!(app(&h).terminals.len(), 3);
+    press(&mut h, CMD, Key::O);
+    let row = labels(&h).iter().position(|l| l == "infra").unwrap();
+    h.state_mut().0.palette.as_mut().unwrap().selected = row;
+    press(&mut h, CMD, Key::Enter);
+    press(&mut h, Modifiers::NONE, Key::Enter);
     assert!(App::take_launched().is_empty(), "one: here");
     assert_eq!(app(&h).terminals.len(), 4);
     assert_eq!(app(&h).terminal().unwrap().pane.dir, infra);
@@ -3272,6 +3307,7 @@ fn headless_open_list() {
     shot(&mut h, "op3-browse");
     press(&mut h, CMD, Key::Enter);
     assert!(app(&h).palette.is_none());
+    press(&mut h, Modifiers::NONE, Key::Enter);
     assert_eq!(app(&h).terminal().unwrap().pane.dir, api);
     assert_eq!(app(&h).terminals.len(), 5);
 }

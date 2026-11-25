@@ -57,8 +57,16 @@ impl App {
     }
 
     /// ⌘B: hidden → show it and go in; shown with the keyboard elsewhere →
-    /// just go in; already in it → hide it.
+    /// just go in; already in it → hide it. In a maximized terminal: shown
+    /// or hidden beside it, the keyboard staying in the terminal.
     pub fn sidebar_key(&mut self, ctx: &egui::Context) {
+        if self.terminal_max && self.terminal_focused() && self.project.is_some() && !self.view().compact {
+            self.sidebar.peek = false;
+            let on = !self.config.settings.sidebar;
+            self.config.settings.sidebar = on;
+            self.save_choice_quietly("sidebar", on, ctx);
+            return;
+        }
         if self.sidebar_shown() && self.focus != Focus::Sidebar {
             self.focus_sidebar();
         } else {

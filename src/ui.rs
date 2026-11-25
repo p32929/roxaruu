@@ -1004,9 +1004,9 @@ impl App {
         }
         let terminals_up = self.terminal_open && !self.terminals.is_empty();
         let maximized = terminals_up && self.terminal_max;
-        // The tree beside (not a drawer, not under a maximized terminal):
-        // the status bar gives its keys the same width.
-        let beside = self.sidebar_shown() && !maximized && !compact;
+        // The tree beside (not a drawer; a maximized terminal takes only the
+        // editor's room): the status bar gives its keys the same width.
+        let beside = self.sidebar_shown() && !compact;
         let tree_w = if beside { self.view().tree_w } else { 0.0 };
         let status = egui::Panel::bottom("status")
             .frame(bare)
@@ -1015,7 +1015,7 @@ impl App {
         let (hint, status_top) = (status.inner, status.response.rect.top());
         // The tree runs the full height; tabs and terminals sit beside it.
         // (A compact view slides it over them instead, below.)
-        if self.sidebar_shown() && !maximized && !compact {
+        if beside {
             let tree = egui::Panel::left("sidebar")
                 .frame(bare.fill(self.config.theme.colors.surface))
                 .resizable(true)
@@ -1835,12 +1835,20 @@ impl App {
                 self.modal(ctx, icon::TERMINAL, &title, &body, &buttons, None, None, None)
             }
             Ask::OpenTerminals { dirs } => {
-                let title = format!("Open {} terminals here?", dirs.len());
                 let names: Vec<String> = dirs.iter().map(|d| crate::app::display_name(d)).collect();
-                let body = format!(
-                    "{}\n\nHere: beside this window's terminals, side by side. Or in a new window of their own.",
-                    names.join(", ")
-                );
+                let (title, body) = match dirs.len() {
+                    1 => (
+                        format!("Open a terminal in {} here?", names.join("")),
+                        "Here: beside this window's terminals. Or in a new window of its own.".to_string(),
+                    ),
+                    n => (
+                        format!("Open {n} terminals here?"),
+                        format!(
+                            "{}\n\nHere: beside this window's terminals, side by side. Or in a new window of their own.",
+                            names.join(", ")
+                        ),
+                    ),
+                };
                 let buttons = [
                     CANCEL,
                     Btn { label: "New Window", hint: "N", keys: &[Key::N], primary: false },
