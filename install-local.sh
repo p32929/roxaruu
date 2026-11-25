@@ -119,7 +119,12 @@ if [ -n "$VUP" ]; then
         patch) NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
     esac
     set_version "$NEW_VERSION"
-    green "Version $OLD_VERSION -> $NEW_VERSION ($VUP)"
+fi
+# First thing said, whatever the flags: which version this installs.
+if [ -n "$VUP" ]; then
+    green "Installing Roxaruu v$NEW_VERSION (from v$OLD_VERSION, a $VUP bump)"
+else
+    green "Installing Roxaruu v$OLD_VERSION"
 fi
 
 blue "Building release binary…"
