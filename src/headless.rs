@@ -1687,12 +1687,14 @@ fn headless_every_shortcut() {
     h.step();
     visible_keys_work(&mut h, "a terminal");
     let mut from_terminal = 0;
-    for &(command, title, (key, mods)) in &sheet {
+    for &(command, title, _) in &sheet {
         if command == Command::DeleteFile || !app(&h).available(command) {
             continue;
         }
         // (Not pressed: Meta keys would leave the shell mid-command.)
         let Some((key, mods)) = app(&h).reaching_combo(command).map(|k| k.press()) else {
+            // As this system sees the key (`press` gives tests ⌘ everywhere).
+            let (key, mods) = app(&h).config.keymap.combos(command).next().unwrap().chord();
             assert!(crate::terminal::belongs_to_shell(key, mods), "from a terminal, {title}'s {mods:?}+{key:?}");
             continue;
         };
@@ -3769,7 +3771,9 @@ fn headless_open_list() {
 
     // This window has terminals: it asks where (N: a new window; ↵: here,
     // beside them), about one too.
+    // From the editor: off macOS a focused terminal keeps Ctrl+O for its shell.
     let several = |h: &mut Harness<'static, Root>| {
+        h.state_mut().0.focus = crate::app::Focus::Editor;
         press(h, CMD, Key::O);
         for name in ["infra", "web"] {
             let row = labels(h).iter().position(|l| l == name).unwrap();
@@ -3796,6 +3800,7 @@ fn headless_open_list() {
     assert!(app(&h).terminal_grid);
     h.state_mut().0.close_terminals(&new.iter().map(|n| n.0).collect::<Vec<_>>());
     assert_eq!(app(&h).terminals.len(), 3);
+    h.state_mut().0.focus = crate::app::Focus::Editor;
     press(&mut h, CMD, Key::O);
     let row = labels(&h).iter().position(|l| l == "infra").unwrap();
     h.state_mut().0.palette.as_mut().unwrap().selected = row;
@@ -3805,6 +3810,7 @@ fn headless_open_list() {
     press(&mut h, Modifiers::NONE, Key::N);
     assert_eq!(App::take_launched(), [vec!["new window".to_string(), "--terminal".into(), s(&infra)]], "one: a new window");
     assert_eq!(app(&h).terminals.len(), 3);
+    h.state_mut().0.focus = crate::app::Focus::Editor;
     press(&mut h, CMD, Key::O);
     let row = labels(&h).iter().position(|l| l == "infra").unwrap();
     h.state_mut().0.palette.as_mut().unwrap().selected = row;
@@ -3815,6 +3821,7 @@ fn headless_open_list() {
     assert_eq!(app(&h).terminal().unwrap().pane.dir, infra);
 
     // Browse…: ⇥ into a folder, ⌘↵ a terminal there.
+    h.state_mut().0.focus = crate::app::Focus::Editor;
     press(&mut h, CMD, Key::O);
     let p = h.state_mut().0.palette.as_mut().unwrap();
     p.query = crate::app::folder_text(&base);
