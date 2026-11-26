@@ -859,7 +859,8 @@ impl Paint {
         let g = ui.fonts_mut(|f| f.layout_no_wrap(text, self.font(9.0, Weight::SemiBold), self.c.accent_text));
         let h = 13.0 * s;
         let w = (g.size().x + 6.0 * s).max(h);
-        let r = Rect::from_min_size(pos2(button.right() - w + 3.0 * s, button.top() - 1.0 * s), vec2(w, h));
+        // Inside its button's corner, clear of the next one.
+        let r = Rect::from_min_size(pos2(button.right() - w + 1.0 * s, button.top() - 1.0 * s), vec2(w, h));
         ui.painter().rect_filled(r, h / 2.0, self.c.accent);
         ui.painter().galley(r.center() - g.size() / 2.0, g, self.c.accent_text);
     }
@@ -1138,9 +1139,14 @@ impl App {
                 .show(ui, |ui| {
                     // Always there, even empty: the tree's widgets keep their
                     // ids as the rows come and go (a menu open on one stays).
+                    // As tall as its rows: none, no room taken (a panel's
+                    // least is otherwise 20pt).
+                    let keys_h = tree_rows.len() as f32 * 26.0 * s;
                     hint = hint.or(egui::Panel::bottom("tree-keys")
                         .frame(bare)
                         .show_separator_line(false)
+                        .resizable(false)
+                        .exact_size(keys_h)
                         .show(ui, |ui| self.tree_key_rows(ui, tree_rows))
                         .inner);
                     self.sidebar_ui(ui)
@@ -2622,7 +2628,7 @@ impl App {
                 raw("space", "preview"),
                 cmd(Command::CollapseFolders, "collapse all"),
                 cmd(Command::ToggleSidebar, "hide"),
-                cmd(Command::GoToFile, "find by name"),
+                // (Find by name's key is in the search box above.)
                 raw("↑↓←→", "move around"),
             ]
         };
@@ -2642,7 +2648,7 @@ impl App {
         let commit = [cmd(Command::GitCommit, "commit"), cmd(Command::GitCommitAll, "commit all")];
         let fold = cmd(Command::CollapseFolders, if self.all_folded() { "expand all" } else { "collapse all" });
         if self.changes.typing {
-            return commit.into_iter().chain([raw("↓", "the changes"), raw("esc", "the changes")]).collect();
+            return commit.into_iter().chain([raw("↓", "to the changes"), raw("esc", "leave the message")]).collect();
         }
         let row = self.chosen_row();
         let staged = matches!(row, Some(Row::File(_, true, _) | Row::Section(_, true)));
@@ -3132,7 +3138,24 @@ impl App {
             // icon), cut.
             let lone = if rest.first().is_some_and(|h| h.0.is_empty()) { 2 } else { 1 };
             let n = if n == 0 { lone } else { n }.min(rest.len());
-            let next = rest.split_off(n);
+            let mut next = rest.split_off(n);
+            // Room left: later keys of the same group that fit go here too,
+            // rather than leave rows mostly empty.
+            let mut j = 0;
+            while let Some(h) = next.get(j) {
+                if h.0.is_empty() {
+                    break;
+                }
+                let mut tried = rest.clone();
+                tried.push(h.clone());
+                let (_, fit) = self.hints_strip_fit(ui, rect, 10.0 * s, tree_w - 8.0 * s, tried.clone(), "", true);
+                if fit == tried.len() {
+                    rest = tried;
+                    next.remove(j);
+                } else {
+                    j += 1;
+                }
+            }
             let mark = rest.iter().rev().find(|h| h.0.is_empty()).cloned();
             rows.push(rest);
             rest = next;

@@ -1210,7 +1210,8 @@ impl App {
             ui.add_space(5.0 * s);
             for (n, line) in shown.iter().enumerate() {
                 let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0 * s), Sense::hover());
-                let bar = bar.shrink2(vec2(10.0 * s, 2.0 * s));
+                // 6pt between buttons, sideways and between rows.
+                let bar = bar.shrink2(vec2(10.0 * s, 3.0 * s));
                 let gap = 6.0 * s;
                 let w = (bar.width() - gap * (line.len() - 1) as f32) / line.len() as f32;
                 for (i, (cmd, label, tip)) in line.iter().enumerate() {
