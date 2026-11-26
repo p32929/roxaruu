@@ -30,6 +30,7 @@ pub mod icon {
     pub const FOLDER_OPEN: &str = "\u{eaf7}";
     pub const SIDEBAR: &str = "\u{ebf3}";
     pub const COLLAPSE_ALL: &str = "\u{eac5}";
+    pub const EXPAND_ALL: &str = "\u{eb95}";
     pub const FILE: &str = "\u{ea7b}";
     pub const HISTORY: &str = "\u{ea82}";
     pub const GEAR: &str = "\u{eb51}";
@@ -66,6 +67,7 @@ pub mod icon {
     pub const EDIT: &str = "\u{ea73}";
     pub const WARNING: &str = "\u{ea6c}";
     pub const ADD: &str = "\u{ea60}";
+    pub const REMOVE: &str = "\u{eb3b}";
     pub const GRID: &str = "\u{ebeb}";
     pub const MAXIMIZE: &str = "\u{eb4c}";
     pub const RESTORE: &str = "\u{eb4d}";
@@ -2535,6 +2537,7 @@ impl App {
             return vec![cmd(Command::SourceControl, "go to"), cmd(Command::ToggleSidebar, "hide")];
         }
         let commit = [cmd(Command::GitCommit, "commit"), cmd(Command::GitCommitAll, "commit all")];
+        let fold = cmd(Command::CollapseFolders, if self.all_folded() { "expand all" } else { "collapse all" });
         if self.changes.typing {
             return commit.into_iter().chain([raw("↓", "the changes"), raw("esc", "the changes")]).collect();
         }
@@ -2557,6 +2560,7 @@ impl App {
             cmd(Command::GitStageAll, "stage all"),
             cmd(Command::GitDiscard, "discard"),
             cmd(Command::GitOpenFile, "open file"),
+            fold,
             raw("type", "message"),
             cmd(Command::FocusSidebar, "files"),
             raw("esc", "back to editor"),

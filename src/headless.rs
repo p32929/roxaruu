@@ -2710,6 +2710,30 @@ fn headless_source_control() {
     });
     assert!(file(&h, 0, "new.rs").is_some_and(|f| f.untracked()));
     assert!(app(&h).changes.message.is_empty(), "space staged, it didn't type");
+    // The row's own buttons do it too (the keyboard's row shows them, as
+    // the mouse's does): Unstage, then Stage again.
+    while app(&h).chosen_row() != Some(Row::File(0, true, 0)) {
+        press(&mut h, Modifiers::NONE, Key::ArrowUp);
+    }
+    h.get_by_label("Unstage").click();
+    wait_for(&mut h, "kept.rs unstaged", |a| {
+        a.project.as_ref().and_then(|p| p.repos.first()).is_some_and(|r| r.files.iter().any(|f| f.rel == "kept.rs" && f.staged.is_none()))
+    });
+    shot(&mut h, "g0-row-buttons");
+    while app(&h).chosen_row() != Some(Row::File(0, false, 0)) {
+        press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    }
+    assert!(h.query_by_label("Discard Changes").is_some() && h.query_by_label("Open File").is_some());
+    h.get_by_label("Stage").click();
+    wait_for(&mut h, "kept.rs staged again", |a| {
+        a.project.as_ref().and_then(|p| p.repos.first()).is_some_and(|r| r.files.iter().any(|f| f.rel == "kept.rs" && f.staged == Some('M')))
+    });
+    // Collapse All folds every repository; again opens them.
+    press(&mut h, ALT | SHIFT, Key::C);
+    assert_eq!(app(&h).change_rows(), [Row::Repo(0), Row::Repo(1)]);
+    assert!(app(&h).all_folded());
+    press(&mut h, ALT | SHIFT, Key::C);
+    assert!(!app(&h).all_folded() && app(&h).change_rows().len() > 2);
 
     // ↵: its changes, read-only, the keyboard still in the list.
     let at = app(&h).change_rows().iter().position(|r| *r == Row::File(0, true, 0)).unwrap();

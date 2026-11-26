@@ -80,6 +80,9 @@ impl App {
     /// Fold every folder in the tree, keeping the selection on a row that's
     /// still there.
     pub fn collapse_folders(&mut self) {
+        if self.changes.on {
+            return self.fold_all_repos();
+        }
         let Some(p) = &mut self.project else { return };
         p.tree.collapse_all();
         self.sidebar.revealed = self.active_tab().and_then(|t| t.path().cloned());
@@ -395,7 +398,14 @@ impl App {
                 let run = |c: Command, title: &str| (icon::for_command(c), format!("{title}{}", caps(c)), Act::Run(c));
                 let buttons: Vec<_> = if self.changes.on {
                     let git = if many { [(Command::GitPullAll, "Pull All Repositories")] } else { [(Command::GitPull, "Pull")] };
-                    [(icon::SIDEBAR, format!("Hide Sidebar{}", caps(Command::ToggleSidebar)), Act::Hide), run(Command::FocusSidebar, "Show Files")]
+                    // Collapse all, as the tree has; expand all once all are.
+                    let shut = self.all_folded();
+                    let fold = (
+                        if shut { icon::EXPAND_ALL } else { icon::COLLAPSE_ALL },
+                        format!("{}{}", if shut { "Expand All" } else { "Collapse All" }, caps(Command::CollapseFolders)),
+                        Act::Run(Command::CollapseFolders),
+                    );
+                    [(icon::SIDEBAR, format!("Hide Sidebar{}", caps(Command::ToggleSidebar)), Act::Hide), run(Command::FocusSidebar, "Show Files"), fold]
                         .into_iter()
                         .chain(git.into_iter().filter(|(c, _)| self.available(*c)).map(|(c, t)| run(c, t)))
                         .collect()

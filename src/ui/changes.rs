@@ -70,6 +70,8 @@ enum Act {
     Stage(usize),
     Fold(usize, bool),
     Run(Command),
+    /// A row's own button: the row, then the command on it.
+    RowRun(usize, Command),
 }
 
 impl App {
@@ -143,6 +145,28 @@ impl App {
     pub(crate) fn chosen_row(&self) -> Option<Row> {
         let rows = self.change_rows();
         self.chosen(&rows).and_then(|i| rows.get(i).copied())
+    }
+
+    /// Whether every repository is folded (with one, it counts too).
+    pub(crate) fn all_folded(&self) -> bool {
+        let repos = self.repos();
+        !repos.is_empty() && repos.iter().all(|r| self.changes.folded.contains(&r.top))
+    }
+
+    /// Collapse All for Source Control: fold every repository (and close
+    /// the histories); when all already are, open them all again.
+    pub(crate) fn fold_all_repos(&mut self) {
+        if self.all_folded() {
+            self.changes.folded.clear();
+        } else {
+            let tops: Vec<PathBuf> = self.repos().iter().map(|r| r.top.clone()).collect();
+            self.changes.folded.extend(tops);
+            self.changes.history.clear();
+        }
+        let rows = self.change_rows();
+        if let Some(up) = self.chosen_row().and_then(row_repo).and_then(|r| rows.iter().position(|x| *x == Row::Repo(r))) {
+            self.choose(&rows, up);
+        }
     }
 
     fn choose(&mut self, rows: &[Row], i: usize) {
@@ -694,6 +718,10 @@ impl App {
                 }
             }
             Some(Act::Run(c)) => self.run(c, ctx),
+            Some(Act::RowRun(i, c)) => {
+                self.choose(&rows, i);
+                self.run(c, ctx);
+            }
             None => {}
         }
     }
@@ -913,6 +941,25 @@ impl App {
                     )
                     .width()
                 };
+                // The row under the mouse (or the keyboard's) shows what can
+                // be done to it as buttons, as VS Code has them, beside its
+                // letter or count; their keys are in their tips.
+                let staged_row = matches!(row, Row::File(_, true, _) | Row::Section(_, true));
+                let with_files = row_repo(row).and_then(|n| repos.get(n)).is_some_and(|r| !r.files.is_empty());
+                let stage = if staged_row { (icon::REMOVE, "Unstage") } else { (icon::ADD, "Stage") };
+                let acts: Vec<(Command, &str, &str)> = match row {
+                    Row::File(..) if staged_row => vec![(Command::GitOpenFile, icon::GO_TO_FILE, "Open File"), (Command::GitStage, stage.0, stage.1)],
+                    Row::File(..) => vec![(Command::GitOpenFile, icon::GO_TO_FILE, "Open File"), (Command::GitDiscard, icon::UNDO, "Discard Changes"), (Command::GitStage, stage.0, stage.1)],
+                    Row::Section(_, true) => vec![(Command::GitStage, stage.0, "Unstage All")],
+                    Row::Section(..) => vec![(Command::GitDiscard, icon::UNDO, "Discard All Changes"), (Command::GitStage, stage.0, "Stage All")],
+                    Row::Repo(_) if with_files => vec![(Command::GitDiscard, icon::UNDO, "Discard All Changes"), (Command::GitStage, icon::ADD, "Stage All")],
+                    _ => Vec::new(),
+                };
+                let lit = ui.rect_contains_pointer(r) || (is_sel && walking);
+                // The name leaves them room.
+                let reserve = if lit && !acts.is_empty() { acts.len() as f32 * 22.0 * s + 6.0 * s } else { 0.0 };
+                // How wide the row's right-hand text is (letter, count).
+                let mut tail = 0.0;
                 match row {
                     Row::Repo(n) => {
                         let Some(repo) = repos.get(n) else { continue };
@@ -957,8 +1004,9 @@ impl App {
                                 c.text_muted
                             },
                         );
+                        tail = w;
                         let lx = x0 + 36.0 * s;
-                        let room = r.right() - 14.0 * s - w - 10.0 * s - lx;
+                        let room = r.right() - 14.0 * s - w - 10.0 * s - lx - reserve;
                         let nw = text(
                             p,
                             lx,
@@ -1000,7 +1048,7 @@ impl App {
                             c.text_subtle,
                             r.width(),
                         );
-                        right(p, &count.to_string(), c.text_subtle);
+                        tail = right(p, &count.to_string(), c.text_subtle);
                     }
                     Row::File(n, staged, f) => {
                         let Some(file) = repos.get(n).and_then(|repo| repo.files.get(f)) else {
@@ -1029,8 +1077,9 @@ impl App {
                         );
                         let shown = if letter == '?' { 'U' } else { letter };
                         let w = right(p, &shown.to_string(), tint);
+                        tail = w;
                         let lx = x0 + 42.0 * s;
-                        let room = r.right() - 14.0 * s - w - 10.0 * s - lx;
+                        let room = r.right() - 14.0 * s - w - 10.0 * s - lx - reserve;
                         let struck = if letter == 'D' { c.text_muted } else { c.text };
                         let nw = text(p, lx, name, pt.font(13.0, Weight::Regular), struck, room);
                         text(
@@ -1094,6 +1143,26 @@ impl App {
                             "{} · {} · {}",
                             commit.hash, commit.author, commit.when
                         ));
+                    }
+                }
+                if lit && !acts.is_empty() {
+                    let size = 22.0 * s;
+                    let end = r.right() - 14.0 * s - tail - 6.0 * s;
+                    let start = end - acts.len() as f32 * size;
+                    for (k, (cmd, glyph, title)) in acts.iter().enumerate() {
+                        let at = Rect::from_center_size(pos2(start + (k as f32 + 0.5) * size, y), vec2(size, size));
+                        let b = ui.interact(at, egui::Id::unique(("change-act", i, k)), Sense::click());
+                        b.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *title));
+                        if b.hovered() {
+                            p.rect_filled(at, 5.0 * s, c.surface);
+                        }
+                        p.text(at.center(), Align2::CENTER_CENTER, *glyph, pt.font(14.0, Weight::Regular), if b.hovered() { c.text } else { c.text_muted });
+                        let key = self.shortcut(*cmd).or_else(|| (*cmd == Command::GitStage).then(|| "Space".to_string()));
+                        if b.on_hover_text(format!("{title}{}", key.map(|k| format!("  {k}")).unwrap_or_default())).clicked() {
+                            self.focus = Focus::Sidebar;
+                            self.changes.typing = false;
+                            act = Some(Act::RowRun(i, *cmd));
+                        }
                     }
                 }
                 if resp.hovered() {
