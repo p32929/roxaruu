@@ -1696,6 +1696,11 @@ fn headless_every_shortcut() {
             // As this system sees the key (`press` gives tests ⌘ everywhere).
             let (key, mods) = app(&h).config.keymap.combos(command).next().unwrap().chord();
             assert!(crate::terminal::belongs_to_shell(key, mods), "from a terminal, {title}'s {mods:?}+{key:?}");
+            // Checked: off macOS Clear Terminal's ⌃K is the shell's by design
+            // (run from the palette there).
+            if !done.contains(&command) {
+                done.push(command);
+            }
             continue;
         };
         crate::app::dry_run(true);
