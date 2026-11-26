@@ -2686,6 +2686,10 @@ fn headless_source_control() {
         repos(h).get(repo).and_then(|r| r.files.iter().find(|f| f.rel == rel).cloned())
     };
 
+    // The Source Control button says how many files changed.
+    wait_for(&mut h, "both repositories", |a| a.project.as_ref().is_some_and(|p| p.repos.len() == 2 && p.repos.iter().all(|r| !r.files.is_empty())));
+    h.step();
+    shot(&mut h, "g-badge");
     press(&mut h, CMD_SHIFT, Key::G);
     assert!(app(&h).changes_focused());
     wait_for(&mut h, "both repositories", |a| a.project.as_ref().is_some_and(|p| p.repos.len() == 2 && p.repos.iter().all(|r| !r.files.is_empty())));
@@ -3802,6 +3806,75 @@ fn headless_settings_mistake_is_told() {
     match before {
         Some(b) => std::fs::write(&file, b).unwrap(),
         None => std::fs::remove_file(&file).unwrap(),
+    }
+}
+
+/// The start page lists the folders opened last, with their branch: ↓ to
+/// one and ↵ opens it. The palette puts the commands picked last first, for
+/// every window and the next run. Settings: ⌘⌫ puts one back to its
+/// default, and a changed one says what that was. ⌘+ is bigger text, and
+/// the status bar shows by how much.
+#[test]
+#[ignore]
+fn headless_start_page_recent_and_resets() {
+    use crate::palette::Mode;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().canonicalize().unwrap().join("proj");
+    crate::git::tests::repo_at(&repo);
+    crate::recent::record(std::slice::from_ref(&repo));
+    let file = crate::config::dir().join("settings.json");
+    let before = std::fs::read_to_string(&file).ok();
+    let mut h = harness(None);
+    h.run();
+    let recent = app(&h).welcome_recent.clone().unwrap();
+    assert_eq!(recent.first().map(|(d, _, b)| (d.clone(), b.clone())), Some((repo.clone(), Some("main".to_string()))));
+    shot(&mut h, "w0-recent");
+
+    // A command picked in the palette comes first next time, everywhere.
+    press(&mut h, CMD_SHIFT, Key::P);
+    type_text(&mut h, "Settings");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(app(&h).palette.as_ref().map(|p| p.mode), Some(Mode::Settings));
+    assert_eq!(crate::recent::commands().first().map(String::as_str), Some("app.settings"));
+
+    // Settings: by its key in the file too; a change says the default; ⌘⌫
+    // puts it back.
+    type_text(&mut h, "tabSize");
+    let first = |h: &Harness<'static, Root>| {
+        let it = app(h).palette.as_ref().unwrap().items.first().unwrap();
+        (it.label.clone(), it.detail.clone())
+    };
+    assert_eq!(first(&h).0, "Tab size");
+    press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    assert_eq!(app(&h).config.settings.tab_size, 8);
+    assert!(first(&h).1.contains("default 4"), "{}", first(&h).1);
+    shot(&mut h, "w1-setting-changed");
+    press(&mut h, Modifiers::COMMAND, Key::Backspace);
+    assert_eq!(app(&h).config.settings.tab_size, 4);
+    assert!(!first(&h).1.contains("default"), "{}", first(&h).1);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    press(&mut h, CMD_SHIFT, Key::P);
+    assert_eq!(first(&h), ("Settings".to_string(), "recently used".to_string()));
+    press(&mut h, Modifiers::NONE, Key::Escape);
+
+    // ⌘+ (⇧= on most keyboards): bigger text, shown in the status bar.
+    let size = app(&h).config.settings.ui_font_size;
+    press(&mut h, CMD, Key::Plus);
+    assert_eq!(app(&h).config.settings.ui_font_size, size + 1.0);
+    shot(&mut h, "w2-zoomed");
+    press(&mut h, CMD, Key::Num0);
+    assert_eq!(app(&h).config.settings.ui_font_size, size);
+
+    // ↓ past the actions to the recent folder; ↵ opens it.
+    let actions = if app(&h).rox_installed { 4 } else { 5 };
+    for _ in 0..actions {
+        press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    }
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(repo));
+    match before {
+        Some(b) => std::fs::write(&file, b).unwrap(),
+        None => std::fs::remove_file(&file).unwrap_or(()),
     }
 }
 

@@ -434,8 +434,14 @@ impl App {
                 ] };
                 // Their keys are in the tree's row of the status bar, and
                 // in their tips.
+                // Source Control's carries how many files have changed.
+                let changed: usize = project.repos.iter().map(|r| r.files.len()).sum();
                 for (glyph, tip, a) in buttons {
-                    if pt.icon_button(ui, glyph, &tip, false) {
+                    let b = pt.icon_button_at(ui, glyph, &tip, false);
+                    if matches!(a, Act::Run(Command::SourceControl)) {
+                        pt.badge(ui, b.rect, changed);
+                    }
+                    if b.clicked() {
                         act = Some(a);
                     }
                 }

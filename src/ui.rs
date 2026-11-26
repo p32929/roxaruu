@@ -756,6 +756,11 @@ impl Paint {
     /// A small square icon button with a hover tint and tooltip.
     /// An icon button with its key in small type under the icon.
     fn icon_button(&self, ui: &mut egui::Ui, glyph: &str, tip: &str, on: bool) -> bool {
+        self.icon_button_at(ui, glyph, tip, on).clicked()
+    }
+
+    /// An icon button, as `icon_button`, giving its response (where it is).
+    fn icon_button_at(&self, ui: &mut egui::Ui, glyph: &str, tip: &str, on: bool) -> egui::Response {
         let size = 24.0 * self.s;
         let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
         if resp.hovered() || on {
@@ -775,7 +780,23 @@ impl Paint {
             self.font(14.0, Weight::Regular),
             color,
         );
-        resp.on_hover_text(tip).clicked()
+        resp.on_hover_text(tip)
+    }
+
+    /// A count on an icon button's corner (changed files on Source
+    /// Control's), in the accent; past 99, "99+".
+    fn badge(&self, ui: &egui::Ui, button: Rect, n: usize) {
+        if n == 0 {
+            return;
+        }
+        let s = self.s;
+        let text = if n > 99 { "99+".to_string() } else { n.to_string() };
+        let g = ui.fonts_mut(|f| f.layout_no_wrap(text, self.font(9.0, Weight::SemiBold), self.c.accent_text));
+        let h = 13.0 * s;
+        let w = (g.size().x + 6.0 * s).max(h);
+        let r = Rect::from_min_size(pos2(button.right() - w + 3.0 * s, button.top() - 1.0 * s), vec2(w, h));
+        ui.painter().rect_filled(r, h / 2.0, self.c.accent);
+        ui.painter().galley(r.center() - g.size() / 2.0, g, self.c.accent_text);
     }
 
     /// Keycaps drawn right-to-left, ending at `right_center`. Returns their width.
@@ -2767,11 +2788,17 @@ impl App {
             crate::app::Update::ByHand(v) => Some(format!("Roxaruu {v} is out")),
             _ => None,
         };
+        // Text bigger or smaller than the default (⌘= ⌘−): by how much;
+        // a click puts it back.
+        let (st, d) = (&self.config.settings, crate::config::Settings::default());
+        let zoomed = (st.ui_font_size != d.ui_font_size || st.code_font_size != d.code_font_size)
+            .then(|| format!("{}  {:.0}%", icon::FONT, st.ui_font_size / d.ui_font_size * 100.0));
         let stats = [
             full.then(|| match news {
                 Some(_) => format!("v{}  {}", crate::VERSION, icon::DOWNLOAD),
                 None => format!("v{}", crate::VERSION),
             }),
+            zoomed,
             remote.filter(|r| !r.is_empty()),
             self.mem_kb
                 .filter(|_| full)
@@ -2783,8 +2810,8 @@ impl App {
             lang,
         ];
         // Right to left, as many as fit. The version (the first) is About
-        // Roxaruu on click, and the position Go to Line: only they look like
-        // buttons.
+        // Roxaruu on click, the text size Reset Text Size, and the position
+        // Go to Line: only they look like buttons.
         let mut x = rect.right() - 12.0 * s;
         for (i, text) in stats.into_iter().enumerate() {
             let Some(text) = text else { continue };
@@ -2794,26 +2821,31 @@ impl App {
                 break;
             }
             x -= g.size().x;
-            if i == 0 {
+            let button = match i {
+                0 => Some((Command::About, "About Roxaruu")),
+                1 => Some((Command::ResetZoom, "Reset Text Size")),
+                _ => None,
+            };
+            if let Some((command, title)) = button {
                 let r = Rect::from_min_size(
                     pos2(x - 6.0 * s, rect.top() + 3.0 * s),
                     vec2(g.size().x + 12.0 * s, rect.height() - 6.0 * s),
                 );
-                let about = ui.interact(r, egui::Id::unique("status-version"), Sense::click());
+                let b = ui.interact(r, egui::Id::unique(("status-button", i)), Sense::click());
                 #[cfg(test)]
-                drawn(ui, [], Some((r, Command::About)));
+                drawn(ui, [], Some((r, command)));
                 let mut keys = String::new();
-                if about.hovered() {
-                    keys = self.shortcut(Command::About).map(|k| format!("  {k}")).unwrap_or_default();
+                if b.hovered() {
+                    keys = self.shortcut(command).map(|k| format!("  {k}")).unwrap_or_default();
                     p.rect_filled(r, 4.0 * s, c.hover);
                     ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                 }
                 let tip = match &news {
-                    Some(n) => format!("{n} — About Roxaruu{keys}"),
-                    None => format!("About Roxaruu{keys}"),
+                    Some(n) if i == 0 => format!("{n} — {title}{keys}"),
+                    _ => format!("{title}{keys}"),
                 };
-                if about.on_hover_text(tip).clicked() {
-                    picked = Some(Command::About);
+                if b.on_hover_text(tip).clicked() {
+                    picked = Some(command);
                 }
             }
             p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, c.text_subtle);
@@ -3080,7 +3112,32 @@ impl App {
             .collect::<Vec<_>>();
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
-        let n = actions.len();
+        let area = ui.max_rect();
+        let mark = 56.0 * s;
+        let row_h = 40.0 * s;
+        let pad = 6.0 * s;
+        let card_h = row_h * actions.len() as f32 + pad * 2.0;
+        // The folders opened last, under the actions: as many as the window
+        // has room for, up to five.
+        let recent = self
+            .welcome_recent
+            .get_or_insert_with(|| {
+                crate::recent::list()
+                    .into_iter()
+                    .take(5)
+                    .map(|(d, at)| {
+                        let branch = crate::git::branch_of(&d);
+                        (d, at, branch)
+                    })
+                    .collect()
+            })
+            .clone();
+        let fixed = mark + 14.0 * s + 18.0 * s + 36.0 * s + card_h + 20.0 * s + 16.0 * s + 32.0;
+        let recent_head = 20.0 * s + 22.0 * s + pad * 2.0;
+        let fits = ((area.height() - fixed - recent_head) / row_h).floor().max(0.0) as usize;
+        let recent = recent.get(..fits.min(recent.len())).unwrap_or_default();
+        let recent_h = if recent.is_empty() { 0.0 } else { recent_head + row_h * recent.len() as f32 };
+        let n = actions.len() + recent.len();
         // Keys are the welcome card's only while nothing else has them (the
         // palette, a prompt, or a focused terminal below it).
         let keyboard = self.palette.is_none() && !self.modal_open() && self.focus == Focus::Editor;
@@ -3102,13 +3159,12 @@ impl App {
         }
         self.welcome_selected %= n;
         let mut chosen = enter.then(|| actions.get(self.welcome_selected).copied()).flatten();
+        let mut open = enter
+            .then(|| recent.get(self.welcome_selected.wrapping_sub(actions.len())))
+            .flatten()
+            .map(|(d, ..)| d.clone());
 
-        let area = ui.max_rect();
-        let mark = 56.0 * s;
-        let row_h = 40.0 * s;
-        let pad = 6.0 * s;
         let card_w = (440.0 * s).min(area.width() - 32.0);
-        let card_h = row_h * n as f32 + pad * 2.0;
 
         let (title, subtitle, tile_icon): (String, String, _) = (
             "Roxaruu".into(),
@@ -3134,8 +3190,14 @@ impl App {
         job.halign = egui::Align::Center;
         let footer = ui.fonts_mut(|f| f.layout_job(job));
 
-        let total =
-            mark + 14.0 * s + tagline.size().y + 36.0 * s + card_h + 20.0 * s + footer.size().y;
+        let total = mark
+            + 14.0 * s
+            + tagline.size().y
+            + 36.0 * s
+            + card_h
+            + recent_h
+            + 20.0 * s
+            + footer.size().y;
         let cx = area.center().x;
         let mut y = (area.center().y - total / 2.0).max(area.top() + 16.0);
         let p = ui.painter().clone();
@@ -3228,7 +3290,64 @@ impl App {
                 0.0,
             );
         }
-        y += card_h + 20.0 * s;
+        y += card_h;
+
+        if !recent.is_empty() {
+            y += 20.0 * s;
+            p.text(
+                pos2(cx - card_w / 2.0 + 4.0 * s, y + 11.0 * s),
+                Align2::LEFT_CENTER,
+                "RECENT",
+                pt.font(11.0, Weight::SemiBold),
+                c.text_subtle,
+            );
+            y += 22.0 * s;
+            let card = Rect::from_min_size(
+                pos2(cx - card_w / 2.0, y),
+                vec2(card_w, row_h * recent.len() as f32 + pad * 2.0),
+            );
+            p.rect(card, 12.0 * s, c.elevated, Stroke::new(1.0, c.border), StrokeKind::Inside);
+            let now = crate::update::now();
+            for (k, (dir, at, branch)) in recent.iter().enumerate() {
+                let i = actions.len() + k;
+                let row = Rect::from_min_size(
+                    pos2(card.left() + pad, card.top() + pad + row_h * k as f32),
+                    vec2(card_w - pad * 2.0, row_h),
+                );
+                let resp = ui.interact(row, ui.scope_id().with(("welcome", i)), Sense::click());
+                if resp.hovered() && keyboard {
+                    self.welcome_selected = i;
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+                if resp.clicked() {
+                    open = Some(dir.clone());
+                }
+                let t = ui.ctx().animate_bool_with_time(resp.id, self.welcome_selected == i, 0.12);
+                // Its branch, when you were last in it, then where it is
+                // (the part a narrow card cuts).
+                let mut detail: Vec<String> = branch.iter().cloned().collect();
+                if *at > 0 {
+                    detail.push(crate::recent::ago(now.saturating_sub(*at)));
+                }
+                detail.push(crate::ui::tilde(&dir.parent().unwrap_or(dir).to_string_lossy()));
+                let name = crate::app::display_name(dir);
+                resp.on_hover_text(crate::ui::tilde(&dir.to_string_lossy()));
+                pt.row(
+                    ui,
+                    &p,
+                    row,
+                    t,
+                    (icon::FOLDER, None),
+                    pt.label(&name, &[], c.text),
+                    &detail.join("  ·  "),
+                    &[],
+                    &[],
+                    0.0,
+                );
+            }
+            y += card.height();
+        }
+        y += 20.0 * s;
 
         let footer_at = pos2(cx, y);
         let footer_rect = footer.rect.translate(footer_at.to_vec2());
@@ -3251,6 +3370,10 @@ impl App {
         } else {
             (Command::OpenConfigFolder, "Open Config Folder")
         };
+        if let Some(dir) = open.take() {
+            let ctx = ui.ctx().clone();
+            self.open_folders(vec![dir], &ctx);
+        }
         if resp.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
@@ -5216,6 +5339,9 @@ impl App {
                         i.consume_key(Modifiers::NONE, Key::ArrowRight),
                     )
                 });
+                if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Backspace)) {
+                    self.reset_setting(ctx);
+                }
                 if let (true, Some(Pick::Setting(set))) = (
                     left || right,
                     self.palette
@@ -5620,6 +5746,7 @@ impl App {
                 vec![
                     ("← →", "Change the value"),
                     ("↵", "Next value, or open the picker"),
+                    ("⌘⌫", "Back to the default"),
                 ],
                 vec![],
             ),
@@ -6136,6 +6263,7 @@ impl App {
             Mode::Settings => vec![
                 (k("← →"), "change value"),
                 (k("↵"), "next value · open its list"),
+                (k("⌘⌫"), "reset to default"),
                 esc,
             ],
             Mode::Keybindings if self.capturing() => {

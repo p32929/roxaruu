@@ -212,6 +212,9 @@ pub struct App {
     /// The F1 shortcuts sheet is up.
     pub help: bool,
     pub welcome_selected: usize,
+    /// The empty window's recent folders (with their branches), read when
+    /// first shown and again on coming back to the window.
+    pub welcome_recent: Option<Vec<(PathBuf, u64, Option<String>)>>,
     /// The app icon as a texture, per egui context (this window's, and the
     /// browser's copy of it), loaded the first time it's drawn.
     pub(crate) app_icon: Vec<(egui::Context, egui::TextureHandle)>,
@@ -333,6 +336,7 @@ impl App {
             todos: Vec::new(),
             help: false,
             welcome_selected: 0,
+            welcome_recent: None,
             app_icon: Vec::new(),
             remote: Default::default(),
             remote_want: None,
@@ -1300,6 +1304,9 @@ impl App {
         const GIT_EVERY: Duration = Duration::from_secs(10);
         let focused = !self.remote_pass && ctx.input(|i| i.focused);
         let back = focused && !std::mem::replace(&mut self.was_focused, focused);
+        if back {
+            self.welcome_recent = None;
+        }
         if self.remote_pass {
             self.was_focused = true;
         }
@@ -2399,6 +2406,9 @@ impl App {
 
     pub fn open_palette(&mut self, mode: Mode, ctx: &egui::Context) {
         self.close_palette(false, ctx);
+        if mode == Mode::Commands {
+            self.used = crate::recent::commands().iter().filter_map(|id| COMMANDS.iter().find(|i| i.id == id.as_str())).map(|i| i.command).collect();
+        }
         let mut p = Palette::new(mode);
         p.opened = ctx.cumulative_frame_nr();
         p.revert = match mode {
@@ -2525,9 +2535,11 @@ impl App {
                     tint: None,
                     pick: Pick::Command(c.command),
                 };
-                // With nothing typed, the last few picked come first.
+                // With nothing typed, the last few picked come first; typing,
+                // they win over as good a match.
                 let boost = match recent {
                     Some(r) if query.is_empty() => 1000 - r as i64,
+                    Some(r) => (16 - r as i64) * 96,
                     _ => 0,
                 };
                 Some((score + boost, item))
@@ -2940,9 +2952,12 @@ impl App {
             }
             Pick::Command(c) => {
                 self.close_palette(true, ctx);
+                // Remembered for every window, and the next run.
+                if let Some(info) = COMMANDS.iter().find(|i| i.command == c) {
+                    crate::recent::record_command(info.id);
+                }
                 self.used.retain(|u| *u != c);
                 self.used.insert(0, c);
-                self.used.truncate(5);
                 self.run(c, ctx);
             }
             Pick::Theme(name) => self.save_choice("theme", name, ctx),

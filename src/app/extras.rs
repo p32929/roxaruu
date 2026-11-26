@@ -140,6 +140,39 @@ impl Setting {
             Setting::SearchIgnored => icon::SEARCH,
         }
     }
+
+    /// Its value in `st`, as `settings.json` writes it.
+    fn json(self, st: &config::Settings) -> serde_json::Value {
+        match self {
+            Setting::Theme => st.theme.clone().into(),
+            Setting::UiFont => st.ui_font.clone().into(),
+            Setting::CodeFont => st.code_font.clone().into(),
+            Setting::UiFontSize => st.ui_font_size.into(),
+            Setting::CodeFontSize => st.code_font_size.into(),
+            Setting::TerminalFps => st.terminal_fps.into(),
+            Setting::TerminalShell => st.terminal_shell.clone().into(),
+            Setting::WordWrap => st.word_wrap.into(),
+            Setting::TabSize => st.tab_size.into(),
+            Setting::InsertSpaces => st.insert_spaces.into(),
+            Setting::CurrentLine => st.current_line.into(),
+            Setting::IndentGuides => st.indent_guides.into(),
+            Setting::Sidebar => st.sidebar.into(),
+            Setting::Notifications => st.notifications.into(),
+            Setting::Updates => st.updates.into(),
+            Setting::ConfirmCloseTerminal => st.confirm_close_terminal.into(),
+            Setting::SearchIgnored => st.search_ignored.into(),
+        }
+    }
+
+    /// Whether `st` has it other than the default (a theme or font by any
+    /// letter case is the same one).
+    pub fn changed(self, st: &config::Settings) -> bool {
+        let (now, was) = (self.json(st), self.json(&config::Settings::default()));
+        match (now.as_str(), was.as_str()) {
+            (Some(a), Some(b)) => !a.eq_ignore_ascii_case(b),
+            _ => now != was,
+        }
+    }
 }
 
 impl App {
@@ -431,7 +464,8 @@ impl App {
     pub(super) fn setting_items(&self, query: &str) -> Vec<Item> {
         let mut items: Vec<Item> = Setting::ALL
             .iter()
-            .filter(|s| fuzzy::score(query, s.title()).is_some())
+            // By what it's called, or its key in settings.json.
+            .filter(|s| fuzzy::score(query, s.title()).is_some() || fuzzy::score(query, s.key()).is_some())
             .map(|&s| {
                 let mut it = Item::new(s.icon(), s.title(), Pick::Setting(s));
                 it.matched = fuzzy::positions(query, s.title());
@@ -451,7 +485,11 @@ impl App {
                     .iter()
                     .any(|k| k == s.key())
                     .then(|| "this project".to_string());
-                it.detail = [project, key]
+                // Changed from the default: says what that was (⌘⌫ goes back).
+                let was = s
+                    .changed(&self.config.settings)
+                    .then(|| format!("default {}", self.value_in(s, &config::Settings::default())));
+                it.detail = [was, project, key]
                     .into_iter()
                     .flatten()
                     .collect::<Vec<_>>()
@@ -489,10 +527,22 @@ impl App {
     }
 
     fn setting_value(&self, s: Setting) -> String {
-        let st = &self.config.settings;
-        let on = |b: bool| if b { "On" } else { "Off" }.to_string();
         match s {
             Setting::Theme => self.config.theme.name.clone(),
+            _ => self.value_in(s, &self.config.settings),
+        }
+    }
+
+    /// A setting's value in `st`, as the Settings screen shows it.
+    fn value_in(&self, s: Setting, st: &config::Settings) -> String {
+        let on = |b: bool| if b { "On" } else { "Off" }.to_string();
+        match s {
+            Setting::Theme => self
+                .config
+                .themes
+                .iter()
+                .find(|t| t.name.eq_ignore_ascii_case(&st.theme))
+                .map_or_else(|| st.theme.clone(), |t| t.name.clone()),
             Setting::UiFont => display_font(&st.ui_font),
             Setting::CodeFont => display_font(&st.code_font),
             Setting::UiFontSize => format!("{}", st.ui_font_size),
@@ -510,6 +560,15 @@ impl App {
             Setting::ConfirmCloseTerminal => on(st.confirm_close_terminal),
             Setting::SearchIgnored => on(st.search_ignored),
         }
+    }
+
+    /// ⌘⌫ on a setting: back to its default, saved.
+    pub fn reset_setting(&mut self, ctx: &egui::Context) {
+        let Some(Pick::Setting(s)) = self.palette.as_ref().and_then(|p| p.selected_pick().cloned()) else {
+            return;
+        };
+        self.save_choice_quietly(s.key(), s.json(&config::Settings::default()), ctx);
+        self.refresh_items();
     }
 
     /// ← / → on a setting: the previous / next value, applied and saved.

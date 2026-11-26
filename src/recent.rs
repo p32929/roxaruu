@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 
 const MAX: usize = 50;
+/// Commands remembered as picked in the palette.
+const MAX_COMMANDS: usize = 8;
 
 fn dir() -> Option<PathBuf> {
     crate::config::state_dir()
@@ -53,6 +55,34 @@ fn list_from(dir: &Path) -> Vec<(PathBuf, u64)> {
     };
     list.retain(|(d, _)| d.is_dir());
     list
+}
+
+/// The commands last picked in the palette (their ids), newest first, from
+/// every window and earlier runs.
+pub fn commands() -> Vec<String> {
+    dir().map(|d| commands_from(&d)).unwrap_or_default()
+}
+
+/// `id` was picked in the palette now. Silent on I/O errors.
+pub fn record_command(id: &str) {
+    if let Some(d) = dir() {
+        record_command_to(&d, id);
+    }
+}
+
+fn commands_from(dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join("commands.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn record_command_to(dir: &Path, id: &str) {
+    let mut list = commands_from(dir);
+    list.retain(|c| c != id);
+    list.insert(0, id.to_string());
+    list.truncate(MAX_COMMANDS);
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(json) = serde_json::to_string(&list) {
+        let _ = std::fs::write(dir.join("commands.json"), json);
+    }
 }
 
 // ponytail: windows writing at the same moment can lose one's update; it's
@@ -108,6 +138,19 @@ mod tests {
         assert_eq!(list_from(&state), [(a.clone(), 5), (b.clone(), 0)]);
         record_to(&state, std::slice::from_ref(&b), 9);
         assert_eq!(list_from(&state), [(b, 9), (a, 5)], "kept once written");
+    }
+
+    #[test]
+    fn commands_newest_first_once_each() {
+        let dir = tempfile::tempdir().unwrap();
+        for id in ["a", "b", "a"] {
+            record_command_to(dir.path(), id);
+        }
+        assert_eq!(commands_from(dir.path()), ["a", "b"]);
+        for i in 0..20 {
+            record_command_to(dir.path(), &i.to_string());
+        }
+        assert_eq!(commands_from(dir.path()).len(), MAX_COMMANDS);
     }
 
     #[test]

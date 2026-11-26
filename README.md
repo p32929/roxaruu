@@ -19,7 +19,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 **Keyboard first**
 1. Every action is a named command with a shortcut, and every shortcut can be changed.
 2. The keys that work where you are are shown at the bottom of the screen (the editor's under the tabs, the terminal's and the file tree's in the status bar), and they change as you move around.
-3. **F1** shows every shortcut. **Ctrl+Shift+P** (**⇧⌘P** on a Mac) finds any command by name.
+3. **F1** shows every shortcut. **Ctrl+Shift+P** (**⇧⌘P** on a Mac) finds any command by name; the ones you picked last come first.
 
 **Terminals**
 1. Built in, as tabs, or all of a project's terminals at once in a grid.
@@ -38,7 +38,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 6. Pin a tab (right-click it) to keep it at the left: Close Others and Close All leave it open, and it stays pinned next time. Terminals too.
 
 **Source control (git)**
-1. **Ctrl+Shift+G** (**⇧⌘G**) shows every git repository in the folder (its own, and projects or worktrees inside it), each with its branch, how far ahead or behind it is, and its staged and changed files.
+1. **Ctrl+Shift+G** (**⇧⌘G**, or the file tree's branch button, which shows how many files changed) shows every git repository in the folder (its own, and projects or worktrees inside it), each with its branch, how far ahead or behind it is, and its staged and changed files.
 2. **Space** stages or unstages a file (or all of a repository's), **Enter** shows its changes (added lines green, removed red), **Alt+Shift+O** (**⌥⇧O**) opens the file itself, **Ctrl+Alt+Backspace** (**⌃⌥⌫**) discards them (asks first; new files go to the trash). With the mouse, the row you point at has the same as buttons: open the file, discard, stage (+) or unstage (−); a repository's or a group's stage or discard all of it. **Alt+Shift+C** (**⌥⇧C**, or the header's button) collapses every repository, and again opens them all. **↵** on History lists the recent commits, and on a commit shows what it changed.
 3. One commit message at the top; at the bottom, always in view, **Commit** (the repository you're on) and **Commit All**, and **Push** / **Push All** once there's something to push. Their keys: **Alt+Enter** (**⌥↵**) commits the repository you're on: what's staged, or everything if nothing is. **Alt+Shift+Enter** (**⌥⇧↵**) commits every repository with changes, with the same message.
 4. **Alt+P** / **Alt+L** (**⌥P** / **⌥L**) push and pull; add **Shift** to push or pull every repository at once. A branch that was never pushed is pushed to its remote. It uses git and your git login as they are: nothing to set up, nothing extra installed.
@@ -50,9 +50,10 @@ I looked for something that already solved this, didn't like what I found, so I 
 4. Keys follow your device: a Mac's browser gets ⌘ shortcuts even when the server runs Linux.
 
 **Make it yours**
-1. Settings, shortcuts and colour themes are plain JSON files in `~/.config/roxaruu/`. Edits apply as soon as you save.
+1. Settings, shortcuts and colour themes are plain JSON files in `~/.config/roxaruu/`. Edits apply as soon as you save. **Ctrl+,** (**⌘,**) lists the settings to search and change; one you've changed says what its default was, and **Ctrl+Backspace** (**⌘⌫**) puts it back.
+1. **Ctrl+=** / **Ctrl+-** (**⌘+** / **⌘−**) make all text bigger or smaller, kept for next time; the status bar shows by how much, and a click on it (or **Ctrl+0** / **⌘0**) goes back.
 2. Four themes built in (Oxide, Oxide Light, Midnight, Moss), or make your own. Pick a UI font and a code font, or use any font file.
-3. Also included: a clipboard history, a to-do list, and recent folders.
+3. Also included: a clipboard history, a to-do list, and recent folders (an empty window lists the last ones, with their branch).
 
 **Updates by itself**
 1. Now and then Roxaruu checks GitHub for a new release, downloads it in the background, checks it against the release's SHA-256 sums, and installs it when you close the last window. Or restart right away from the version in the status bar (or **Check for Updates** from the command palette).

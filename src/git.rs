@@ -437,9 +437,39 @@ pub fn new_lines(diff: &str) -> Vec<Option<usize>> {
         .collect()
 }
 
+/// The branch `dir`'s repository is on, read from its HEAD (no git run,
+/// so it's cheap enough for a list of folders): None outside a repository's
+/// top or with no branch checked out. A worktree's `.git` is a file naming
+/// its real one.
+pub fn branch_of(dir: &Path) -> Option<String> {
+    let dot = dir.join(".git");
+    let git_dir = if dot.is_file() {
+        let text = std::fs::read_to_string(&dot).ok()?;
+        dir.join(text.trim().strip_prefix("gitdir:")?.trim())
+    } else {
+        dot
+    };
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    head.trim().strip_prefix("ref: refs/heads/").map(str::to_string)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn branch_read_from_head() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(branch_of(dir.path()), None, "not a repository");
+        let repo = dir.path().join("r");
+        repo_at(&repo);
+        assert_eq!(branch_of(&repo).as_deref(), Some("main"));
+        let tree = dir.path().join("w");
+        sh(&repo, &["worktree", "add", "-q", "-b", "feature", tree.to_str().unwrap()]);
+        assert_eq!(branch_of(&tree).as_deref(), Some("feature"), "a worktree");
+        sh(&repo, &["checkout", "-q", "--detach"]);
+        assert_eq!(branch_of(&repo), None, "detached");
+    }
 
     #[test]
     fn porcelain_read_and_folders_marked() {

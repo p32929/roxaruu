@@ -270,7 +270,7 @@ commands! {
     ToggleSidebar, "view.sidebar", "File Tree: Show and Go In, or Hide", ["ctrl+b"];
     FocusSidebar, "view.focusSidebar", "File Tree: Go In, or Back to the Editor", ["ctrl+shift+e"];
     CollapseFolders, "view.collapseFolders", "File Tree: Collapse All Folders", ["alt+shift+c"];
-    ZoomIn, "view.zoomIn", "Bigger Text", ["ctrl+=", "ctrl+shift+="];
+    ZoomIn, "view.zoomIn", "Bigger Text", ["ctrl+=", "ctrl+shift+=", "ctrl++"];
     ZoomOut, "view.zoomOut", "Smaller Text", ["ctrl+-"];
     ResetZoom, "view.resetZoom", "Reset Text Size", ["ctrl+0"];
     FullScreen, "view.fullScreen", "Full Screen On / Off", ["f11"];
