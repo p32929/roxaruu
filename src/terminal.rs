@@ -392,6 +392,9 @@ pub fn belongs_to_shell(key: Key, m: Modifiers) -> bool {
     // Off macOS, Ctrl doubles as the command key: only unshifted Ctrl chords
     // go to the shell, so Ctrl+Shift+C/V can still copy and paste.
     m.ctrl && key != Key::Tab && (mac || !m.shift)
+        // ⌥/Alt chords are the program's too: readline's Meta-B/F/D, Claude
+        // Code's ⌥↵ new line. (⌘⌥ on a Mac, Ctrl+Alt+Shift elsewhere, stay ours.)
+        || m.alt && !m.command
 }
 
 /// Off macOS, Roxaruu's keys are Ctrl chords too, the shell's own. These few
@@ -411,6 +414,10 @@ fn passes_the_shell_on(c: crate::keymap::Command, windows: bool) -> bool {
     matches!(
         c,
         SwitchFocus | GoToTab(_) | ToggleSidebar | FocusSidebar | Save | SaveAll | Quit | ZoomIn | ZoomOut | ResetZoom
+            // The terminal's own ⌥ keys, and clipboard history (Meta-V is
+            // unbound in readline and zsh).
+            | ToggleTerminal | NewTerminal | CopyTerminalOutput | CloseTerminal | ToggleTerminalGrid
+            | MaximizeTerminal | SwitchTerminal | JumpTerminal(_) | ClipboardHistory
     ) || (windows && c == Paste)
 }
 
@@ -427,6 +434,23 @@ mod tests {
         assert!(!passes_the_shell_on(Command::Paste, false));
         assert!(!passes_the_shell_on(Command::Copy, true), "Ctrl+C stays the shell's interrupt");
         assert!(passes_the_shell_on(Command::Save, false));
+    }
+
+    /// ⌥ chords are the program's (Claude Code's ⌥↵ new line, readline's
+    /// Meta-B), but for the terminal's own keys; ⌘⌥ stays the app's.
+    #[test]
+    fn alt_chords_go_to_the_program() {
+        use crate::keymap::Command;
+        for mac in [true, false] {
+            let _keys = crate::keymap::keys_like(mac);
+            assert!(belongs_to_shell(Key::Enter, ALT), "⌥↵");
+            assert!(belongs_to_shell(Key::B, ALT));
+            assert!(belongs_to_shell(Key::Enter, ALT | SHIFT));
+            let cmd_alt = Modifiers { alt: true, command: true, mac_cmd: mac, ctrl: !mac, ..Modifiers::NONE };
+            assert_eq!(belongs_to_shell(Key::C, cmd_alt), !mac, "⌘⌥C is ours on a Mac; Ctrl+Alt+C the shell's elsewhere");
+        }
+        assert!(passes_the_shell_on(Command::NewTerminal, false) && passes_the_shell_on(Command::JumpTerminal(2), false));
+        assert!(!passes_the_shell_on(Command::GitCommit, false) && !passes_the_shell_on(Command::GitPush, false));
     }
 
     const CTRL: Modifiers = Modifiers {

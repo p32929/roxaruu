@@ -2475,11 +2475,15 @@ impl App {
     /// A command's keys are its current binding, so remaps show up here.
     /// A key for `c`, if it can run now, with what it does here.
     fn hint(&self, c: Command, what: &'static str) -> Option<StatusHint> {
-        self.available(c)
-            .then(|| self.config.keymap.combo_for(c))
-            .flatten()
-            .filter(|k| self.key_reaches(c, k))
-            .map(|k| (k.label(), what, Some(c)))
+        let k = self.available(c).then(|| self.reaching_combo(c)).flatten()?;
+        crate::keymap::note_shown(c);
+        Some((k.label(), what, Some(c)))
+    }
+
+    /// `c`'s first key that gets to the app from where the keyboard is
+    /// (in a terminal ⌥F is the shell's, so Go to File shows ⌘P).
+    pub(crate) fn reaching_combo(&self, c: Command) -> Option<crate::keymap::Combo> {
+        self.config.keymap.combos(c).find(|k| self.key_reaches(c, k))
     }
 
     /// Whether `c`'s key gets to the app from where the keyboard is: off
@@ -4136,6 +4140,16 @@ impl App {
     /// The key that runs `c`, as keycaps ("⇧⌘W").
     fn shortcut(&self, c: Command) -> Option<String> {
         self.config.keymap.combo_for(c).map(|k| k.label())
+    }
+
+    /// A button's key, for its tooltip ("  ⇧⌘M"). The button shows whatever
+    /// has the keyboard, its key works once you're where the button is: it
+    /// counts as shown (`visible_keys_work`) only while it runs from here.
+    fn tip_keys(&self, c: Command) -> String {
+        if self.available(c) {
+            crate::keymap::note_shown(c);
+        }
+        self.config.keymap.combos(c).next().map(|k| format!("  {}", k.label())).unwrap_or_default()
     }
 
     /// The editor area: the active tab, or — in split view — every open tab

@@ -12,10 +12,15 @@ default key that clashes with nothing (`every_command_has_a_default_key`,
 fonts, the JSON files, About, close tabs to the left…) have none and are
 listed in `keymap::KEYLESS` (the owner's call: fewer keys to learn — merge
 related actions into one place, like Open… (⌘O) for folders and terminals,
-before adding a key). A key shown on
-screen works from wherever the keyboard is (`visible_keys_work`): never
-gate a command on focus while its key is drawn elsewhere, and never show
-one that can't run now. The keys between the editor, the tree and the
+before adding a key). A key works
+where the keyboard is, for what's there (the owner's rule): keys that take
+you somewhere (⌘J, ⇧⌘G, ⌥T, ⌥1–9…) and app-wide ones (palette, Save,
+zoom…) work anywhere; keys that act on one place work only while it has
+the keyboard (Source Control's commit / push / pull, `git_ready` for its
+buttons; the tree's Move to Trash). A key shown on screen works from
+there (`visible_keys_work`), and one that can't run now is never shown.
+A focused terminal leaves the program its ⌃ and ⌥ chords
+(`belongs_to_shell`): ⌥↵ is Claude Code's new line, never bind it. The keys between the editor, the tree and the
 terminal come from `focus_hint`: the tree's and the terminal's in the
 status bar, the editor's on its own row (`headless_focus_keys_everywhere`).
 Every key shows **once** on screen, in the one row it belongs to — never
@@ -245,7 +250,9 @@ Roxaruu runs everywhere VS Code does, every feature on every system.
   a `tracing` line; never a password or file contents.
 - Off macOS, Roxaruu's keys are Ctrl chords, which a terminal's shell wants
   too: only `terminal::passes_the_shell` get past it, and hints in a
-  terminal never show one that doesn't (`key_reaches`).
+  terminal never show one that doesn't (`key_reaches`). ⌥/Alt chords
+  are the program's on every system (readline's Meta keys, Claude Code's
+  ⌥↵), but for the terminal's own (⌥T, ⌥N, ⌥W, ⌥1–9…) and ⌥V.
 - Tests run where you work; CI runs only when started by hand, and then it
   releases: with `git config core.hooksPath .githooks` (once per clone),
   `pre-push` runs this system's whole suite (above) here and stops the push

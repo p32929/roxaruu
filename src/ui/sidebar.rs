@@ -378,13 +378,7 @@ impl App {
         // Header: the project, and its actions.
         let (head, _) =
             ui.allocate_exact_size(vec2(ui.available_width(), 38.0 * s), Sense::hover());
-        let caps = |cmd: Command| {
-            self.config
-                .keymap
-                .combo_for(cmd)
-                .map(|k| format!("  {}", k.label()))
-                .unwrap_or_default()
-        };
+        let caps = |cmd: Command| self.tip_keys(cmd);
         ui.scope_builder(
             egui::UiBuilder::new()
                 .max_rect(head.shrink2(vec2(8.0 * s, 0.0)))
@@ -407,7 +401,7 @@ impl App {
                     );
                     [(icon::SIDEBAR, format!("Hide Sidebar{}", caps(Command::ToggleSidebar)), Act::Hide), run(Command::FocusSidebar, "Show Files"), fold]
                         .into_iter()
-                        .chain(git.into_iter().filter(|(c, _)| self.available(*c)).map(|(c, t)| run(c, t)))
+                        .chain(git.into_iter().filter(|(c, _)| self.git_ready(*c)).map(|(c, t)| run(c, t)))
                         .collect()
                 } else { vec![
                     (

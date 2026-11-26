@@ -302,8 +302,8 @@ commands! {
     GitStage, "git.stage", "Stage / Unstage", [];
     GitStageAll, "git.stageAll", "Stage All Changes (Every Repository)", ["alt+a"];
     GitDiscard, "git.discard", "Discard Changes…", ["ctrl+alt+backspace"];
-    GitCommit, "git.commit", "Commit (What's Staged, or Everything)", ["alt+enter"];
-    GitCommitAll, "git.commitAll", "Commit All Repositories", ["alt+shift+enter"];
+    GitCommit, "git.commit", "Commit (What's Staged, or Everything)", ["ctrl+shift+m"];
+    GitCommitAll, "git.commitAll", "Commit All Repositories", ["alt+shift+m"];
     GitPush, "git.push", "Push", ["alt+p"];
     GitPushAll, "git.pushAll", "Push All Repositories", ["alt+shift+p"];
     GitPull, "git.pull", "Pull", ["alt+l"];
@@ -590,13 +590,20 @@ impl Keymap {
 
     /// The first key bound to `command`, for showing in the UI.
     pub fn combo_for(&self, command: Command) -> Option<Combo> {
-        #[cfg(test)]
-        SHOWN.with(|s| s.borrow_mut().as_mut().map(|v| v.push(command)));
-        self.bindings
-            .iter()
-            .find(|(_, c)| *c == command)
-            .map(|(combo, _)| *combo)
+        note_shown(command);
+        self.combos(command).next()
     }
+
+    /// Every key bound to `command`, first first (not counted as shown).
+    pub fn combos(&self, command: Command) -> impl Iterator<Item = Combo> + '_ {
+        self.bindings.iter().filter(move |(_, c)| *c == command).map(|(combo, _)| *combo)
+    }
+}
+
+/// Counts `command`'s key as on screen, for `visible_keys_work`.
+pub fn note_shown(_command: Command) {
+    #[cfg(test)]
+    SHOWN.with(|s| s.borrow_mut().as_mut().map(|v| v.push(_command)));
 }
 
 #[cfg(test)]

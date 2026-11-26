@@ -1,8 +1,9 @@
 //! Source Control (⇧⌘G): in the file tree's place, each repository in the
 //! open folder (its own, and those in its folders) with its branch, how far
 //! ahead or behind, its staged and unstaged files, and its recent commits.
-//! One commit message at the top: ⌥↵ commits the repository you're on,
-//! ⇧⌥↵ every repository with changes; ⌥P / ⌥L push and pull, ⇧ for all.
+//! One commit message at the top: ⇧⌘M commits the repository you're on,
+//! ⌥⇧M every repository with changes; ⌥P / ⌥L push and pull, ⇧ for all.
+//! Their keys work only here (a terminal's ⌥ chords are its program's).
 //! Rows: ↑↓ move, space stages or unstages, ↵ shows a file's changes (a
 //! read-only diff tab) or opens a repository's history, ← → fold; typing
 //! types the message. Git runs off the window's thread (`git::apply`).
@@ -82,6 +83,22 @@ impl App {
     /// Whether the keyboard is in the Changes view.
     pub(crate) fn changes_focused(&self) -> bool {
         self.changes.on && self.focus == Focus::Sidebar && self.sidebar_shown()
+    }
+
+    /// Whether commit / push / pull (or their "all") has something to do,
+    /// wherever the keyboard is: Source Control's buttons show by this, its
+    /// keys (`available`) only while it has the keyboard too.
+    pub(crate) fn git_ready(&self, c: Command) -> bool {
+        let Some(p) = self.project.as_ref() else { return false };
+        match c {
+            // The repository you're on (the row, the file in front's).
+            Command::GitCommit => self.current_repo().and_then(|r| p.repos.get(r)).is_some_and(|r| !r.files.is_empty()),
+            Command::GitPush | Command::GitPull => self.current_repo().is_some(),
+            // "All": more than one repository to do it in.
+            Command::GitCommitAll => p.repos.len() > 1 && p.repos.iter().any(|r| !r.files.is_empty()),
+            Command::GitPushAll | Command::GitPullAll => p.repos.len() > 1,
+            _ => false,
+        }
     }
 
     /// The list's rows, top to bottom.
@@ -317,7 +334,7 @@ impl App {
         self.run_git("Discarding", vec![(repo, Op::Discard(rels))], ctx);
     }
 
-    /// Commit the current repository (⌥↵), or every one with changes (⇧⌥↵),
+    /// Commit the current repository (⇧⌘M), or every one with changes (⌥⇧M),
     /// with the message at the top; none typed yet: there to type it.
     pub(crate) fn commit(&mut self, all: bool, ctx: &egui::Context) {
         let message = self.changes.message.trim().to_string();
@@ -813,12 +830,12 @@ impl App {
         // can run now, and an "all" one only when it does more.
         let repos = self.repos().to_vec();
         let here = self.current_repo().and_then(|r| repos.get(r));
-        let caps = |cmd: Command| self.shortcut(cmd).map(|k| format!("  {k}")).unwrap_or_default();
+        let caps = |cmd: Command| self.tip_keys(cmd);
         let name = |r: Option<&Repo>| r.map(|r| format!(" {}", r.name)).unwrap_or_default();
         let changed = repos.iter().filter(|r| !r.files.is_empty()).count();
         let ahead = repos.iter().filter(|r| r.head.ahead > 0).count();
         let here_changed = here.is_some_and(|r| !r.files.is_empty());
-        let can = |cmd: Command| busy.is_none() && self.available(cmd);
+        let can = |cmd: Command| busy.is_none() && self.git_ready(cmd);
         let lines: [Vec<(Command, String, String)>; 2] = [
             [
                 (Command::GitCommit, format!("{} Commit", icon::GIT_COMMIT), format!("Commit{}", name(here))),

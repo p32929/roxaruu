@@ -1047,14 +1047,16 @@ impl App {
             Command::GitStage => self.can_stage(),
             Command::GitDiscard => self.can_discard(),
             Command::GitOpenFile => self.changed_file_target(),
-            // The repository you're on (the Changes view's row, the file in front's).
-            Command::GitCommit => self.current_repo().and_then(|r| self.project.as_ref()?.repos.get(r)).is_some_and(|r| !r.files.is_empty()),
-            Command::GitPush | Command::GitPull => self.current_repo().is_some(),
+            // Only in Source Control: from a terminal or the editor ⇧⌘M, ⌥P…
+            // are the program's or the text's (the buttons ask `git_ready`).
+            Command::GitCommit
+            | Command::GitCommitAll
+            | Command::GitPush
+            | Command::GitPull
+            | Command::GitPushAll
+            | Command::GitPullAll => self.changes_focused() && self.git_ready(command),
             // Only there: elsewhere ⌥A types (å on a Mac).
             Command::GitStageAll => self.changes_focused() && self.project.as_ref().is_some_and(|p| p.repos.iter().any(|r| r.files.iter().any(|f| f.unstaged.is_some()))),
-            // "All": more than one repository to do it in.
-            Command::GitCommitAll => self.project.as_ref().is_some_and(|p| p.repos.len() > 1 && p.repos.iter().any(|r| !r.files.is_empty())),
-            Command::GitPushAll | Command::GitPullAll => self.project.as_ref().is_some_and(|p| p.repos.len() > 1),
             Command::SwitchFocus => {
                 self.active.is_some() || !self.terminals.is_empty() || self.project.is_some()
             }

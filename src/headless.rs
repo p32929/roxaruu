@@ -51,7 +51,7 @@ fn visible_keys_work(h: &mut Harness<'static, Root>, place: &str) {
     shown.dedup();
     let mut dead = Vec::new();
     for command in shown {
-        let Some((key, mods)) = app(h).config.keymap.combo_for(command).map(|c| c.press()) else {
+        let Some((key, mods)) = app(h).reaching_combo(command).map(|c| c.press()) else {
             continue;
         };
         crate::app::dry_run(true);
@@ -1680,8 +1680,9 @@ fn headless_every_shortcut() {
     }
     let from_editor = done.len() - 1;
 
-    // From a terminal: everything that still applies there gets through too
-    // (only real Ctrl chords are the shell's, and none of the defaults use one).
+    // From a terminal: everything that still applies there gets through too,
+    // by a key that reaches it; ⌥ chords that aren't the terminal's own (⌥↵,
+    // ⌥F…) are the program's and run nothing of ours.
     h.state_mut().0.focus = crate::app::Focus::Terminal;
     h.step();
     visible_keys_work(&mut h, "a terminal");
@@ -1690,6 +1691,11 @@ fn headless_every_shortcut() {
         if command == Command::DeleteFile || !app(&h).available(command) {
             continue;
         }
+        // (Not pressed: Meta keys would leave the shell mid-command.)
+        let Some((key, mods)) = app(&h).reaching_combo(command).map(|k| k.press()) else {
+            assert!(crate::terminal::belongs_to_shell(key, mods), "from a terminal, {title}'s {mods:?}+{key:?}");
+            continue;
+        };
         crate::app::dry_run(true);
         press(&mut h, mods, key);
         assert_eq!(
@@ -2763,13 +2769,23 @@ fn headless_source_control() {
     press(&mut h, ALT | SHIFT, Key::O);
     assert_eq!(app(&h).active_tab().unwrap().path(), Some(&root.join("api").join("kept.rs")));
 
-    // Typing in the list types the message; the Commit all button (⇧⌥↵)
+    // Typing in the list types the message; the Commit all button (⌥⇧M)
     // commits every repository (what's staged; everything where nothing is).
     press(&mut h, CMD_SHIFT, Key::G);
     type_text(&mut h, "Both at once");
     assert_eq!(app(&h).changes.message, "Both at once");
     assert!(app(&h).changes.typing);
     shot(&mut h, "g2-message");
+    // Its keys are Source Control's: with the keyboard in the editor ⇧⌘M
+    // commits nothing, but the buttons are still there to click.
+    h.state_mut().0.focus = crate::app::Focus::Editor;
+    press(&mut h, CMD_SHIFT, Key::M);
+    press(&mut h, ALT | SHIFT, Key::P);
+    assert!(!app(&h).available(crate::keymap::Command::GitCommitAll) && app(&h).git_ready(crate::keymap::Command::GitCommitAll));
+    assert_eq!(app(&h).changes.message, "Both at once", "nothing committed");
+    assert!(h.query_by_label("Commit All").is_some());
+    press(&mut h, CMD_SHIFT, Key::G);
+    assert!(app(&h).changes_focused());
     assert!(h.query_by_label_contains("Push").is_none(), "nothing to push yet");
     h.get_by_label("Commit All").click();
     wait_for(&mut h, "both committed", |a| {
@@ -6656,7 +6672,8 @@ fn headless_every_key_that_applies_shows() {
         let missing: Vec<_> = crate::keymap::COMMANDS
             .iter()
             .map(|c| c.command)
-            .filter(|c| app(h).available(*c) && app(h).config.keymap.combo_for(*c).is_some())
+            // (In a terminal, one whose keys are all the program's has none here.)
+            .filter(|c| app(h).available(*c) && app(h).reaching_combo(*c).is_some())
             .filter(|c| !shown.contains(c) && !elsewhere.contains(c))
             .collect();
         assert!(missing.is_empty(), "in {place}, these run but show their key nowhere: {missing:?} (status: {:?})", app(h).status_line());
