@@ -388,16 +388,13 @@ impl App {
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0 * s;
-                // Source Control: its actions ("all" ones with several
-                // repositories) that can run now, and the way back to the files.
+                // Source Control: Pull (all, with several repositories) if it
+                // can run, and the way back to the files. Commit and Push are
+                // the buttons under its list.
                 let many = project.repos.len() > 1;
                 let run = |c: Command, title: &str| (icon::for_command(c), format!("{title}{}", caps(c)), Act::Run(c));
                 let buttons: Vec<_> = if self.changes.on {
-                    let git = if many {
-                        [(Command::GitPullAll, "Pull All Repositories"), (Command::GitPushAll, "Push All Repositories"), (Command::GitCommitAll, "Commit All Repositories")]
-                    } else {
-                        [(Command::GitPull, "Pull"), (Command::GitPush, "Push"), (Command::GitCommit, "Commit")]
-                    };
+                    let git = if many { [(Command::GitPullAll, "Pull All Repositories")] } else { [(Command::GitPull, "Pull")] };
                     [(icon::SIDEBAR, format!("Hide Sidebar{}", caps(Command::ToggleSidebar)), Act::Hide), run(Command::FocusSidebar, "Show Files")]
                         .into_iter()
                         .chain(git.into_iter().filter(|(c, _)| self.available(*c)).map(|(c, t)| run(c, t)))

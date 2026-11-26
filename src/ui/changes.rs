@@ -781,7 +781,8 @@ impl App {
         }
 
         // What the keys do, as buttons: commit (or push) the repository
-        // you're on, or every one. Only those that can run now.
+        // you're on (its name in the tip), or every one. Only those that
+        // can run now, and an "all" one only when it does more.
         let repos = self.repos().to_vec();
         let here = self.current_repo().and_then(|r| repos.get(r));
         let caps = |cmd: Command| self.shortcut(cmd).map(|k| format!("  {k}")).unwrap_or_default();
@@ -792,48 +793,31 @@ impl App {
         let can = |cmd: Command| busy.is_none() && self.available(cmd);
         let lines: [Vec<(Command, String, String)>; 2] = [
             [
-                (Command::GitCommit, format!("{} Commit{}", icon::GIT_COMMIT, name(here)), format!("Commit{}", name(here))),
-                (Command::GitCommitAll, format!("Commit all {changed}"), format!("Commit every repository with changes ({changed}), with this message")),
+                (Command::GitCommit, format!("{} Commit", icon::GIT_COMMIT), format!("Commit{}", name(here))),
+                (Command::GitCommitAll, "Commit All".into(), format!("Commit every repository with changes ({changed}), with this message")),
             ]
             .into_iter()
-            // Commit all only when it does more than Commit would.
             .filter(|(cmd, ..)| can(*cmd) && (*cmd == Command::GitCommit || changed > usize::from(here_changed)))
             .collect(),
             [
-                (Command::GitPush, format!("{} Push{}", icon::PUSH, name(here)), format!("Push{}", name(here))),
-                (Command::GitPushAll, format!("{} Push all {ahead}", icon::PUSH), format!("Push every repository with commits to push ({ahead})")),
+                (Command::GitPush, format!("{} Push", icon::PUSH), format!("Push{}", name(here))),
+                (Command::GitPushAll, "Push All".into(), format!("Push every repository with commits to push ({ahead})")),
             ]
             .into_iter()
             .filter(|(cmd, ..)| can(*cmd) && {
                 let here_ahead = here.is_some_and(|r| r.head.ahead > 0);
-                // Push all only when it does more than Push would.
                 if *cmd == Command::GitPush { here_ahead } else { ahead > usize::from(here_ahead) }
             })
             .collect(),
         ];
-        for line in lines.iter().filter(|l| !l.is_empty()) {
-            let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0 * s), Sense::hover());
-            let bar = bar.shrink2(vec2(10.0 * s, 2.0 * s));
-            let gap = 6.0 * s;
-            let w = (bar.width() - gap * (line.len() - 1) as f32) / line.len() as f32;
-            for (i, (cmd, label, tip)) in line.iter().enumerate() {
-                let at = Rect::from_min_size(pos2(bar.left() + i as f32 * (w + gap), bar.top()), vec2(w, bar.height()));
-                // The first is the main one: the accent, as a dialog's.
-                let main = i == 0;
-                let b = egui::Button::new(
-                    egui::RichText::new(label)
-                        .font(pt.font(12.5, Weight::Medium))
-                        .color(if main { c.accent_text } else { c.text }),
-                )
-                .truncate()
-                .fill(if main { c.accent } else { c.surface })
-                .stroke(Stroke::new(1.0, if main { c.accent } else { c.border }))
-                .corner_radius(7.0 * s);
-                if ui.put(at, b).on_hover_text(format!("{tip}{}", caps(*cmd))).clicked() {
-                    act = Some(Act::Run(*cmd));
-                }
-            }
-        }
+        // Each tip ends with the button's key.
+        let shown: Vec<Vec<_>> = lines
+            .into_iter()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.into_iter().map(|(cmd, label, tip)| (cmd, label, format!("{tip}{}", caps(cmd)))).collect())
+            .collect();
+        // Kept at the bottom, under the list, whatever its length.
+        let bottom = if shown.is_empty() { 0.0 } else { (shown.len() as f32 * 32.0 + 10.0) * s };
 
         let rows = self.change_rows();
         let chosen = self.chosen(&rows);
@@ -860,12 +844,13 @@ impl App {
         let row_h = if self.view().compact { 34.0 } else { 26.0 } * s;
         let mut area = egui::ScrollArea::vertical()
             .auto_shrink(false)
+            .max_height(ui.available_height() - bottom)
             .id_salt("changes-rows");
         if self.changes.scroll
             && let Some(i) = chosen
         {
             let (top, bottom) = (i as f32 * row_h, (i + 1) as f32 * row_h);
-            let (off, view) = (self.changes.offset, ui.available_height());
+            let (off, view) = (self.changes.offset, ui.available_height() - bottom);
             if top < off {
                 area = area.vertical_scroll_offset(top);
             } else if bottom > off + view && view > 0.0 {
@@ -1133,6 +1118,34 @@ impl App {
         });
         self.changes.offset = out.state.clamped_offset().y;
         self.changes.scroll = false;
+        if !shown.is_empty() {
+            let top = ui.cursor().top();
+            ui.painter().hline(ui.max_rect().x_range(), top, Stroke::new(1.0, c.border));
+            ui.add_space(5.0 * s);
+            for (n, line) in shown.iter().enumerate() {
+                let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0 * s), Sense::hover());
+                let bar = bar.shrink2(vec2(10.0 * s, 2.0 * s));
+                let gap = 6.0 * s;
+                let w = (bar.width() - gap * (line.len() - 1) as f32) / line.len() as f32;
+                for (i, (cmd, label, tip)) in line.iter().enumerate() {
+                    let at = Rect::from_min_size(pos2(bar.left() + i as f32 * (w + gap), bar.top()), vec2(w, bar.height()));
+                    // The first is the main one: the accent, as a dialog's.
+                    let main = n == 0 && i == 0;
+                    let b = egui::Button::new(
+                        egui::RichText::new(label)
+                            .font(pt.font(12.5, Weight::Medium))
+                            .color(if main { c.accent_text } else { c.text }),
+                    )
+                    .truncate()
+                    .fill(if main { c.accent } else { c.surface })
+                    .stroke(Stroke::new(1.0, if main { c.accent } else { c.border }))
+                    .corner_radius(7.0 * s);
+                    if ui.put(at, b).on_hover_text(tip).clicked() {
+                        act = Some(Act::Run(*cmd));
+                    }
+                }
+            }
+        }
         self.changes_act(act, &ctx);
     }
 

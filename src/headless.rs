@@ -2742,9 +2742,8 @@ fn headless_source_control() {
     assert_eq!(app(&h).changes.message, "Both at once");
     assert!(app(&h).changes.typing);
     shot(&mut h, "g2-message");
-    assert!(h.query_by_label_contains("Commit api").is_some(), "the one you're on, by name");
-    assert!(h.query_by_label_contains("Push all").is_none() && h.query_by_label_contains("Push api").is_none(), "nothing to push yet");
-    h.get_by_label("Commit all 2").click();
+    assert!(h.query_by_label_contains("Push").is_none(), "nothing to push yet");
+    h.get_by_label("Commit All").click();
     wait_for(&mut h, "both committed", |a| {
         a.changes.message.is_empty() && a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.head.ahead == 1))
     });
@@ -2755,7 +2754,7 @@ fn headless_source_control() {
     // Push all (⇧⌥P) pushes both.
     h.step();
     shot(&mut h, "g2-push");
-    h.get_by_label_contains("Push all 2").click();
+    h.get_by_label("Push All").click();
     wait_for(&mut h, "both pushed", |a| a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.head.ahead == 0)));
     assert!(app(&h).toasts.iter().any(|t| t.msg.contains("Pushed 2 of 2")), "{:?}", app(&h).toasts.iter().map(|t| &t.msg).collect::<Vec<_>>());
 
