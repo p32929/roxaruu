@@ -2970,8 +2970,10 @@ fn headless_copy_last_output() {
     press(&mut h, ALT, Key::C);
     assert_eq!(app(&h).note_text(), Some("The last command printed nothing"));
     assert_eq!(app(&h).clips.len(), 1);
-    // Cleared: nothing to copy until the next command.
-    press(&mut h, CMD, Key::K);
+    // Cleared: nothing to copy until the next command. (Run, not ⌘K: off
+    // macOS a terminal's Ctrl+K is the shell's.)
+    let ctx = h.ctx.clone();
+    h.state_mut().0.run(crate::keymap::Command::ClearTerminal, &ctx);
     assert!(!app(&h).available(crate::keymap::Command::CopyTerminalOutput));
 }
 

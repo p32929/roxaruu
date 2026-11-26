@@ -626,7 +626,8 @@ pub(crate) mod tests {
         apply(&now(&a), &Op::Discard(vec!["kept.rs".into(), "junk.rs".into()])).unwrap();
         assert!(now(&a).files.is_empty());
         assert!(!a.join("junk.rs").exists());
-        assert_eq!(std::fs::read_to_string(a.join("kept.rs")).unwrap(), "2\n");
+        // (Windows' git checks out with \r\n.)
+        assert_eq!(std::fs::read_to_string(a.join("kept.rs")).unwrap().replace("\r\n", "\n"), "2\n");
         // An added file, discarded: out of the index, still on disk.
         std::fs::write(a.join("added.rs"), "x").unwrap();
         apply(&now(&a), &Op::Stage(vec!["added.rs".into()])).unwrap();
