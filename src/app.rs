@@ -215,6 +215,8 @@ pub struct App {
     /// The empty window's recent folders (with their branches), read when
     /// first shown and again on coming back to the window.
     pub welcome_recent: Option<Vec<(PathBuf, u64, Option<String>)>>,
+    /// Recent folders ticked to open at once, in ticking order (as Open…'s).
+    pub welcome_ticked: Vec<PathBuf>,
     /// The app icon as a texture, per egui context (this window's, and the
     /// browser's copy of it), loaded the first time it's drawn.
     pub(crate) app_icon: Vec<(egui::Context, egui::TextureHandle)>,
@@ -337,6 +339,7 @@ impl App {
             help: false,
             welcome_selected: 0,
             welcome_recent: None,
+            welcome_ticked: Vec::new(),
             app_icon: Vec::new(),
             remote: Default::default(),
             remote_want: None,

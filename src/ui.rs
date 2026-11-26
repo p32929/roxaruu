@@ -7,7 +7,7 @@ use eframe::egui::{
     StrokeKind, pos2, text::LayoutJob, vec2,
 };
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::app::{Answer, App, Focus};
 use crate::editor::{char_to_col, col_to_char};
@@ -487,6 +487,16 @@ fn drawn(ui: &egui::Ui, keys: impl IntoIterator<Item = String>, click: Option<(R
         d.keys.extend(keys);
         d.clickable.extend(click);
     });
+}
+
+/// Tick `item` if it isn't, untick it if it is (keeping the order).
+fn toggle(list: &mut Vec<PathBuf>, item: &Path) {
+    match list.iter().position(|d| d == item) {
+        Some(i) => {
+            list.remove(i);
+        }
+        None => list.push(item.to_path_buf()),
+    }
 }
 
 /// A group's icon in the status bar, before its keys (whose they are: the
@@ -3233,18 +3243,29 @@ impl App {
         let keyboard = self.palette.is_none() && !self.modal_open() && self.focus == Focus::Editor;
         // Used up, not just read: ↵ here opens a list (Recent Folders) that
         // would otherwise take the same ↵ as "open the first one".
-        let (down, up, enter) = if keyboard {
+        // On a recent folder, space or ⇥ / ⇧⇥ tick it (and move on) to open
+        // several at once, as in Open….
+        let on_recent = self.welcome_selected >= actions.len();
+        let (down, up, enter, tick, tab, back) = if keyboard {
             ui.input_mut(|i| {
+                let space = on_recent && i.consume_key(Modifiers::NONE, Key::Space);
+                let tab = on_recent && i.consume_key(Modifiers::NONE, Key::Tab);
+                let back = on_recent && i.consume_key(Modifiers::SHIFT, Key::Tab);
                 let mut k = |key| i.consume_key(Modifiers::NONE, key);
-                (k(Key::ArrowDown), k(Key::ArrowUp), k(Key::Enter))
+                (k(Key::ArrowDown), k(Key::ArrowUp), k(Key::Enter), space || tab || back, tab, back)
             })
         } else {
-            (false, false, false)
+            (false, false, false, false, false, false)
         };
-        if down {
+        // Only folders still listed stay ticked.
+        self.welcome_ticked.retain(|d| recent.iter().any(|(r, ..)| r == d));
+        if tick && let Some((d, ..)) = recent.get(self.welcome_selected.wrapping_sub(actions.len())) {
+            toggle(&mut self.welcome_ticked, d);
+        }
+        if down || tab {
             self.welcome_selected = (self.welcome_selected + 1) % n;
         }
-        if up {
+        if up || back {
             self.welcome_selected = (self.welcome_selected + n - 1) % n;
         }
         self.welcome_selected %= n;
@@ -3391,6 +3412,14 @@ impl App {
                 pt.font(11.0, Weight::SemiBold),
                 c.text_subtle,
             );
+            // Its keys, on its own line, while the keyboard's on it.
+            if keyboard && on_recent && recent.len() > 1 {
+                let many = self.welcome_ticked.len();
+                let open_what = if many > 0 { "open selected" } else { "open" };
+                let hints: Vec<Hint> = vec![(vec!["↵".into()], open_what), (vec!["space".into(), "⇥".into()], "select several")];
+                let w = pt.key_hints(ui, None, &hints, 10.5, Pos2::ZERO);
+                pt.key_hints(ui, Some(&p), &hints, 10.5, pos2(cx + card_w / 2.0 - 4.0 * s - w, y + 11.0 * s));
+            }
             y += 22.0 * s;
             let card = Rect::from_min_size(
                 pos2(cx - card_w / 2.0, y),
@@ -3398,6 +3427,7 @@ impl App {
             );
             p.rect(card, 12.0 * s, c.elevated, Stroke::new(1.0, c.border), StrokeKind::Inside);
             let now = crate::update::now();
+            let number: Vec<String> = (1..=recent.len()).map(|n| n.to_string()).collect();
             for (k, (dir, at, branch)) in recent.iter().enumerate() {
                 let i = actions.len() + k;
                 let row = Rect::from_min_size(
@@ -3410,7 +3440,21 @@ impl App {
                     ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                 }
                 if resp.clicked() {
-                    open = Some(dir.clone());
+                    // ⌘-click ticks one, ⇧-click every one from the last
+                    // ticked; a plain click opens (the ticked ones, if any).
+                    let m = ui.input(|i| i.modifiers);
+                    if m.shift {
+                        let from = self.welcome_ticked.last().and_then(|l| recent.iter().position(|(r, ..)| r == l)).unwrap_or(k);
+                        for (r, ..) in recent.get(from.min(k)..=from.max(k)).unwrap_or_default() {
+                            if !self.welcome_ticked.contains(r) {
+                                self.welcome_ticked.push(r.clone());
+                            }
+                        }
+                    } else if m.command {
+                        toggle(&mut self.welcome_ticked, dir);
+                    } else {
+                        open = Some(dir.clone());
+                    }
                 }
                 let t = ui.ctx().animate_bool_with_time(resp.id, self.welcome_selected == i, 0.12);
                 // Its branch, when you were last in it, then where it is
@@ -3427,7 +3471,11 @@ impl App {
                     &p,
                     row,
                     t,
-                    (icon::FOLDER, None),
+                    // Ticked: its place in the order they open in.
+                    match self.welcome_ticked.iter().position(|d| d == dir) {
+                        Some(n) => (number.get(n).map_or("•", String::as_str), Some(c.accent)),
+                        None => (icon::FOLDER, None),
+                    },
                     pt.label(&name, &[], c.text),
                     &detail.join("  ·  "),
                     &[],
@@ -3462,7 +3510,11 @@ impl App {
         };
         if let Some(dir) = open.take() {
             let ctx = ui.ctx().clone();
-            self.open_folders(vec![dir], &ctx);
+            let dirs = match std::mem::take(&mut self.welcome_ticked) {
+                ticked if ticked.is_empty() => vec![dir],
+                ticked => ticked,
+            };
+            self.open_folders(dirs, &ctx);
         }
         if resp.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);

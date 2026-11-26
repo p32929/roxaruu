@@ -3883,13 +3883,29 @@ fn headless_start_page_recent_and_resets() {
     press(&mut h, CMD, Key::Num0);
     assert_eq!(app(&h).config.settings.ui_font_size, size);
 
-    // ↓ past the actions to the recent folder; ↵ opens it.
+    // ↓ past the actions to the recent folders; space ticks one, ⇥ ticks
+    // and moves on; ↵ opens the ticked ones, the first here, in their order.
+    let other = dir.path().canonicalize().unwrap().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    crate::recent::record(std::slice::from_ref(&other));
+    h.state_mut().0.welcome_recent = None;
+    h.run();
     let actions = if app(&h).rox_installed { 4 } else { 5 };
     for _ in 0..actions {
         press(&mut h, Modifiers::NONE, Key::ArrowDown);
     }
+    press(&mut h, Modifiers::NONE, Key::Tab); // "other", the newest
+    press(&mut h, Modifiers::NONE, Key::Space); // and "proj"
+    assert_eq!(app(&h).welcome_ticked, [other.clone(), repo.clone()]);
+    press(&mut h, Modifiers::NONE, Key::Space);
+    press(&mut h, Modifiers::NONE, Key::Space);
+    assert_eq!(app(&h).welcome_ticked, [other.clone(), repo.clone()], "space unticks, and again ticks (last)");
+    shot(&mut h, "w1-recent-ticked");
+    crate::app::App::take_launched();
     press(&mut h, Modifiers::NONE, Key::Enter);
-    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(repo));
+    assert_eq!(app(&h).project.as_ref().map(|p| p.root.clone()), Some(other));
+    let launched = crate::app::App::take_launched();
+    assert_eq!(launched, [vec!["new window".to_string(), repo.to_string_lossy().into_owned()]]);
     match before {
         Some(b) => std::fs::write(&file, b).unwrap(),
         None => std::fs::remove_file(&file).unwrap_or(()),
