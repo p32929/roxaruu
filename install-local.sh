@@ -127,8 +127,10 @@ else
     green "Installing Roxaruu v$OLD_VERSION"
 fi
 
-blue "Building release binary…"
-if ! cargo build --release --quiet; then
+# Cargo's own progress (each crate, then the bar), so a long build never
+# looks stuck: the first one, or one after a dependency changed, takes minutes.
+blue "Building release binary (cargo build --release)…"
+if ! cargo build --release; then
     # Don't leave a bumped version that was never built or installed.
     if [ -n "$VUP" ]; then
         set_version "$OLD_VERSION"
@@ -140,6 +142,7 @@ EXE=roxaruu
 [ "$OS" = windows ] && EXE=roxaruu.exe
 BIN="target/release/$EXE"
 VERSION="$(current_version)"
+green "Built $BIN"
 
 # ---- --force-close: every running Roxaruu, now the build is good -------------
 # The exact process name (`roxaruu`), so Claude Code's roxaruu-hook, test runs
@@ -170,13 +173,14 @@ if [ "$OS" = windows ]; then
 else
     BIN_DIR="${BIN_DIR:-${CARGO_HOME:-$HOME/.cargo}/bin}"
 fi
+blue "Installing the commands in ${BIN_DIR}…"
 mkdir -p "$BIN_DIR"
 # Copy beside, then rename: replacing a running binary in place can crash it.
 cp "$BIN" "$BIN_DIR/.$EXE.new" && mv -f "$BIN_DIR/.$EXE.new" "$BIN_DIR/$EXE"
 # Claude Code's helper (src/bin/roxaruu-hook.rs), beside the app.
 HOOK="roxaruu-hook${EXE#roxaruu}"
 cp "target/release/$HOOK" "$BIN_DIR/.$HOOK.new" && mv -f "$BIN_DIR/.$HOOK.new" "$BIN_DIR/$HOOK"
-green "Installed $BIN_DIR/$EXE"
+green "Installed $BIN_DIR/$EXE and $BIN_DIR/$HOOK"
 # `rox`, the short name: a wrapper, not a link, so the process is still
 # called roxaruu (which is how windows find each other).
 if [ "$OS" = windows ]; then
@@ -196,6 +200,7 @@ esac
 case "$OS" in
 linux)
     DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
+    blue "Adding Roxaruu to the app menu…"
     mkdir -p "$DATA/applications" "$DATA/icons/hicolor/512x512/apps" "$DATA/icons/hicolor/scalable/apps"
     cp assets/icon.png "$DATA/icons/hicolor/512x512/apps/roxaruu.png"
     cp assets/icon.svg "$DATA/icons/hicolor/scalable/apps/roxaruu.svg" # sharp at any size
@@ -211,6 +216,7 @@ linux)
     ;;
 
 windows)
+    blue "Adding Roxaruu to the Start Menu…"
     START="${APPDATA:-$HOME/AppData/Roaming}/Microsoft/Windows/Start Menu/Programs"
     TARGET="$BIN_DIR/$EXE"
     if command -v cygpath >/dev/null 2>&1; then
@@ -231,6 +237,7 @@ mac)
         REGISTER=1
     fi
     DEST="$APP_DIR/Roxaruu.app"
+    blue "Making Roxaruu.app…"
     mkdir -p "$APP_DIR"
     rm -rf "$DEST.new"
     mkdir -p "$DEST.new/Contents/MacOS" "$DEST.new/Contents/Resources"
@@ -294,6 +301,7 @@ CNF
     }
     signed=""
     if command -v security >/dev/null 2>&1; then
+        blue "Signing it with this Mac's own key…"
         [ -f "$SIGN_KC" ] && [ -f "$SIGN_DIR/password" ] || make_signing_key || true
         [ -f "$SIGN_DIR/password" ] && security unlock-keychain -p "$(cat "$SIGN_DIR/password")" "$SIGN_KC" 2>/dev/null
         if ! signing_ready && [ -f "$SIGN_DIR/cert.pem" ]; then
@@ -322,6 +330,7 @@ CNF
     # list keep track of the app by its folder; deleting and recreating it
     # each install made them lose it. Old signature files from earlier
     # (signed) installs go too, or macOS would call the app damaged.
+    blue "Putting it in ${APP_DIR}…"
     if [ -d "$DEST" ]; then
         rm -rf "$DEST/Contents"
         mv "$DEST.new/Contents" "$DEST/Contents"
@@ -334,6 +343,7 @@ CNF
         # Tell macOS about it now rather than whenever it next looks:
         # LaunchServices (opening, the Dock), then Spotlight (search,
         # Launchpad, the Apps list all read Spotlight's index).
+        blue "Telling macOS and Spotlight about it (up to 10 s)…"
         /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f -R -trusted "$DEST" >/dev/null 2>&1 || true
         mdimport "$DEST" >/dev/null 2>&1 || true
         found=""
