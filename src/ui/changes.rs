@@ -765,27 +765,24 @@ impl App {
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
 
-        // The message box: it has the keys whenever the view does and
-        // you're typing; typing in the rows lands here.
+        // The compose card, as a chat box: the message on top; under it
+        // what a commit takes in, Commit (its ▾: the rest, with their keys)
+        // and, once there's something to push, ↑ and how many commits.
+        // The message has the keys whenever the view does and you're
+        // typing; typing in the rows lands here.
         let typing = focused && self.changes.typing;
-        let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0 * s), Sense::hover());
-        let field = bar.shrink2(vec2(10.0 * s, 3.0 * s));
+        let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), 88.0 * s), Sense::hover());
+        let card = Rect::from_min_max(area.min + vec2(10.0 * s, 3.0 * s), area.max - vec2(10.0 * s, 9.0 * s));
         ui.painter().rect(
-            field,
-            7.0 * s,
-            c.hover.gamma_multiply(if typing { 1.0 } else { 0.6 }),
-            Stroke::new(
-                1.0,
-                if typing {
-                    c.accent.gamma_multiply(0.7)
-                } else {
-                    c.border
-                },
-            ),
+            card,
+            9.0 * s,
+            c.background,
+            Stroke::new(1.0, if typing { c.accent.gamma_multiply(0.7) } else { c.border }),
             StrokeKind::Inside,
         );
+        let field = card.with_max_y(card.top() + 34.0 * s);
         ui.painter().text(
-            pos2(field.left() + 12.0 * s, field.center().y),
+            pos2(field.left() + 14.0 * s, field.center().y),
             Align2::CENTER_CENTER,
             icon::GIT_COMMIT,
             pt.font(12.5, Weight::Regular),
@@ -796,9 +793,7 @@ impl App {
             .busy
             .as_ref()
             .map(|(what, _)| format!("{what}…"));
-        // Its keys are on the buttons under it (in their tips) and in the
-        // status bar.
-        let hint = egui::RichText::new(busy.clone().unwrap_or_else(|| "Commit message".to_string()))
+        let hint = egui::RichText::new("Commit message")
             .color(c.text_subtle)
             .font(pt.font(12.5, Weight::Regular));
         let edit = egui::TextEdit::singleline(&mut self.changes.message)
@@ -808,12 +803,12 @@ impl App {
             .text_color(c.text)
             .hint_text(hint)
             .align(Align2::LEFT_CENTER)
-            .desired_width(field.width() - 30.0 * s);
+            .desired_width(field.width() - 36.0 * s);
         let caret = ui.visuals().text_cursor.clone();
         if !typing {
             ui.visuals_mut().text_cursor.stroke.color = Color32::TRANSPARENT;
         }
-        let resp = ui.put(field.with_min_x(field.left() + 24.0 * s), edit);
+        let resp = ui.put(field.with_min_x(field.left() + 26.0 * s).shrink2(vec2(0.0, 4.0 * s)), edit);
         ui.visuals_mut().text_cursor = caret;
         if typing {
             resp.request_focus();
@@ -824,45 +819,109 @@ impl App {
             self.focus = Focus::Sidebar;
             self.changes.typing = true;
         }
+        ui.painter().hline(card.x_range().shrink(1.0), field.bottom(), Stroke::new(1.0, c.border));
 
-        // What the keys do, as buttons: commit (or push) the repository
-        // you're on (its name in the tip), or every one. Only those that
-        // can run now, and an "all" one only when it does more.
         let repos = self.repos().to_vec();
         let here = self.current_repo().and_then(|r| repos.get(r));
-        let caps = |cmd: Command| self.tip_keys(cmd);
-        let name = |r: Option<&Repo>| r.map(|r| format!(" {}", r.name)).unwrap_or_default();
-        let changed = repos.iter().filter(|r| !r.files.is_empty()).count();
-        let ahead = repos.iter().filter(|r| r.head.ahead > 0).count();
-        let here_changed = here.is_some_and(|r| !r.files.is_empty());
+        let tip = |cmd: Command| self.tip_keys(cmd);
         let can = |cmd: Command| busy.is_none() && self.git_ready(cmd);
-        let lines: [Vec<(Command, String, String)>; 2] = [
-            [
-                (Command::GitCommit, format!("{} Commit", icon::GIT_COMMIT), format!("Commit{}", name(here))),
-                (Command::GitCommitAll, "Commit All".into(), format!("Commit every repository with changes ({changed}), with this message")),
-            ]
-            .into_iter()
-            .filter(|(cmd, ..)| can(*cmd) && (*cmd == Command::GitCommit || changed > usize::from(here_changed)))
-            .collect(),
-            [
-                (Command::GitPush, format!("{} Push", icon::PUSH), format!("Push{}", name(here))),
-                (Command::GitPushAll, "Push All".into(), format!("Push every repository with commits to push ({ahead})")),
-            ]
-            .into_iter()
-            .filter(|(cmd, ..)| can(*cmd) && {
-                let here_ahead = here.is_some_and(|r| r.head.ahead > 0);
-                if *cmd == Command::GitPush { here_ahead } else { ahead > usize::from(here_ahead) }
-            })
-            .collect(),
+        let changed = repos.iter().filter(|r| !r.files.is_empty()).count();
+        let files: usize = repos.iter().map(|r| r.files.len()).sum();
+        let ahead: u32 = repos.iter().map(|r| r.head.ahead).sum();
+        let plural = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let info = match &busy {
+            Some(b) => b.clone(),
+            None if changed == 0 => "Nothing to commit".into(),
+            None if repos.len() == 1 => plural(files, "file", "files"),
+            None => format!("{} · {}", plural(changed, "repository", "repositories"), plural(files, "file", "files")),
+        };
+        // Short of room: just the files.
+        let short = if changed > 0 && busy.is_none() { plural(files, "file", "files") } else { info.clone() };
+        // Commit: the repository you're on (its name in the tip), or, with
+        // nothing there, every one.
+        let commit = if can(Command::GitCommit) || !can(Command::GitCommitAll) { Command::GitCommit } else { Command::GitCommitAll };
+        let commit_tip = match (commit, here) {
+            (Command::GitCommit, Some(r)) => format!("Commit {}{}", r.name, tip(commit)),
+            _ => format!("Commit every repository with changes ({changed}){}", tip(commit)),
+        };
+        // Push: the one you're on when only it has commits to push, else all.
+        let here_ahead = here.map_or(0, |r| r.head.ahead);
+        let push = if here_ahead == ahead || repos.len() < 2 { Command::GitPush } else { Command::GitPushAll };
+        let push_tip = match push {
+            Command::GitPush => format!("Push {} ({}){}", here.map_or("", |r| r.name.as_str()), plural(ahead as usize, "commit", "commits"), tip(push)),
+            _ => format!("Push every repository with commits to push ({}){}", plural(ahead as usize, "commit", "commits"), tip(push)),
+        };
+        let foot = card.with_min_y(field.bottom()).shrink2(vec2(6.0 * s, 0.0));
+        let h = 26.0 * s;
+        let y = foot.center().y - h / 2.0;
+        let r = (7.0 * s) as u8;
+        let label = |text: String, color: Color32| egui::RichText::new(text).font(pt.font(12.5, Weight::Medium)).color(color);
+        let width = |ui: &egui::Ui, text: &str| ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), pt.font(12.5, Weight::Medium), c.text).size().x);
+        let mut right = foot.right();
+        if ahead > 0 && busy.is_none() {
+            let text = format!("↑ {ahead}");
+            let w = width(ui, &text) + 20.0 * s;
+            let at = Rect::from_min_size(pos2(right - w, y), vec2(w, h));
+            let b = egui::Button::new(label(text, c.text)).fill(c.surface).stroke(Stroke::new(1.0, c.border)).corner_radius(r);
+            let resp = ui.put(at, b);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, if push == Command::GitPush { "Push" } else { "Push All" }));
+            if resp.on_hover_text(push_tip).clicked() {
+                act = Some(Act::Run(push));
+            }
+            right = at.left() - 6.0 * s;
+        }
+        let title = if commit == Command::GitCommit { "Commit" } else { "Commit All" };
+        let caret_w = 22.0 * s;
+        let w = width(ui, title) + 24.0 * s;
+        let main = Rect::from_min_size(pos2(right - caret_w - w, y), vec2(w, h));
+        let more = Rect::from_min_size(pos2(main.right(), y), vec2(caret_w, h));
+        let on = can(commit);
+        let fill = if on { c.accent } else { c.surface };
+        let ink = if on { c.accent_text } else { c.text_subtle };
+        let b = egui::Button::new(label(title.into(), ink))
+            .fill(fill)
+            .stroke(Stroke::new(1.0, if on { c.accent } else { c.border }))
+            .corner_radius(egui::CornerRadius { nw: r, sw: r, ne: 0, se: 0 });
+        if ui.add_enabled_ui(on, |ui| ui.put(main, b)).inner.on_hover_text(commit_tip).clicked() {
+            act = Some(Act::Run(commit));
+        }
+        let b = egui::Button::new(label("▾".into(), ink))
+            .fill(fill)
+            .stroke(Stroke::new(1.0, if on { c.accent } else { c.border }))
+            .corner_radius(egui::CornerRadius { nw: 0, sw: 0, ne: r, se: r });
+        let caret_resp = ui.put(more, b);
+        caret_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "More Git Actions"));
+        // A line between the two halves.
+        ui.painter().vline(more.left(), more.y_range().shrink(5.0 * s), Stroke::new(1.0, if on { c.accent_text.gamma_multiply(0.4) } else { c.border }));
+        let staged_all = repos.iter().any(|r| r.files.iter().any(|f| f.unstaged.is_some()));
+        let groups: crate::ui::MenuGroups = vec![
+            vec![(Command::GitCommit, "Commit", can(Command::GitCommit)), (Command::GitCommitAll, "Commit All", can(Command::GitCommitAll))],
+            vec![
+                (Command::GitPush, "Push", busy.is_none() && here_ahead > 0),
+                (Command::GitPushAll, "Push All", can(Command::GitPushAll) && ahead > 0),
+                (Command::GitPull, "Pull", can(Command::GitPull)),
+                (Command::GitPullAll, "Pull All", can(Command::GitPullAll)),
+            ],
+            vec![(Command::GitStageAll, "Stage All", busy.is_none() && staged_all)],
         ];
-        // Each tip ends with the button's key.
-        let shown: Vec<Vec<_>> = lines
-            .into_iter()
-            .filter(|l| !l.is_empty())
-            .map(|l| l.into_iter().map(|(cmd, label, tip)| (cmd, label, format!("{tip}{}", caps(cmd)))).collect())
-            .collect();
-        // Kept at the bottom, under the list, whatever its length.
-        let bottom = if shown.is_empty() { 0.0 } else { (shown.len() as f32 * 32.0 + 10.0) * s };
+        let key = |c: Command| self.config.keymap.combos(c).next().map(|k| k.label());
+        if let Some(picked) = egui::Popup::menu(&caret_resp.on_hover_text("More: commit all, push, pull, stage all"))
+            .show(|ui| crate::ui::command_menu(ui, &groups, &key))
+            .and_then(|r| r.inner)
+        {
+            act = Some(Act::Run(picked));
+        }
+        // What a commit takes in, in what room is left.
+        let room = (main.left() - foot.left() - 12.0 * s).max(0.0);
+        let fits = ui.fonts_mut(|f| f.layout_no_wrap(info.clone(), pt.font(11.5, Weight::Regular), c.text_subtle).size().x) <= room;
+        let info = if fits { info } else { short };
+        let mut job = LayoutJob::simple_singleline(info, pt.font(11.5, Weight::Regular), c.text_subtle);
+        job.wrap = egui::text::TextWrapping { max_width: room, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+        let g = ui.fonts_mut(|f| f.layout_job(job));
+        ui.painter().galley(pos2(foot.left() + 6.0 * s, foot.center().y - g.size().y / 2.0), g, c.text_subtle);
+        // (`put` left the cursor under the last button, inside the card.)
+        ui.advance_cursor_after_rect(area);
+        let bottom = 0.0;
 
         let rows = self.change_rows();
         let chosen = self.chosen(&rows);
@@ -1204,35 +1263,6 @@ impl App {
         });
         self.changes.offset = out.state.clamped_offset().y;
         self.changes.scroll = false;
-        if !shown.is_empty() {
-            let top = ui.cursor().top();
-            ui.painter().hline(ui.max_rect().x_range(), top, Stroke::new(1.0, c.border));
-            ui.add_space(5.0 * s);
-            for (n, line) in shown.iter().enumerate() {
-                let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0 * s), Sense::hover());
-                // 6pt between buttons, sideways and between rows.
-                let bar = bar.shrink2(vec2(10.0 * s, 3.0 * s));
-                let gap = 6.0 * s;
-                let w = (bar.width() - gap * (line.len() - 1) as f32) / line.len() as f32;
-                for (i, (cmd, label, tip)) in line.iter().enumerate() {
-                    let at = Rect::from_min_size(pos2(bar.left() + i as f32 * (w + gap), bar.top()), vec2(w, bar.height()));
-                    // The first is the main one: the accent, as a dialog's.
-                    let main = n == 0 && i == 0;
-                    let b = egui::Button::new(
-                        egui::RichText::new(label)
-                            .font(pt.font(12.5, Weight::Medium))
-                            .color(if main { c.accent_text } else { c.text }),
-                    )
-                    .truncate()
-                    .fill(if main { c.accent } else { c.surface })
-                    .stroke(Stroke::new(1.0, if main { c.accent } else { c.border }))
-                    .corner_radius(7.0 * s);
-                    if ui.put(at, b).on_hover_text(tip).clicked() {
-                        act = Some(Act::Run(*cmd));
-                    }
-                }
-            }
-        }
         self.changes_act(act, &ctx);
     }
 

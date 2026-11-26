@@ -1118,15 +1118,11 @@ impl App {
         // editor's room): the status bar gives its keys the same width.
         let beside = self.sidebar_shown() && !compact;
         let tree_w = if beside { self.view().tree_w } else { 0.0 };
-        // The tree's keys, as many rows as they take: the last in the status
-        // bar, the rest at the bottom of the tree.
-        let mut tree_rows = if beside { self.tree_hint_rows(ui, tree_w) } else { Vec::new() };
-        let tree_row = tree_rows.pop().unwrap_or_default();
         let status = egui::Panel::bottom("status")
             .frame(bare)
             .show_separator_line(false)
-            .show(ui, |ui| self.status_bar(ui, tree_w, tree_row));
-        let (mut hint, status_top) = (status.inner, status.response.rect.top());
+            .show(ui, |ui| self.status_bar(ui, tree_w));
+        let (hint, status_top) = (status.inner, status.response.rect.top());
         // The tree runs the full height; tabs and terminals sit beside it.
         // (A compact view slides it over them instead, below.)
         if beside {
@@ -1136,21 +1132,7 @@ impl App {
                 .show_separator_line(false)
                 .default_size(260.0 * s)
                 .size_range(170.0 * s..=(ui.available_width() * 0.5).max(170.0 * s))
-                .show(ui, |ui| {
-                    // Always there, even empty: the tree's widgets keep their
-                    // ids as the rows come and go (a menu open on one stays).
-                    // As tall as its rows: none, no room taken (a panel's
-                    // least is otherwise 20pt).
-                    let keys_h = tree_rows.len() as f32 * 26.0 * s;
-                    hint = hint.or(egui::Panel::bottom("tree-keys")
-                        .frame(bare)
-                        .show_separator_line(false)
-                        .resizable(false)
-                        .exact_size(keys_h)
-                        .show(ui, |ui| self.tree_key_rows(ui, tree_rows))
-                        .inner);
-                    self.sidebar_ui(ui)
-                });
+                .show(ui, |ui| self.sidebar_ui(ui));
             self.view_mut().tree_w = tree.response.rect.width();
         }
         if !self.tabs.is_empty() && !maximized {
@@ -2835,7 +2817,7 @@ impl App {
 
     /// `tree_w`: how wide the file tree beside it is (0 with none): the
     /// tree's keys go under it, the terminal's beside them.
-    fn status_bar(&self, ui: &mut egui::Ui, tree_w: f32, tree_row: Vec<StatusHint>) -> Option<Command> {
+    fn status_bar(&self, ui: &mut egui::Ui, tree_w: f32) -> Option<Command> {
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
         let (rect, resp) =
@@ -2976,7 +2958,7 @@ impl App {
         let split = rect.left() + tree_w;
         if tree_w > 0.0 {
             p.vline(split - 0.5, rect.y_range().shrink(5.0 * s), Stroke::new(1.0, c.border));
-            picked = picked.or(self.hints_strip(ui, rect, rect.left() + 10.0 * s, split - 8.0 * s, tree_row, "tree"));
+            picked = picked.or(self.tree_strip(ui, rect, rect.left() + 10.0 * s, split - 8.0 * s));
         }
         let from = if tree_w > 0.0 { split + 10.0 * s } else { rect.left() + 10.0 * s };
         if let Some((text, color)) = left {
@@ -3104,68 +3086,33 @@ impl App {
         (picked, fit)
     }
 
-    /// The tree's keys that don't fit in the status bar: rows above it, the
-    /// same strip, top to bottom.
-    fn tree_key_rows(&self, ui: &mut egui::Ui, rows: Vec<Vec<StatusHint>>) -> Option<Command> {
+    /// The tree's (or Source Control's) keys under it: the most useful that
+    /// fit, then, when some don't, a "?" that lists them all on hover.
+    fn tree_strip(&self, ui: &egui::Ui, rect: Rect, x0: f32, x1: f32) -> Option<Command> {
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
-        if rows.is_empty() {
-            return None;
+        let hints = self.tree_hints();
+        let (_, fit) = self.hints_strip_fit(ui, rect, x0, x1, hints.clone(), "tree", true);
+        if fit >= hints.len() {
+            return self.hints_strip(ui, rect, x0, x1, hints, "tree");
         }
-        let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), rows.len() as f32 * 26.0 * s), Sense::hover());
-        ui.painter().rect_filled(area, 0.0, c.surface);
-        ui.painter().hline(area.x_range(), area.top() + 0.5, Stroke::new(1.0, c.border));
-        let mut picked = None;
-        for (n, row) in rows.into_iter().enumerate() {
-            let rect = Rect::from_min_size(pos2(area.left(), area.top() + n as f32 * 26.0 * s), vec2(area.width(), 26.0 * s));
-            picked = picked.or(self.hints_strip(ui, rect, rect.left() + 10.0 * s, rect.right() - 8.0 * s, row, &format!("tree{n}")));
-        }
+        let more_w = 22.0 * s;
+        let (_, fit) = self.hints_strip_fit(ui, rect, x0, x1 - more_w - 6.0 * s, hints.clone(), "tree", true);
+        let picked = self.hints_strip(ui, rect, x0, x1 - more_w - 6.0 * s, hints.get(..fit).unwrap_or_default().to_vec(), "tree");
+        let cap = Rect::from_center_size(pos2(x1 - more_w / 2.0, rect.center().y), vec2(more_w - 4.0 * s, 17.0 * s));
+        let resp = ui.interact(cap.expand(3.0 * s), egui::Id::unique("tree-keys-more"), Sense::hover());
+        let p = ui.painter();
+        p.rect(cap, 4.0 * s, if resp.hovered() { c.hover } else { c.background }, Stroke::new(1.0, c.border), StrokeKind::Inside);
+        p.text(cap.center(), Align2::CENTER_CENTER, "?", fonts::keycap(10.5 * s), if resp.hovered() { c.text } else { c.text_muted });
+        resp.on_hover_ui(|ui| {
+            for (keys, what, _) in hints.iter().filter(|h| !h.0.is_empty()) {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(keys).font(fonts::keycap(11.0 * s)).color(c.text_muted));
+                    ui.label(egui::RichText::new(*what).font(pt.font(12.0, Weight::Regular)).color(c.text));
+                });
+            }
+        });
         picked
-    }
-
-    /// The tree's (or Source Control's) keys in rows as wide as the tree,
-    /// as many as they take: the status bar shows the last, the rest stack
-    /// above it at the bottom of the tree. A group cut across rows starts
-    /// the next with its icon again.
-    pub(crate) fn tree_hint_rows(&self, ui: &egui::Ui, tree_w: f32) -> Vec<Vec<StatusHint>> {
-        let s = self.paint().s;
-        let mut rest = self.tree_hints();
-        let rect = Rect::from_min_size(Pos2::ZERO, vec2(tree_w, 26.0 * s));
-        let mut rows = Vec::new();
-        while !rest.is_empty() && rows.len() < 6 {
-            let (_, n) = self.hints_strip_fit(ui, rect, 10.0 * s, tree_w - 8.0 * s, rest.clone(), "", true);
-            // One too wide for any row: it goes on its own (with its group's
-            // icon), cut.
-            let lone = if rest.first().is_some_and(|h| h.0.is_empty()) { 2 } else { 1 };
-            let n = if n == 0 { lone } else { n }.min(rest.len());
-            let mut next = rest.split_off(n);
-            // Room left: later keys of the same group that fit go here too,
-            // rather than leave rows mostly empty.
-            let mut j = 0;
-            while let Some(h) = next.get(j) {
-                if h.0.is_empty() {
-                    break;
-                }
-                let mut tried = rest.clone();
-                tried.push(h.clone());
-                let (_, fit) = self.hints_strip_fit(ui, rect, 10.0 * s, tree_w - 8.0 * s, tried.clone(), "", true);
-                if fit == tried.len() {
-                    rest = tried;
-                    next.remove(j);
-                } else {
-                    j += 1;
-                }
-            }
-            let mark = rest.iter().rev().find(|h| h.0.is_empty()).cloned();
-            rows.push(rest);
-            rest = next;
-            if let (Some(mark), Some(first)) = (mark, rest.first())
-                && !first.0.is_empty()
-            {
-                rest.insert(0, mark);
-            }
-        }
-        rows
     }
 
     /// The app icon as a texture (decoded once), mipmapped so the 1024px

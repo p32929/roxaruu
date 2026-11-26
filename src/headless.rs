@@ -2783,11 +2783,15 @@ fn headless_source_control() {
     press(&mut h, ALT | SHIFT, Key::P);
     assert!(!app(&h).available(crate::keymap::Command::GitCommitAll) && app(&h).git_ready(crate::keymap::Command::GitCommitAll));
     assert_eq!(app(&h).changes.message, "Both at once", "nothing committed");
-    assert!(h.query_by_label("Commit All").is_some());
+    assert!(h.query_by_label("Commit").is_some());
     press(&mut h, CMD_SHIFT, Key::G);
     assert!(app(&h).changes_focused());
-    assert!(h.query_by_label_contains("Push").is_none(), "nothing to push yet");
-    h.get_by_label("Commit All").click();
+    assert!(h.query_by_label("Push").is_none() && h.query_by_label("Push All").is_none(), "nothing to push yet");
+    // The compose card: Commit's ▾ holds Commit All (and push, pull…).
+    h.get_by_label("More Git Actions").click();
+    h.run();
+    shot(&mut h, "g2-menu");
+    h.get_by_label_contains("Commit All").click();
     wait_for(&mut h, "both committed", |a| {
         a.changes.message.is_empty() && a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.head.ahead == 1))
     });

@@ -385,13 +385,10 @@ impl App {
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0 * s;
-                // Source Control: Pull (all, with several repositories) if it
-                // can run, and the way back to the files. Commit and Push are
-                // the buttons under its list.
-                let many = project.repos.len() > 1;
+                // Source Control: collapse and the way back to the files.
+                // Commit, push and pull are in its compose card.
                 let run = |c: Command, title: &str| (icon::for_command(c), format!("{title}{}", caps(c)), Act::Run(c));
                 let buttons: Vec<_> = if self.changes.on {
-                    let git = if many { [(Command::GitPullAll, "Pull All Repositories")] } else { [(Command::GitPull, "Pull")] };
                     // Collapse all, as the tree has; expand all once all are.
                     let shut = self.all_folded();
                     let fold = (
@@ -399,10 +396,7 @@ impl App {
                         format!("{}{}", if shut { "Expand All" } else { "Collapse All" }, caps(Command::CollapseFolders)),
                         Act::Run(Command::CollapseFolders),
                     );
-                    [(icon::SIDEBAR, format!("Hide Sidebar{}", caps(Command::ToggleSidebar)), Act::Hide), run(Command::FocusSidebar, "Show Files"), fold]
-                        .into_iter()
-                        .chain(git.into_iter().filter(|(c, _)| self.git_ready(*c)).map(|(c, t)| run(c, t)))
-                        .collect()
+                    vec![(icon::SIDEBAR, format!("Hide Sidebar{}", caps(Command::ToggleSidebar)), Act::Hide), run(Command::FocusSidebar, "Show Files"), fold]
                 } else { vec![
                     (
                         icon::SIDEBAR,

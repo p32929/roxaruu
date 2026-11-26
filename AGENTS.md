@@ -27,8 +27,8 @@ Every key shows **once** on screen, in the one row it belongs to — never
 again in a header, a page or a second row (`each_key_once`). Keys are
 always shown the same way: one row of keycap + what it does
 (`Paint::key_hints`), never a column, never wrapped onto a second row
-(but the tree's and Source Control's, which stack in as many rows as they
-take at the bottom of the tree, the last in the status bar: `tree_hint_rows`),
+(the tree's and Source Control's end in a "?" listing the ones that didn't
+fit, on hover: `tree_strip`),
 never drawn inside a button (buttons carry theirs in the tooltip); when a
 row is short of room it keeps the most useful first. Keys about different
 things are grouped, each group in a faint box led by an icon of what it
