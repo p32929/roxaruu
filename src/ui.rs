@@ -3288,7 +3288,9 @@ impl App {
             })
             .clone();
         let fixed = mark + 14.0 * s + 18.0 * s + 36.0 * s + card_h + 20.0 * s + 16.0 * s + 32.0;
-        let recent_head = 20.0 * s + 22.0 * s + pad * 2.0;
+        // The RECENT line: its label and keys, with room above the card.
+        let head_h = 34.0 * s;
+        let recent_head = 20.0 * s + head_h + pad * 2.0;
         let fits = ((area.height() - fixed - recent_head) / row_h).floor().max(0.0) as usize;
         let recent = recent.get(..fits.min(recent.len())).unwrap_or_default();
         let recent_h = if recent.is_empty() { 0.0 } else { recent_head + row_h * recent.len() as f32 };
@@ -3465,7 +3467,7 @@ impl App {
         if !recent.is_empty() {
             y += 20.0 * s;
             p.text(
-                pos2(cx - card_w / 2.0 + 4.0 * s, y + 11.0 * s),
+                pos2(cx - card_w / 2.0 + 4.0 * s, y + 13.0 * s),
                 Align2::LEFT_CENTER,
                 "RECENT",
                 pt.font(11.0, Weight::SemiBold),
@@ -3480,9 +3482,9 @@ impl App {
                     hints.push((vec!["esc".into()], "deselect all"));
                 }
                 let w = pt.key_hints(ui, None, &hints, 10.5, Pos2::ZERO);
-                pt.key_hints(ui, Some(&p), &hints, 10.5, pos2(cx + card_w / 2.0 - 4.0 * s - w, y + 11.0 * s));
+                pt.key_hints(ui, Some(&p), &hints, 10.5, pos2(cx + card_w / 2.0 - 4.0 * s - w, y + 13.0 * s));
             }
-            y += 22.0 * s;
+            y += head_h;
             let card = Rect::from_min_size(
                 pos2(cx - card_w / 2.0, y),
                 vec2(card_w, row_h * recent.len() as f32 + pad * 2.0),
