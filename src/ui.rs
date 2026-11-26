@@ -697,8 +697,63 @@ impl Paint {
         hints: &[Hint],
         indent: f32,
     ) {
+        self.row_in(ui, p, row, row, t, glyph, label, detail, caps, hints, indent);
+    }
+
+    /// A row of a list you can tick several in: `row`, its text kept clear
+    /// of the checkbox on its right (`checkbox`), shown when `boxed`.
+    #[allow(clippy::too_many_arguments)]
+    fn check_row(
+        &self,
+        ui: &egui::Ui,
+        p: &egui::Painter,
+        row: Rect,
+        t: f32,
+        glyph: (&str, Option<Color32>),
+        label: LayoutJob,
+        detail: &str,
+        caps: &[String],
+        boxed: bool,
+    ) {
+        let text = if boxed { row.with_max_x(row.right() - 30.0 * self.s) } else { row };
+        self.row_in(ui, p, row, text, t, glyph, label, detail, caps, &[], 0.0);
+    }
+
+    /// The checkbox at the right of a `check_row`, ticked or not.
+    fn checkbox_rect(&self, row: Rect) -> Rect {
+        Rect::from_center_size(pos2(row.right() - 22.0 * self.s, row.center().y), vec2(16.0, 16.0) * self.s)
+    }
+
+    fn checkbox(&self, p: &egui::Painter, row: Rect, on: bool, hot: bool) {
+        let (c, s) = (&self.c, self.s);
+        let r = self.checkbox_rect(row);
+        if on {
+            p.rect_filled(r, 4.0 * s, c.accent);
+            p.text(r.center(), Align2::CENTER_CENTER, icon::CHECK, self.font(12.0, Weight::Regular), c.accent_text);
+        } else {
+            let edge = if hot { c.text_muted } else { c.text_subtle };
+            p.rect(r, 4.0 * s, c.background, Stroke::new(1.0 * s, edge), StrokeKind::Inside);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn row_in(
+        &self,
+        ui: &egui::Ui,
+        p: &egui::Painter,
+        row: Rect,
+        text: Rect,
+        t: f32,
+        glyph: (&str, Option<Color32>),
+        label: LayoutJob,
+        detail: &str,
+        caps: &[String],
+        hints: &[Hint],
+        indent: f32,
+    ) {
         let (c, s) = (&self.c, self.s);
         p.rect_filled(row, 8.0 * s, c.hover.gamma_multiply(t));
+        let row = text;
         let x = row.left() + 14.0 * s + indent;
         let (glyph, tint) = glyph;
         let tint = tint.unwrap_or_else(|| mix(c.text_subtle, c.accent, t));
@@ -3246,6 +3301,10 @@ impl App {
         // On a recent folder, space or ⇥ / ⇧⇥ tick it (and move on) to open
         // several at once, as in Open….
         let on_recent = self.welcome_selected >= actions.len();
+        // Esc lets go of the ticked ones.
+        if keyboard && !self.welcome_ticked.is_empty() && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            self.welcome_ticked.clear();
+        }
         let (down, up, enter, tick, tab, back) = if keyboard {
             ui.input_mut(|i| {
                 let space = on_recent && i.consume_key(Modifiers::NONE, Key::Space);
@@ -3416,7 +3475,10 @@ impl App {
             if keyboard && on_recent && recent.len() > 1 {
                 let many = self.welcome_ticked.len();
                 let open_what = if many > 0 { "open selected" } else { "open" };
-                let hints: Vec<Hint> = vec![(vec!["↵".into()], open_what), (vec!["space".into(), "⇥".into()], "select several")];
+                let mut hints: Vec<Hint> = vec![(vec!["↵".into()], open_what), (vec!["space".into(), "⇥".into()], "select several")];
+                if many > 0 {
+                    hints.push((vec!["esc".into()], "deselect all"));
+                }
                 let w = pt.key_hints(ui, None, &hints, 10.5, Pos2::ZERO);
                 pt.key_hints(ui, Some(&p), &hints, 10.5, pos2(cx + card_w / 2.0 - 4.0 * s - w, y + 11.0 * s));
             }
@@ -3435,9 +3497,21 @@ impl App {
                     vec2(card_w - pad * 2.0, row_h),
                 );
                 let resp = ui.interact(row, ui.scope_id().with(("welcome", i)), Sense::click());
-                if resp.hovered() && keyboard {
+                // A checkbox on the right, under the pointer (and on every
+                // row once one's ticked): click it to pick several.
+                let ticked = self.welcome_ticked.contains(dir);
+                let boxed = ui.rect_contains_pointer(row) || !self.welcome_ticked.is_empty();
+                let check = boxed.then(|| {
+                    let r = pt.checkbox_rect(row).expand(6.0 * s);
+                    ui.interact(r, ui.scope_id().with(("welcome-check", i)), Sense::click())
+                        .on_hover_text(if ticked { "Deselect" } else { "Select, to open several at once" })
+                });
+                if (resp.hovered() || check.as_ref().is_some_and(|c| c.hovered())) && keyboard {
                     self.welcome_selected = i;
                     ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+                if check.as_ref().is_some_and(|c| c.clicked()) {
+                    toggle(&mut self.welcome_ticked, dir);
                 }
                 if resp.clicked() {
                     // ⌘-click ticks one, ⇧-click every one from the last
@@ -3466,7 +3540,7 @@ impl App {
                 detail.push(crate::ui::tilde(&dir.parent().unwrap_or(dir).to_string_lossy()));
                 let name = crate::app::display_name(dir);
                 resp.on_hover_text(crate::ui::tilde(&dir.to_string_lossy()));
-                pt.row(
+                pt.check_row(
                     ui,
                     &p,
                     row,
@@ -3479,9 +3553,12 @@ impl App {
                     pt.label(&name, &[], c.text),
                     &detail.join("  ·  "),
                     &[],
-                    &[],
-                    0.0,
+                    boxed,
                 );
+                if let Some(check) = &check {
+                    pt.checkbox(&p, row, self.welcome_ticked.contains(dir), check.hovered());
+                    check.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, self.welcome_ticked.contains(dir), format!("Select {name}")));
+                }
             }
             y += card.height();
         }
@@ -6017,7 +6094,11 @@ impl App {
         } else {
             (up, down, enter, esc)
         };
-        if esc {
+        // With rows ticked, esc lets go of them first.
+        if esc && let Some(p) = self.palette.as_mut().filter(|p| !p.ticked.is_empty()) {
+            p.ticked.clear();
+            p.tick_from = None;
+        } else if esc {
             return self.close_palette(false, ctx);
         }
         if up || down {
@@ -6259,12 +6340,34 @@ impl App {
                     )
                 };
                 let pointer_moved = ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO);
+                // Lists of several: a checkbox on the right of the row under
+                // the pointer (on every row once one's ticked) picks it.
+                let mut boxes: Vec<Option<bool>> = Vec::new();
                 for (n, idx) in (pal.scroll..pal.scroll + shown).enumerate() {
                     let r = ui.interact(
                         row_rect(n),
                         ui.scope_id().with(("palette-row", idx)),
                         Sense::click(),
                     );
+                    let boxed = mode.multi() && pal.tickable(idx) && (ui.rect_contains_pointer(row_rect(n)) || !pal.ticked.is_empty());
+                    let check = boxed.then(|| {
+                        let on = pal.is_ticked(idx);
+                        let name = pal.items.get(idx).map_or("", |i| i.label.as_str());
+                        let b = ui.interact(pt.checkbox_rect(row_rect(n)).expand(6.0 * s), ui.scope_id().with(("palette-check", idx)), Sense::click());
+                        b.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, format!("Select {name}")));
+                        b.on_hover_text(if on { "Deselect" } else { "Select, to do several at once" })
+                    });
+                    boxes.push(check.as_ref().map(|c| c.hovered()));
+                    if let Some(check) = &check {
+                        if check.hovered() && pointer_moved && pal.selected != idx {
+                            pal.selected = idx;
+                            moved = true;
+                        }
+                        if check.clicked() {
+                            pal.toggle_tick(idx);
+                            pal.selected = idx;
+                        }
+                    }
                     if r.hovered() {
                         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
                         // Only a moving pointer steals the selection from the keyboard.
@@ -6323,18 +6426,11 @@ impl App {
                     } else {
                         &item.caps[..]
                     };
-                    pt.row(
-                        ui,
-                        &painter,
-                        row_rect(n),
-                        t,
-                        glyph,
-                        label,
-                        &item.detail,
-                        caps,
-                        &[],
-                        0.0,
-                    );
+                    let check = boxes.get(n).copied().flatten();
+                    pt.check_row(ui, &painter, row_rect(n), t, glyph, label, &item.detail, caps, check.is_some());
+                    if let Some(hot) = check {
+                        pt.checkbox(&painter, row_rect(n), pal.is_ticked(idx), hot);
+                    }
                 }
 
                 // Footer: key hints and the result count.
@@ -6389,7 +6485,8 @@ impl App {
     /// bindings.
     fn palette_footer(&self, mode: Mode) -> Vec<Hint> {
         let k = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
-        let esc = (k("esc"), "close");
+        // With rows ticked, esc lets go of them first.
+        let esc = (k("esc"), if self.ticked().is_empty() { "close" } else { "deselect all" });
         match mode {
             Mode::Themes | Mode::UiFonts | Mode::CodeFonts => {
                 vec![

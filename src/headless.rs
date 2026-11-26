@@ -3730,6 +3730,26 @@ fn headless_open_list() {
     let p = app(&h).palette.as_ref().unwrap();
     assert_eq!([3, 0, 2].map(|r| p.tick_number(r)), [Some(1), Some(2), Some(3)]);
     shot(&mut h, "op1-ticked");
+    // With some ticked every row has its checkbox; esc lets go of them all
+    // (the list stays), and then a row's shows only under the pointer.
+    let boxed = |h: &Harness<'static, Root>, name: &str| h.query_by_label(&format!("Select {name}")).map(|n| n.rect());
+    let at = boxed(&h, "api").expect("api's checkbox");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(app(&h).palette.as_ref().is_some_and(|p| p.ticked.is_empty()), "deselected, still open");
+    h.event(Event::PointerMoved(egui::pos2(10.0, 10.0)));
+    h.run();
+    assert!(boxed(&h, "api").is_none(), "no checkbox away from the pointer");
+    h.event(Event::PointerMoved(at.center()));
+    h.run();
+    h.get_by_label("Select api").click();
+    h.run();
+    assert_eq!(app(&h).palette.as_ref().unwrap().ticked.len(), 1, "its checkbox ticks it");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    // Ticked again, as before.
+    for row in [3, 0, 2] {
+        h.state_mut().0.palette.as_mut().unwrap().selected = row;
+        press(&mut h, Modifiers::NONE, Key::Space);
+    }
     // Sorting again keeps the ticks; ⌘↵: terminals, here (nothing open).
     press(&mut h, CMD, Key::S);
     assert_eq!(labels(&h), ["web", "api", "infra", "scripts"]);
@@ -3894,6 +3914,26 @@ fn headless_start_page_recent_and_resets() {
     for _ in 0..actions {
         press(&mut h, Modifiers::NONE, Key::ArrowDown);
     }
+    // The pointer on a row shows its checkbox; clicking it ticks it, esc
+    // lets go of every one.
+    assert!(h.query_by_label("Select proj").is_none());
+    press(&mut h, Modifiers::NONE, Key::Space); // "other", the newest
+    let at = h.get_by_label("Select proj").rect().center();
+    h.get_by_label("Select proj").click();
+    h.run();
+    assert_eq!(app(&h).welcome_ticked, [other.clone(), repo.clone()]);
+    shot(&mut h, "w1-recent-checkboxes");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(app(&h).welcome_ticked.is_empty() && app(&h).project.is_none());
+    h.event(Event::PointerMoved(egui::pos2(10.0, 10.0)));
+    h.run();
+    assert!(h.query_by_label("Select proj").is_none(), "none away from the pointer");
+    h.event(Event::PointerMoved(at));
+    h.run();
+    assert!(h.query_by_label("Select proj").is_some(), "under the pointer");
+    h.event(Event::PointerMoved(egui::pos2(10.0, 10.0)));
+    h.run();
+    h.state_mut().0.welcome_selected = actions; // back on the first
     press(&mut h, Modifiers::NONE, Key::Tab); // "other", the newest
     press(&mut h, Modifiers::NONE, Key::Space); // and "proj"
     assert_eq!(app(&h).welcome_ticked, [other.clone(), repo.clone()]);

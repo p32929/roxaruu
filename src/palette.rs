@@ -186,15 +186,20 @@ impl Palette {
     /// Tick or untick row `i`, if it's a row that can be (not "Open Another
     /// Folder…").
     pub fn set_tick(&mut self, i: usize, on: bool) {
-        let Some(pick) = self.items.get(i).map(|it| it.pick.clone()) else { return };
-        if !matches!(pick, Pick::Clip(_) | Pick::Folder(_)) {
+        if !self.tickable(i) {
             return;
         }
+        let Some(pick) = self.items.get(i).map(|it| it.pick.clone()) else { return };
         self.ticked.retain(|t| *t != pick);
         if on {
             self.ticked.push(pick);
         }
         self.tick_from = Some(i);
+    }
+
+    /// Whether row `i` can be ticked: a clip, a folder.
+    pub fn tickable(&self, i: usize) -> bool {
+        self.items.get(i).is_some_and(|it| matches!(it.pick, Pick::Clip(_) | Pick::Folder(_)))
     }
 
     /// Space, Tab, ⌘-click: flip row `i`.
