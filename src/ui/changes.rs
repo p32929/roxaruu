@@ -855,33 +855,11 @@ impl App {
             })
             .collect(),
         ];
-        // Each button shows its key on itself, the place you look for it
-        // (so the status bar doesn't again).
-        // The label, then its key, dimmer, together in the middle.
-        let text = |label: &str, key: &str, main: bool| {
-            let mut job = LayoutJob::default();
-            let fmt = |font, color| egui::TextFormat { font_id: font, color, valign: egui::Align::Center, ..Default::default() };
-            job.append(label, 0.0, fmt(pt.font(12.5, Weight::Medium), if main { c.accent_text } else { c.text }));
-            if !key.is_empty() {
-                let dim = if main { c.accent_text.gamma_multiply(0.7) } else { c.text_muted };
-                job.append(key, 7.0 * s, fmt(pt.font(11.5, Weight::Regular), dim));
-            }
-            job
-        };
-        // A pair that doesn't fit side by side (a narrow sidebar) stacks.
-        let half = (ui.available_width() - 26.0 * s) / 2.0;
-        let fits = |label: &str, key: &str| ui.fonts_mut(|f| f.layout_job(text(label, key, false)).size().x) + 16.0 * s <= half;
+        // Each tip ends with the button's key.
         let shown: Vec<Vec<_>> = lines
             .into_iter()
             .filter(|l| !l.is_empty())
-            .map(|l| l.into_iter().map(|(cmd, label, tip)| (cmd, label, tip, caps(cmd).trim().to_string())).collect::<Vec<_>>())
-            .flat_map(|l| {
-                if l.iter().all(|(_, label, _, key)| fits(label, key)) {
-                    vec![l]
-                } else {
-                    l.into_iter().map(|b| vec![b]).collect()
-                }
-            })
+            .map(|l| l.into_iter().map(|(cmd, label, tip)| (cmd, label, format!("{tip}{}", caps(cmd)))).collect())
             .collect();
         // Kept at the bottom, under the list, whatever its length.
         let bottom = if shown.is_empty() { 0.0 } else { (shown.len() as f32 * 32.0 + 10.0) * s };
@@ -1235,17 +1213,19 @@ impl App {
                 let bar = bar.shrink2(vec2(10.0 * s, 2.0 * s));
                 let gap = 6.0 * s;
                 let w = (bar.width() - gap * (line.len() - 1) as f32) / line.len() as f32;
-                for (i, (cmd, label, tip, key)) in line.iter().enumerate() {
+                for (i, (cmd, label, tip)) in line.iter().enumerate() {
                     let at = Rect::from_min_size(pos2(bar.left() + i as f32 * (w + gap), bar.top()), vec2(w, bar.height()));
                     // The first is the main one: the accent, as a dialog's.
                     let main = n == 0 && i == 0;
-                    let b = egui::Button::new(text(label, key, main))
+                    let b = egui::Button::new(
+                        egui::RichText::new(label)
+                            .font(pt.font(12.5, Weight::Medium))
+                            .color(if main { c.accent_text } else { c.text }),
+                    )
                     .truncate()
                     .fill(if main { c.accent } else { c.surface })
                     .stroke(Stroke::new(1.0, if main { c.accent } else { c.border }))
                     .corner_radius(7.0 * s);
-                    #[cfg(test)]
-                    crate::ui::drawn(ui, [key.clone()], None);
                     if ui.put(at, b).on_hover_text(tip).clicked() {
                         act = Some(Act::Run(*cmd));
                     }

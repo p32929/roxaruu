@@ -477,7 +477,7 @@ thread_local! {
 
 /// Note keycaps drawn now (and, if it's clickable, where and for what).
 #[cfg(test)]
-pub(crate) fn drawn(ui: &egui::Ui, keys: impl IntoIterator<Item = String>, click: Option<(Rect, Command)>) {
+fn drawn(ui: &egui::Ui, keys: impl IntoIterator<Item = String>, click: Option<(Rect, Command)>) {
     let pass = ui.ctx().cumulative_pass_nr();
     DRAWN.with(|d| {
         let mut d = d.borrow_mut();
@@ -1052,11 +1052,15 @@ impl App {
         // editor's room): the status bar gives its keys the same width.
         let beside = self.sidebar_shown() && !compact;
         let tree_w = if beside { self.view().tree_w } else { 0.0 };
+        // The tree's keys, as many rows as they take: the last in the status
+        // bar, the rest at the bottom of the tree.
+        let mut tree_rows = if beside { self.tree_hint_rows(ui, tree_w) } else { Vec::new() };
+        let tree_row = tree_rows.pop().unwrap_or_default();
         let status = egui::Panel::bottom("status")
             .frame(bare)
             .show_separator_line(false)
-            .show(ui, |ui| self.status_bar(ui, tree_w));
-        let (hint, status_top) = (status.inner, status.response.rect.top());
+            .show(ui, |ui| self.status_bar(ui, tree_w, tree_row));
+        let (mut hint, status_top) = (status.inner, status.response.rect.top());
         // The tree runs the full height; tabs and terminals sit beside it.
         // (A compact view slides it over them instead, below.)
         if beside {
@@ -1066,7 +1070,16 @@ impl App {
                 .show_separator_line(false)
                 .default_size(260.0 * s)
                 .size_range(170.0 * s..=(ui.available_width() * 0.5).max(170.0 * s))
-                .show(ui, |ui| self.sidebar_ui(ui));
+                .show(ui, |ui| {
+                    // Always there, even empty: the tree's widgets keep their
+                    // ids as the rows come and go (a menu open on one stays).
+                    hint = hint.or(egui::Panel::bottom("tree-keys")
+                        .frame(bare)
+                        .show_separator_line(false)
+                        .show(ui, |ui| self.tree_key_rows(ui, tree_rows))
+                        .inner);
+                    self.sidebar_ui(ui)
+                });
             self.view_mut().tree_w = tree.response.rect.width();
         }
         if !self.tabs.is_empty() && !maximized {
@@ -2561,10 +2574,10 @@ impl App {
         if !self.changes_focused() {
             return vec![cmd(Command::SourceControl, "go to"), cmd(Command::ToggleSidebar, "hide")];
         }
-        // Commit and push show theirs on their buttons, under the list.
+        let commit = [cmd(Command::GitCommit, "commit"), cmd(Command::GitCommitAll, "commit all")];
         let fold = cmd(Command::CollapseFolders, if self.all_folded() { "expand all" } else { "collapse all" });
         if self.changes.typing {
-            return vec![raw("↓", "the changes"), raw("esc", "the changes")];
+            return commit.into_iter().chain([raw("↓", "the changes"), raw("esc", "the changes")]).collect();
         }
         let row = self.chosen_row();
         let staged = matches!(row, Some(Row::File(_, true, _) | Row::Section(_, true)));
@@ -2576,8 +2589,10 @@ impl App {
         };
         let stage = if self.can_stage() { raw("space", if staged { "unstage" } else { "stage" }) } else { None };
         // Most used first: a narrow sidebar shows what fits.
-        let mut list = vec![stage, open];
+        let [commit, commit_all] = commit;
+        let mut list = vec![stage, commit, cmd(Command::GitPush, "push"), open, commit_all];
         list.extend([
+            cmd(Command::GitPushAll, "push all"),
             cmd(Command::GitPull, "pull"),
             cmd(Command::GitPullAll, "pull all"),
             cmd(Command::GitStageAll, "stage all"),
@@ -2749,7 +2764,7 @@ impl App {
 
     /// `tree_w`: how wide the file tree beside it is (0 with none): the
     /// tree's keys go under it, the terminal's beside them.
-    fn status_bar(&self, ui: &mut egui::Ui, tree_w: f32) -> Option<Command> {
+    fn status_bar(&self, ui: &mut egui::Ui, tree_w: f32, tree_row: Vec<StatusHint>) -> Option<Command> {
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
         let (rect, resp) =
@@ -2890,7 +2905,7 @@ impl App {
         let split = rect.left() + tree_w;
         if tree_w > 0.0 {
             p.vline(split - 0.5, rect.y_range().shrink(5.0 * s), Stroke::new(1.0, c.border));
-            picked = picked.or(self.hints_strip(ui, rect, rect.left() + 10.0 * s, split - 8.0 * s, self.tree_hints(), "tree"));
+            picked = picked.or(self.hints_strip(ui, rect, rect.left() + 10.0 * s, split - 8.0 * s, tree_row, "tree"));
         }
         let from = if tree_w > 0.0 { split + 10.0 * s } else { rect.left() + 10.0 * s };
         if let Some((text, color)) = left {
@@ -2926,6 +2941,26 @@ impl App {
         hints: Vec<StatusHint>,
         salt: &str,
     ) -> Option<Command> {
+        self.hints_strip_fit(ui, rect, x0, x1, hints, salt, false).0
+    }
+
+    /// `hints_strip`, also saying how many of `hints` fit; `dry` only measures.
+    #[allow(clippy::too_many_arguments)]
+    fn hints_strip_fit(
+        &self,
+        ui: &egui::Ui,
+        rect: Rect,
+        x0: f32,
+        x1: f32,
+        hints: Vec<StatusHint>,
+        salt: &str,
+        dry: bool,
+    ) -> (Option<Command>, usize) {
+        let mut p = ui.painter().clone();
+        if dry {
+            p.set_invisible();
+        }
+        let mut fit = 0;
         let pt = self.paint();
         let (c, s) = (&pt.c, pt.s);
         let cap_font = fonts::keycap(10.5 * s);
@@ -2940,7 +2975,7 @@ impl App {
         let close = |group: &mut Option<(egui::layers::ShapeIdx, f32)>, end: f32| {
             if let Some((idx, start)) = group.take() {
                 let r = Rect::from_min_max(pos2(start, rect.center().y - 11.0 * s), pos2(end + pad, rect.center().y + 11.0 * s));
-                ui.painter().set(idx, egui::epaint::RectShape::new(r, 6.0 * s, c.hover, Stroke::new(1.0, c.border), StrokeKind::Inside));
+                p.set(idx, egui::epaint::RectShape::new(r, 6.0 * s, c.hover, Stroke::new(1.0, c.border), StrokeKind::Inside));
             }
         };
         let mut hints = hints.into_iter().enumerate().peekable();
@@ -2956,9 +2991,10 @@ impl App {
                     break;
                 }
                 close(&mut group, end);
-                group = Some((ui.painter().add(egui::Shape::Noop), at - pad));
-                ui.painter().galley(pos2(at, rect.center().y - g.size().y / 2.0), g.clone(), c.text_subtle);
+                group = Some((p.add(egui::Shape::Noop), at - pad));
+                p.galley(pos2(at, rect.center().y - g.size().y / 2.0), g.clone(), c.text_subtle);
                 x = at + g.size().x + 7.0 * s;
+                fit = i + 1;
                 continue;
             }
             let kg = ui.fonts_mut(|f| f.layout_no_wrap(keys, cap_font.clone(), c.text_muted));
@@ -2969,11 +3005,16 @@ impl App {
                 break;
             }
             let item = Rect::from_min_size(pos2(x - 4.0 * s, rect.top() + 3.0 * s), vec2(w + 8.0 * s, rect.height() - 6.0 * s));
+            fit = i + 1;
+            if dry {
+                end = x + w;
+                x += w + 14.0 * s;
+                continue;
+            }
             #[cfg(test)]
             drawn(ui, [kg.text().to_string()], command.map(|c| (item, c)));
             let sense = if command.is_some() { Sense::click() } else { Sense::hover() };
             let r = ui.interact(item, egui::Id::unique(("status-hint", salt, i)), sense);
-            let p = ui.painter();
             if r.hovered() && command.is_some() {
                 p.rect_filled(item, 4.0 * s, c.hover);
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -2989,7 +3030,54 @@ impl App {
             x += w + 14.0 * s;
         }
         close(&mut group, end);
+        (picked, fit)
+    }
+
+    /// The tree's keys that don't fit in the status bar: rows above it, the
+    /// same strip, top to bottom.
+    fn tree_key_rows(&self, ui: &mut egui::Ui, rows: Vec<Vec<StatusHint>>) -> Option<Command> {
+        let pt = self.paint();
+        let (c, s) = (&pt.c, pt.s);
+        if rows.is_empty() {
+            return None;
+        }
+        let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), rows.len() as f32 * 26.0 * s), Sense::hover());
+        ui.painter().rect_filled(area, 0.0, c.surface);
+        ui.painter().hline(area.x_range(), area.top() + 0.5, Stroke::new(1.0, c.border));
+        let mut picked = None;
+        for (n, row) in rows.into_iter().enumerate() {
+            let rect = Rect::from_min_size(pos2(area.left(), area.top() + n as f32 * 26.0 * s), vec2(area.width(), 26.0 * s));
+            picked = picked.or(self.hints_strip(ui, rect, rect.left() + 10.0 * s, rect.right() - 8.0 * s, row, &format!("tree{n}")));
+        }
         picked
+    }
+
+    /// The tree's (or Source Control's) keys in rows as wide as the tree,
+    /// as many as they take: the status bar shows the last, the rest stack
+    /// above it at the bottom of the tree. A group cut across rows starts
+    /// the next with its icon again.
+    pub(crate) fn tree_hint_rows(&self, ui: &egui::Ui, tree_w: f32) -> Vec<Vec<StatusHint>> {
+        let s = self.paint().s;
+        let mut rest = self.tree_hints();
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(tree_w, 26.0 * s));
+        let mut rows = Vec::new();
+        while !rest.is_empty() && rows.len() < 6 {
+            let (_, n) = self.hints_strip_fit(ui, rect, 10.0 * s, tree_w - 8.0 * s, rest.clone(), "", true);
+            // One too wide for any row: it goes on its own (with its group's
+            // icon), cut.
+            let lone = if rest.first().is_some_and(|h| h.0.is_empty()) { 2 } else { 1 };
+            let n = if n == 0 { lone } else { n }.min(rest.len());
+            let next = rest.split_off(n);
+            let mark = rest.iter().rev().find(|h| h.0.is_empty()).cloned();
+            rows.push(rest);
+            rest = next;
+            if let (Some(mark), Some(first)) = (mark, rest.first())
+                && !first.0.is_empty()
+            {
+                rest.insert(0, mark);
+            }
+        }
+        rows
     }
 
     /// The app icon as a texture (decoded once), mipmapped so the 1024px
