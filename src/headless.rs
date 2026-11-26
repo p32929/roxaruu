@@ -5956,9 +5956,11 @@ fn headless_remote_input_in_chrome() {
             // there): the command's own line with a short prompt; with a
             // long one that wraps it ("…/ro", "x"), the line `echo` printed.
             // (On GitHub's Mac that printed line once never showed.)
+            // `echo`'s own line, not the typed command (typed too soon, the
+            // tty echoes it and the shell then drops it as it draws its prompt).
             "link-printed" => app(h)
                 .terminal()
-                .is_some_and(|t| t.pane.screen().contents().contains("https://example.com/rox")),
+                .is_some_and(|t| t.pane.screen().contents().lines().any(|l| l.trim() == "https://example.com/rox")),
             "links-listed" => app(h).palette.as_ref().is_some_and(|p| !p.items.is_empty()),
             // The letter typed where the tap left the caret (a loaded
             // machine got the step before the key).
@@ -5969,7 +5971,12 @@ fn headless_remote_input_in_chrome() {
             "palette-closed" => app(h).focus == crate::app::Focus::Editor,
             // The shell's answer to the line typed after ⌃C ("done-2" only
             // shows once it ran; a loaded machine got the step first).
-            "terminal" => app(h).terminal().is_some_and(|t| t.pane.screen().contents().contains("done-2")),
+            // And the prompt after it: keys typed before it are dropped.
+            "terminal" => app(h).terminal().is_some_and(|t| {
+                let screen = t.pane.screen().contents();
+                let lines: Vec<&str> = screen.lines().collect();
+                lines.iter().position(|l| l.trim() == "done-2").is_some_and(|i| lines.iter().skip(i + 1).any(|l| l.trim_end().ends_with(['$', '%', '#', '>'])))
+            }),
             _ => true,
         };
         if matches!(step, "link-printed" | "links-listed" | "dragged" | "flicked" | "palette" | "palette-closed" | "terminal") {
