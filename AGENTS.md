@@ -27,7 +27,9 @@ Every key shows **once** on screen, in the one row it belongs to — never
 again in a header, a page or a second row (`each_key_once`). Keys are
 always shown the same way: one row of keycap + what it does
 (`Paint::key_hints`), never a column, never wrapped onto a second row,
-never drawn inside a button (buttons carry theirs in the tooltip); when a
+never drawn inside an icon button (those carry theirs in the tooltip); a
+labelled action button, like Source Control's Commit / Push, shows its key
+on itself and so in no row; when a
 row is short of room it keeps the most useful first. Keys about different
 things are grouped, each group in a faint box led by an icon of what it
 acts on (the tree, a file, search, tabs, the terminal, the whole app:

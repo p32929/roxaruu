@@ -477,7 +477,7 @@ thread_local! {
 
 /// Note keycaps drawn now (and, if it's clickable, where and for what).
 #[cfg(test)]
-fn drawn(ui: &egui::Ui, keys: impl IntoIterator<Item = String>, click: Option<(Rect, Command)>) {
+pub(crate) fn drawn(ui: &egui::Ui, keys: impl IntoIterator<Item = String>, click: Option<(Rect, Command)>) {
     let pass = ui.ctx().cumulative_pass_nr();
     DRAWN.with(|d| {
         let mut d = d.borrow_mut();
@@ -2561,10 +2561,10 @@ impl App {
         if !self.changes_focused() {
             return vec![cmd(Command::SourceControl, "go to"), cmd(Command::ToggleSidebar, "hide")];
         }
-        let commit = [cmd(Command::GitCommit, "commit"), cmd(Command::GitCommitAll, "commit all")];
+        // Commit and push show theirs on their buttons, under the list.
         let fold = cmd(Command::CollapseFolders, if self.all_folded() { "expand all" } else { "collapse all" });
         if self.changes.typing {
-            return commit.into_iter().chain([raw("↓", "the changes"), raw("esc", "the changes")]).collect();
+            return vec![raw("↓", "the changes"), raw("esc", "the changes")];
         }
         let row = self.chosen_row();
         let staged = matches!(row, Some(Row::File(_, true, _) | Row::Section(_, true)));
@@ -2576,10 +2576,8 @@ impl App {
         };
         let stage = if self.can_stage() { raw("space", if staged { "unstage" } else { "stage" }) } else { None };
         // Most used first: a narrow sidebar shows what fits.
-        let [commit, commit_all] = commit;
-        let mut list = vec![stage, commit, cmd(Command::GitPush, "push"), open, commit_all];
+        let mut list = vec![stage, open];
         list.extend([
-            cmd(Command::GitPushAll, "push all"),
             cmd(Command::GitPull, "pull"),
             cmd(Command::GitPullAll, "pull all"),
             cmd(Command::GitStageAll, "stage all"),

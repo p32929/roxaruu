@@ -2783,11 +2783,11 @@ fn headless_source_control() {
     press(&mut h, ALT | SHIFT, Key::P);
     assert!(!app(&h).available(crate::keymap::Command::GitCommitAll) && app(&h).git_ready(crate::keymap::Command::GitCommitAll));
     assert_eq!(app(&h).changes.message, "Both at once", "nothing committed");
-    assert!(h.query_by_label("Commit All").is_some());
+    assert!(h.query_by_label_contains("Commit All").is_some());
     press(&mut h, CMD_SHIFT, Key::G);
     assert!(app(&h).changes_focused());
     assert!(h.query_by_label_contains("Push").is_none(), "nothing to push yet");
-    h.get_by_label("Commit All").click();
+    h.get_by_label_contains("Commit All").click();
     wait_for(&mut h, "both committed", |a| {
         a.changes.message.is_empty() && a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.head.ahead == 1))
     });
@@ -2798,7 +2798,7 @@ fn headless_source_control() {
     // Push all (⇧⌥P) pushes both.
     h.step();
     shot(&mut h, "g2-push");
-    h.get_by_label("Push All").click();
+    h.get_by_label_contains("Push All").click();
     wait_for(&mut h, "both pushed", |a| a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.head.ahead == 0)));
     assert!(app(&h).toasts.iter().any(|t| t.msg.contains("Pushed 2 of 2")), "{:?}", app(&h).toasts.iter().map(|t| &t.msg).collect::<Vec<_>>());
 
