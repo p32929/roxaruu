@@ -2735,14 +2735,16 @@ fn headless_source_control() {
     press(&mut h, ALT | SHIFT, Key::O);
     assert_eq!(app(&h).active_tab().unwrap().path(), Some(&root.join("api").join("kept.rs")));
 
-    // Typing in the list types the message; ⇧⌥↵ commits every repository
-    // (what's staged; everything where nothing is).
+    // Typing in the list types the message; the Commit all button (⇧⌥↵)
+    // commits every repository (what's staged; everything where nothing is).
     press(&mut h, CMD_SHIFT, Key::G);
     type_text(&mut h, "Both at once");
     assert_eq!(app(&h).changes.message, "Both at once");
     assert!(app(&h).changes.typing);
     shot(&mut h, "g2-message");
-    press(&mut h, ALT | SHIFT, Key::Enter);
+    assert!(h.query_by_label_contains("Commit api").is_some(), "the one you're on, by name");
+    assert!(h.query_by_label_contains("Push all").is_none() && h.query_by_label_contains("Push api").is_none(), "nothing to push yet");
+    h.get_by_label("Commit all 2").click();
     wait_for(&mut h, "both committed", |a| {
         a.changes.message.is_empty() && a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.head.ahead == 1))
     });
@@ -2750,8 +2752,10 @@ fn headless_source_control() {
     assert_eq!(api.files.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["new.rs"], "only what was staged");
     assert!(repos(&h)[1].files.is_empty(), "nothing staged: everything");
 
-    // ⇧⌥P pushes both.
-    press(&mut h, ALT | SHIFT, Key::P);
+    // Push all (⇧⌥P) pushes both.
+    h.step();
+    shot(&mut h, "g2-push");
+    h.get_by_label_contains("Push all 2").click();
     wait_for(&mut h, "both pushed", |a| a.project.as_ref().is_some_and(|p| p.repos.iter().all(|r| r.head.ahead == 0)));
     assert!(app(&h).toasts.iter().any(|t| t.msg.contains("Pushed 2 of 2")), "{:?}", app(&h).toasts.iter().map(|t| &t.msg).collect::<Vec<_>>());
 

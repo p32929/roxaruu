@@ -751,11 +751,9 @@ impl App {
             .busy
             .as_ref()
             .map(|(what, _)| format!("{what}…"));
-        // Its keys in it, as the file search's is in its box.
-        let key = |c: Command, what: &str| self.shortcut(c).filter(|_| self.available(c)).map(|k| format!("{k} {what}"));
-        let keys: Vec<String> = [key(Command::GitCommit, "commit"), key(Command::GitCommitAll, "all")].into_iter().flatten().collect();
-        let placeholder = if keys.is_empty() { "Commit message".to_string() } else { format!("Message  {}", keys.join(" · ")) };
-        let hint = egui::RichText::new(busy.clone().unwrap_or(placeholder))
+        // Its keys are on the buttons under it (in their tips) and in the
+        // status bar.
+        let hint = egui::RichText::new(busy.clone().unwrap_or_else(|| "Commit message".to_string()))
             .color(c.text_subtle)
             .font(pt.font(12.5, Weight::Regular));
         let edit = egui::TextEdit::singleline(&mut self.changes.message)
@@ -782,9 +780,63 @@ impl App {
             self.changes.typing = true;
         }
 
+        // What the keys do, as buttons: commit (or push) the repository
+        // you're on, or every one. Only those that can run now.
+        let repos = self.repos().to_vec();
+        let here = self.current_repo().and_then(|r| repos.get(r));
+        let caps = |cmd: Command| self.shortcut(cmd).map(|k| format!("  {k}")).unwrap_or_default();
+        let name = |r: Option<&Repo>| r.map(|r| format!(" {}", r.name)).unwrap_or_default();
+        let changed = repos.iter().filter(|r| !r.files.is_empty()).count();
+        let ahead = repos.iter().filter(|r| r.head.ahead > 0).count();
+        let here_changed = here.is_some_and(|r| !r.files.is_empty());
+        let can = |cmd: Command| busy.is_none() && self.available(cmd);
+        let lines: [Vec<(Command, String, String)>; 2] = [
+            [
+                (Command::GitCommit, format!("{} Commit{}", icon::GIT_COMMIT, name(here)), format!("Commit{}", name(here))),
+                (Command::GitCommitAll, format!("Commit all {changed}"), format!("Commit every repository with changes ({changed}), with this message")),
+            ]
+            .into_iter()
+            // Commit all only when it does more than Commit would.
+            .filter(|(cmd, ..)| can(*cmd) && (*cmd == Command::GitCommit || changed > usize::from(here_changed)))
+            .collect(),
+            [
+                (Command::GitPush, format!("{} Push{}", icon::PUSH, name(here)), format!("Push{}", name(here))),
+                (Command::GitPushAll, format!("{} Push all {ahead}", icon::PUSH), format!("Push every repository with commits to push ({ahead})")),
+            ]
+            .into_iter()
+            .filter(|(cmd, ..)| can(*cmd) && {
+                let here_ahead = here.is_some_and(|r| r.head.ahead > 0);
+                // Push all only when it does more than Push would.
+                if *cmd == Command::GitPush { here_ahead } else { ahead > usize::from(here_ahead) }
+            })
+            .collect(),
+        ];
+        for line in lines.iter().filter(|l| !l.is_empty()) {
+            let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0 * s), Sense::hover());
+            let bar = bar.shrink2(vec2(10.0 * s, 2.0 * s));
+            let gap = 6.0 * s;
+            let w = (bar.width() - gap * (line.len() - 1) as f32) / line.len() as f32;
+            for (i, (cmd, label, tip)) in line.iter().enumerate() {
+                let at = Rect::from_min_size(pos2(bar.left() + i as f32 * (w + gap), bar.top()), vec2(w, bar.height()));
+                // The first is the main one: the accent, as a dialog's.
+                let main = i == 0;
+                let b = egui::Button::new(
+                    egui::RichText::new(label)
+                        .font(pt.font(12.5, Weight::Medium))
+                        .color(if main { c.accent_text } else { c.text }),
+                )
+                .truncate()
+                .fill(if main { c.accent } else { c.surface })
+                .stroke(Stroke::new(1.0, if main { c.accent } else { c.border }))
+                .corner_radius(7.0 * s);
+                if ui.put(at, b).on_hover_text(format!("{tip}{}", caps(*cmd))).clicked() {
+                    act = Some(Act::Run(*cmd));
+                }
+            }
+        }
+
         let rows = self.change_rows();
         let chosen = self.chosen(&rows);
-        let repos = self.repos().to_vec();
         if repos.is_empty() {
             let found = self
                 .project
