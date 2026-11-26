@@ -273,7 +273,7 @@ async function inputScenario() {
   await sleep(500);
   await type("echo done-$((1+1))");
   await press("Enter", "Enter", 0, "\r");
-  await mark("terminal");
+  await goAhead("terminal");                         // once the shell answered
   // A link from the terminal opens in this browser, not on the Mac.
   step = "input: link";
   await evaluate(`window.open = u => { window.__opened = u; return {}; }`);

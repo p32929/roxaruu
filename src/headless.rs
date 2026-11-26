@@ -5889,9 +5889,12 @@ fn headless_remote_input_in_chrome() {
             // ⌘P and esc reached the window (a loaded machine got the step first).
             "palette" => app(h).focus == crate::app::Focus::Sidebar,
             "palette-closed" => app(h).focus == crate::app::Focus::Editor,
+            // The shell's answer to the line typed after ⌃C ("done-2" only
+            // shows once it ran; a loaded machine got the step first).
+            "terminal" => app(h).terminal().is_some_and(|t| t.pane.screen().contents().contains("done-2")),
             _ => true,
         };
-        if matches!(step, "link-printed" | "links-listed" | "dragged" | "flicked" | "palette" | "palette-closed") {
+        if matches!(step, "link-printed" | "links-listed" | "dragged" | "flicked" | "palette" | "palette-closed" | "terminal") {
             // What it's waiting on, every few seconds, in a file (a waiting
             // test's output is held back): a wait that never ends says why.
             let note = shots.join("input-waiting.log");
