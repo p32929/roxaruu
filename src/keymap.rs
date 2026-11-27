@@ -223,7 +223,10 @@ pub fn works_in(c: Command) -> Option<&'static [Place]> {
         | Command::ZoomIn
         | Command::ZoomOut
         | Command::ResetZoom
-        | Command::FullScreen => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, List, Start],
+        | Command::FullScreen
+        | Command::ToggleRemoteAccess
+        | Command::ShowRemoteAddress
+        | Command::SwitchWindow => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, List, Start],
         Command::ToggleSplit | Command::ToggleWordWrap => &[Editor],
         Command::ToggleSidebar => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, List],
         Command::FocusSidebar | Command::CollapseFolders => &[Editor, Tree, TreeSearch, Changes, Message, Terminal],
