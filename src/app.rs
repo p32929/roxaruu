@@ -1705,7 +1705,7 @@ impl App {
     /// (`works_in`), or inside the list it opens (which it closes).
     pub fn works_here(&self, c: Command) -> bool {
         let place = self.place();
-        crate::keymap::works_in(c).is_none_or(|places| places.contains(&place))
+        self.config.keymap.places(c).is_none_or(|places| places.contains(&place))
             || own_list(c).is_some_and(|m| self.palette.as_ref().is_some_and(|p| p.mode == m))
     }
 
@@ -2511,6 +2511,7 @@ impl App {
             Mode::Clipboard => self.clip_items(&query),
             Mode::Settings => self.setting_items(&query),
             Mode::Keybindings => self.binding_items(&query),
+            Mode::Where => self.place_items(&query),
             Mode::Line => self.line_items(&query),
         };
         if let Some(p) = &mut self.palette {
@@ -2941,6 +2942,13 @@ impl App {
                 if let Some(p) = &mut self.palette {
                     p.capture = Some(c);
                 }
+            }
+            // ↵ or a click on a place: ticked or not (saved, `sync_places`).
+            Pick::Place(_) => {
+                if let Some(p) = &mut self.palette {
+                    p.toggle_tick(p.selected);
+                }
+                self.sync_places(ctx);
             }
             Pick::Hit(path, line, col, end) => {
                 self.close_palette(true, ctx);

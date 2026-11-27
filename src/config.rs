@@ -355,25 +355,47 @@ pub fn save_setting(
 /// new one goes right after the `[`. Rewritten as plain JSON if that edit
 /// wouldn't give exactly the intended list.
 pub fn save_binding(command: &str, key: Option<&str>) -> Result<(), String> {
+    edit_bindings(|src| set_binding(src, command, key))
+}
+
+/// Where `command`'s keys work (`keymap::Place` ids); `None`: back to the
+/// default. Its key entries stay.
+pub fn save_places(command: &str, places: Option<&[&str]>) -> Result<(), String> {
+    edit_bindings(|src| set_places(src, command, places))
+}
+
+fn edit_bindings(edit: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
     let path = keybindings_path();
     let src = read_config(&path).unwrap_or_else(|| "[\n]\n".into());
-    let out = set_binding(&src, command, key)?;
+    let out = edit(&src)?;
     std::fs::write(&path, out).map_err(|e| format!("can't write keybindings.json: {e}"))
 }
 
 fn set_binding(src: &str, command: &str, key: Option<&str>) -> Result<String, String> {
-    use serde_json::{Value, json};
+    let entry = key.map(|k| serde_json::json!({ "key": k, "command": command }));
+    set_entry(src, command, "key", entry)
+}
+
+fn set_places(src: &str, command: &str, places: Option<&[&str]>) -> Result<String, String> {
+    let entry = places.map(|p| serde_json::json!({ "command": command, "where": p }));
+    set_entry(src, command, "where", entry)
+}
+
+/// `command`'s entries with a `field` ("key" or "where") replaced by
+/// `entry` (or none), keeping comments and every other entry.
+fn set_entry(src: &str, command: &str, field: &str, entry: Option<serde_json::Value>) -> Result<String, String> {
+    use serde_json::Value;
     let mut want: Vec<Value> =
         json5::from_str(src).map_err(|e| format!("fix keybindings.json first ({e})"))?;
-    want.retain(|b| b.get("command").and_then(Value::as_str) != Some(command));
-    let entry = key.map(|k| json!({ "key": k, "command": command }));
+    want.retain(|b| b.get("command").and_then(Value::as_str) != Some(command) || b.get(field).is_none());
     if let Some(e) = &entry {
         want.insert(0, e.clone());
     }
     let id = format!("\"{command}\"");
+    let quoted = format!("\"{field}\"");
     let mut lines: Vec<String> = src
         .lines()
-        .filter(|l| l.trim_start().starts_with("//") || !l.contains(&id))
+        .filter(|l| l.trim_start().starts_with("//") || !(l.contains(&id) && l.contains(&quoted)))
         .map(String::from)
         .collect();
     if let Some(e) = &entry {
@@ -381,10 +403,12 @@ fn set_binding(src: &str, command: &str, key: Option<&str>) -> Result<String, St
             .iter()
             .position(|l| l.trim_start().starts_with('['))
             .map_or(0, |i| i + 1);
-        lines.insert(
-            at,
-            format!("  {{ \"key\": {}, \"command\": {id} }},", e["key"]),
-        );
+        // Written as people write them: the key (or place) beside its command.
+        let line = match field {
+            "key" => format!("  {{ \"key\": {}, \"command\": {id} }},", e["key"]),
+            _ => format!("  {{ \"command\": {id}, \"{field}\": {} }},", e[field]),
+        };
+        lines.insert(at, line);
     }
     let edited = lines.join("\n") + "\n";
     match json5::from_str::<Vec<Value>>(&edited) {
@@ -673,6 +697,33 @@ mod tests {
             "reset to default"
         );
         assert!(out.contains("// Defaults"));
+    }
+
+    /// A key and a `where` for one command are separate entries: saving
+    /// either keeps the other.
+    #[test]
+    fn keys_and_places_save_apart() {
+        let src = keymap::template();
+        let out = set_binding(&src, "file.save", Some("ctrl+e")).unwrap();
+        let out = set_places(&out, "file.save", Some(&["editor", "terminal"])).unwrap();
+        assert!(out.contains("// Defaults"), "comments survive");
+        let (km, errors) = Keymap::new(&json5::from_str::<Vec<UserBinding>>(&out).unwrap());
+        assert!(errors.is_empty(), "{errors:?}");
+        use keymap::{Command, Place};
+        assert_eq!(km.combo_for(Command::Save).map(|c| c.to_config()), Some("ctrl+e".into()));
+        assert_eq!(km.places(Command::Save), Some(&[Place::Editor, Place::Terminal][..]));
+        // The key reset: the places stay; the places reset: the key stays.
+        let out = set_binding(&out, "file.save", None).unwrap();
+        let km = Keymap::new(&json5::from_str::<Vec<UserBinding>>(&out).unwrap()).0;
+        assert!(km.custom_places(Command::Save) && !km.is_custom(Command::Save));
+        let out = set_binding(&out, "file.save", Some("ctrl+e")).unwrap();
+        let out = set_places(&out, "file.save", None).unwrap();
+        let km = Keymap::new(&json5::from_str::<Vec<UserBinding>>(&out).unwrap()).0;
+        assert!(!km.custom_places(Command::Save) && km.is_custom(Command::Save));
+        // Nothing ticked is "nowhere", not the default.
+        let out = set_places(&out, "file.save", Some(&[])).unwrap();
+        let km = Keymap::new(&json5::from_str::<Vec<UserBinding>>(&out).unwrap()).0;
+        assert_eq!(km.places(Command::Save), Some(&[][..]));
     }
 
     #[test]

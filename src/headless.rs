@@ -1568,6 +1568,53 @@ fn headless_extras_walkthrough() {
             .conflicts(crate::keymap::Command::GoToFile)
             .is_empty()
     );
+
+    // → on a shortcut: where its keys work, ticked; a tick saves at once,
+    // as a "where" entry that keeps the key; ⌘⌫ back to the default.
+    use crate::keymap::{Command, Place};
+    let select = |h: &mut Harness<'static, Root>, pick: crate::palette::Pick| {
+        let p = h.state_mut().0.palette.as_mut().unwrap();
+        p.selected = p.items.iter().position(|i| i.pick == pick).unwrap();
+    };
+    h.state_mut().0.palette.as_mut().unwrap().query = String::new();
+    h.state_mut().0.refresh_items();
+    select(&mut h, crate::palette::Pick::Binding(Command::Save));
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    let ticks = |h: &Harness<'static, Root>| {
+        let p = app(h).palette.as_ref().unwrap();
+        assert_eq!(p.mode, crate::palette::Mode::Where);
+        Place::ALL.into_iter().filter(|pl| p.ticked.contains(&crate::palette::Pick::Place(*pl))).collect::<Vec<_>>()
+    };
+    assert_eq!(ticks(&h), [Place::Editor, Place::Terminal], "Save's default places, ticked");
+    select(&mut h, crate::palette::Pick::Place(Place::Terminal));
+    press(&mut h, Modifiers::NONE, Key::Space);
+    shot(&mut h, "b5b-where");
+    assert_eq!(app(&h).config.keymap.places(Command::Save), Some(&[Place::Editor][..]));
+    assert!(read(cfg.join("keybindings.json")).contains(r#"  { "command": "file.save", "where": ["editor"] },"#));
+    assert_eq!(km(&h, Command::Save).as_deref(), Some("ctrl+s"), "the key stays");
+    assert!(!app(&h).works_here(Command::Save) || app(&h).place() == Place::Editor);
+    // ↵ ticks too.
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(ticks(&h), [Place::Editor, Place::Terminal]);
+    // (Not counting the file's own comments, which show an example.)
+    let live = || read(cfg.join("keybindings.json")).lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    assert!(!live().contains("file.save"), "the default again: no entry: {}", live());
+    select(&mut h, crate::palette::Pick::Place(Place::Tree));
+    press(&mut h, Modifiers::NONE, Key::Space);
+    assert!(app(&h).config.keymap.custom_places(Command::Save));
+    press(&mut h, CMD, Key::Backspace);
+    assert_eq!(ticks(&h), [Place::Editor, Place::Terminal], "⌘⌫: back to the default");
+    assert!(!app(&h).config.keymap.custom_places(Command::Save));
+    // esc: back to the shortcut in Keyboard Shortcuts.
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    let p = app(&h).palette.as_ref().unwrap();
+    assert_eq!(p.mode, crate::palette::Mode::Keybindings);
+    assert_eq!(p.selected_pick(), Some(&crate::palette::Pick::Binding(Command::Save)));
+    // ⌥↵ can't be recorded: Claude Code's new line in a terminal.
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    press(&mut h, ALT, Key::Enter);
+    assert!(app(&h).note_text().is_some_and(|n| n.contains("kept for the terminal")), "{:?}", app(&h).note_text());
+    assert_eq!(km(&h, Command::Save).as_deref(), Some("ctrl+s"));
     press(&mut h, Modifiers::NONE, Key::Escape);
 
     // F1: the keys for where you are, then everything.

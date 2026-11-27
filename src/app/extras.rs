@@ -11,7 +11,7 @@ use super::{App, Focus};
 use crate::config::{self, TERMINAL_FPS};
 use crate::fonts;
 use crate::fuzzy;
-use crate::keymap::{COMMANDS, Combo, Command};
+use crate::keymap::{COMMANDS, Combo, Command, Place};
 use crate::palette::{Item, Mode, Pick};
 use crate::todo::{self, Entry};
 use crate::ui::icon;
@@ -783,9 +783,80 @@ impl App {
                 } else {
                     String::new()
                 };
+                // Where its keys work, when that was changed (or never).
+                let places = km.places(info.command);
+                if km.custom_places(info.command) || places.is_some_and(<[Place]>::is_empty) {
+                    let where_ = format!("works: {}", places_summary(places.unwrap_or(&Place::ALL)));
+                    it.detail = if it.detail.is_empty() { where_ } else { format!("{} · {where_}", it.detail) };
+                }
                 Some(it)
             })
             .collect()
+    }
+
+    /// → on a shortcut: the places its keys work from, ticked.
+    pub fn open_where(&mut self, command: Command, ctx: &egui::Context) {
+        self.open_palette(Mode::Where, ctx);
+        let ticked: Vec<Pick> = self.where_now(command).into_iter().map(Pick::Place).collect();
+        if let Some(p) = &mut self.palette {
+            p.target = Some(command);
+            p.ticked = ticked;
+        }
+        self.refresh_items();
+    }
+
+    /// Where `command`'s keys work now, every place for "wherever it can run".
+    fn where_now(&self, command: Command) -> Vec<Place> {
+        self.config.keymap.places(command).map_or(Place::ALL.to_vec(), <[Place]>::to_vec)
+    }
+
+    pub(super) fn place_items(&self, query: &str) -> Vec<Item> {
+        Place::ALL
+            .into_iter()
+            .filter(|p| fuzzy::score(query, p.title()).is_some())
+            .map(|p| {
+                let mut it = Item::new(place_icon(p), p.title(), Pick::Place(p));
+                it.matched = fuzzy::positions(query, p.title());
+                it.detail = p.about().into();
+                it
+            })
+            .collect()
+    }
+
+    /// The ticks in Where differ from what's saved: save them (a list the
+    /// same as the default saves as the default).
+    pub fn sync_places(&mut self, ctx: &egui::Context) {
+        let Some((command, ticked)) = self.palette.as_ref().filter(|p| p.mode == Mode::Where).and_then(|p| {
+            let on: Vec<Place> = Place::ALL.into_iter().filter(|pl| p.ticked.contains(&Pick::Place(*pl))).collect();
+            Some((p.target?, on))
+        }) else {
+            return;
+        };
+        if ticked == self.where_now(command) {
+            return;
+        }
+        let default = crate::keymap::works_in(command).map_or(Place::ALL.to_vec(), <[Place]>::to_vec);
+        let ids: Vec<&str> = ticked.iter().map(|p| p.id()).collect();
+        self.write_places(command, (ticked != default).then_some(&ids[..]), ctx);
+    }
+
+    /// ⌘⌫ in Where: back to the default places.
+    pub fn reset_places(&mut self, ctx: &egui::Context) {
+        let Some(command) = self.palette.as_ref().and_then(|p| p.target) else { return };
+        self.write_places(command, None, ctx);
+        let ticked: Vec<Pick> = self.where_now(command).into_iter().map(Pick::Place).collect();
+        if let Some(p) = &mut self.palette {
+            p.ticked = ticked;
+        }
+    }
+
+    fn write_places(&mut self, command: Command, places: Option<&[&str]>, ctx: &egui::Context) {
+        let Some(info) = COMMANDS.iter().find(|i| i.command == command) else { return };
+        if let Err(e) = config::save_places(info.id, places) {
+            return self.warn(format!("Couldn't save where it works: {e}"));
+        }
+        self.reload_config(ctx);
+        self.notify(format!("{}: {}", info.title, places_summary(&self.where_now(command))));
     }
 
     /// Whether Keyboard Shortcuts is waiting for a new key.
@@ -796,6 +867,9 @@ impl App {
     /// The key pressed while capturing becomes `command`'s only shortcut,
     /// saved to `keybindings.json`. A clash is allowed but called out.
     pub fn record_binding(&mut self, command: Command, combo: Combo, ctx: &egui::Context) {
+        if combo.is_reserved() {
+            return self.warn(format!("{} is kept for the terminal's programs (Claude Code's new line): pick another key", combo.label()));
+        }
         self.write_binding(command, Some(combo), ctx);
     }
 
@@ -852,6 +926,33 @@ impl App {
             .into_iter()
             .find(|(_, o)| canon(o) == dir)
             .map(|(pid, _)| pid)
+    }
+}
+
+/// Places, short: "everywhere", "nowhere", "editor, terminal", or "all
+/// but …" when that's shorter.
+pub(crate) fn places_summary(places: &[Place]) -> String {
+    let name = |p: &Place| p.title().to_lowercase();
+    match places.len() {
+        0 => "nowhere".into(),
+        n if n == Place::ALL.len() => "everywhere".into(),
+        n if n > Place::ALL.len() / 2 => {
+            let out: Vec<String> = Place::ALL.iter().filter(|p| !places.contains(p)).map(name).collect();
+            format!("all but {}", out.join(", "))
+        }
+        _ => places.iter().map(name).collect::<Vec<_>>().join(", "),
+    }
+}
+
+fn place_icon(p: Place) -> &'static str {
+    match p {
+        Place::Editor => icon::FILE,
+        Place::Find | Place::TreeSearch => icon::SEARCH,
+        Place::Tree => icon::FOLDER,
+        Place::Changes | Place::Message => icon::SOURCE_CONTROL,
+        Place::Terminal => icon::TERMINAL,
+        Place::List => icon::KEYBOARD,
+        Place::Start => icon::FOLDER_OPEN,
     }
 }
 

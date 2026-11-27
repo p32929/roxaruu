@@ -17,7 +17,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 ## What it does
 
 **Keyboard first**
-1. Every action is a named command with a shortcut, and every shortcut can be changed.
+1. Every action is a named command with a shortcut, and every shortcut can be changed, along with where it works: in **Edit Keyboard Shortcuts** (from the palette, or F1), **Enter** on a command records a new key, and **→** lists the places its key can work from (the editor, the file tree, a terminal, Source Control…) to tick or untick. Both are saved to `keybindings.json`.
 2. The keys that work where you are are shown at the bottom of the screen (the editor's under the tabs, the terminal's and the file tree's in the status bar), and they change as you move around.
 3. **F1** shows every shortcut. **Ctrl+Shift+P** (**⇧⌘P** on a Mac) finds any command by name; the ones you picked last come first.
 

@@ -30,6 +30,9 @@ pub enum Mode {
     Links,
     /// Commit ▾'s actions (Source Control): push, pull, commit all…
     Git,
+    /// Keyboard Shortcuts' →: the places one command's keys work from,
+    /// ticked (`Palette::target`).
+    Where,
 }
 
 impl Mode {
@@ -44,6 +47,7 @@ impl Mode {
             Mode::Terminals => "Switch to a terminal…",
             Mode::Line => "Line number — or line:column",
             Mode::Git => "Git: commit, push, pull…",
+            Mode::Where => "Where its keys work — space ticks a place",
             Mode::Search => "Search in files…",
             Mode::Todos => "Add a task…",
             Mode::Clipboard => "Filter what you've copied…",
@@ -56,7 +60,7 @@ impl Mode {
     /// Lists where several rows can be ticked and done at once: paste
     /// several clips, open several folders or terminals.
     pub fn multi(self) -> bool {
-        matches!(self, Mode::Clipboard | Mode::Open)
+        matches!(self, Mode::Clipboard | Mode::Open | Mode::Where)
     }
 }
 
@@ -80,6 +84,8 @@ pub enum Pick {
     Setting(crate::app::Setting),
     /// A command's row in Keyboard Shortcuts.
     Binding(Command),
+    /// A place a command's keys work from (`Mode::Where`).
+    Place(crate::keymap::Place),
     /// Go to Line: line and column, from 0.
     Line(usize, usize),
     /// A link printed in the terminal.
@@ -151,6 +157,8 @@ pub struct Palette {
     pub opened: u64,
     /// The query was set for you (Open Folder's ⇥): put the cursor at its end.
     pub to_end: bool,
+    /// Where: the command whose places these are.
+    pub target: Option<Command>,
 }
 
 impl Palette {
@@ -168,6 +176,7 @@ impl Palette {
             armed: false,
             opened: 0,
             to_end: false,
+            target: None,
         }
     }
 
@@ -202,7 +211,7 @@ impl Palette {
 
     /// Whether row `i` can be ticked: a clip, a folder.
     pub fn tickable(&self, i: usize) -> bool {
-        self.items.get(i).is_some_and(|it| matches!(it.pick, Pick::Clip(_) | Pick::Folder(_)))
+        self.items.get(i).is_some_and(|it| matches!(it.pick, Pick::Clip(_) | Pick::Folder(_) | Pick::Place(_)))
     }
 
     /// Space, Tab, ⌘-click: flip row `i`.

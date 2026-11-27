@@ -5561,10 +5561,44 @@ impl App {
                     self.change_setting(set, if right { 1 } else { -1 }, ctx);
                 }
             }
-            Mode::Keybindings
-                if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Backspace)) =>
-            {
-                self.reset_binding(ctx)
+            Mode::Keybindings => {
+                let (reset, into) = ctx.input_mut(|i| {
+                    (
+                        i.consume_key(Modifiers::COMMAND, Key::Backspace),
+                        i.consume_key(Modifiers::NONE, Key::Tab) || (empty && i.consume_key(Modifiers::NONE, Key::ArrowRight)),
+                    )
+                });
+                if reset {
+                    self.reset_binding(ctx);
+                }
+                // → (or ⇥): where its keys work.
+                if into && let Some(Pick::Binding(c)) = self.palette.as_ref().and_then(|p| p.selected_pick().cloned()) {
+                    self.open_where(c, ctx);
+                    return true;
+                }
+            }
+            Mode::Where => {
+                self.sync_places(ctx);
+                let (reset, back) = ctx.input_mut(|i| {
+                    (
+                        i.consume_key(Modifiers::COMMAND, Key::Backspace),
+                        i.consume_key(Modifiers::NONE, Key::Escape) || (empty && i.consume_key(Modifiers::NONE, Key::ArrowLeft)),
+                    )
+                });
+                if reset {
+                    self.reset_places(ctx);
+                }
+                // Back to the shortcut, in Keyboard Shortcuts.
+                if back {
+                    let target = self.palette.as_ref().and_then(|p| p.target);
+                    self.open_palette(Mode::Keybindings, ctx);
+                    if let Some(p) = &mut self.palette
+                        && let Some(at) = p.items.iter().position(|it| Some(&it.pick) == target.map(Pick::Binding).as_ref())
+                    {
+                        p.selected = at;
+                    }
+                    return true;
+                }
             }
             Mode::Folders => {
                 // ⇥ into the selected folder, ⇧⇥ up out of the one typed.
@@ -5947,7 +5981,17 @@ impl App {
                 "Keyboard Shortcuts",
                 vec![
                     ("↵", "Record a new shortcut"),
+                    ("→", "Where it works"),
                     ("⌘⌫", "Back to the default"),
+                ],
+                vec![],
+            ),
+            Some(Mode::Where) => (
+                "Where a Shortcut Works",
+                vec![
+                    ("space ↵", "Tick or untick a place"),
+                    ("⌘⌫", "Back to the default"),
+                    ("esc", "Back to Keyboard Shortcuts"),
                 ],
                 vec![],
             ),
@@ -6206,8 +6250,13 @@ impl App {
                         format!("{count}  + ignored files").trim().to_string()
                     }
                     Mode::Todos => todo_summary.clone(),
-                    m if m.multi() && !pal.ticked.is_empty() => {
+                    m if m.multi() && m != Mode::Where && !pal.ticked.is_empty() => {
                         format!("{} selected", pal.ticked.len())
+                    }
+                    // Whose places these are.
+                    Mode::Where => {
+                        let title = crate::keymap::COMMANDS.iter().find(|i| Some(i.command) == pal.target).map_or("", |i| i.title);
+                        format!("{title} · saved to keybindings.json")
                     }
                     Mode::Settings => "saved to settings.json".into(),
                     Mode::Keybindings if conflicts > 0 => format!("{conflicts} clashing"),
@@ -6327,7 +6376,7 @@ impl App {
                         ui.scope_id().with(("palette-row", idx)),
                         Sense::click(),
                     );
-                    let boxed = mode.multi() && pal.tickable(idx) && (ui.rect_contains_pointer(row_rect(n)) || !pal.ticked.is_empty());
+                    let boxed = mode.multi() && pal.tickable(idx) && (ui.rect_contains_pointer(row_rect(n)) || !pal.ticked.is_empty() || mode == Mode::Where);
                     let check = boxed.then(|| {
                         let on = pal.is_ticked(idx);
                         let name = pal.items.get(idx).map_or("", |i| i.label.as_str());
@@ -6389,7 +6438,7 @@ impl App {
                     };
                     // A ticked row (lists of several) shows its place in the
                     // order they're done in.
-                    let number = pal.tick_number(idx).map(|n| n.to_string());
+                    let number = pal.tick_number(idx).filter(|_| mode != Mode::Where).map(|n| n.to_string());
                     let glyph = if let Some(n) = &number {
                         (n.as_str(), Some(c.accent))
                     } else {
@@ -6501,8 +6550,14 @@ impl App {
             }
             Mode::Keybindings => vec![
                 (k("↵"), "change shortcut"),
+                (k("→"), "where it works"),
                 (k("⌘⌫"), "reset to default"),
                 esc,
+            ],
+            Mode::Where => vec![
+                (k("space ↵"), "tick / untick"),
+                (k("⌘⌫"), "back to default"),
+                (k("esc"), "back to shortcuts"),
             ],
             Mode::Commands => vec![(k("↑ ↓"), "move"), (k("↵"), "run command"), esc],
             Mode::Open => {

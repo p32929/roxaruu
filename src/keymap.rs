@@ -207,6 +207,68 @@ pub enum Place {
     Start,
 }
 
+impl Place {
+    pub const ALL: [Place; 9] = [
+        Place::Editor,
+        Place::Find,
+        Place::Tree,
+        Place::TreeSearch,
+        Place::Changes,
+        Place::Message,
+        Place::Terminal,
+        Place::List,
+        Place::Start,
+    ];
+
+    /// Its name in `keybindings.json`'s `"where"` (kept: users' files name it).
+    pub fn id(self) -> &'static str {
+        match self {
+            Place::Editor => "editor",
+            Place::Find => "find",
+            Place::Tree => "tree",
+            Place::TreeSearch => "treeSearch",
+            Place::Changes => "sourceControl",
+            Place::Message => "commitMessage",
+            Place::Terminal => "terminal",
+            Place::List => "lists",
+            Place::Start => "start",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Place::Editor => "Editor",
+            Place::Find => "Find / Replace box",
+            Place::Tree => "File tree",
+            Place::TreeSearch => "The tree's search box",
+            Place::Changes => "Source Control's list",
+            Place::Message => "The commit message",
+            Place::Terminal => "Terminal",
+            Place::List => "Palette and lists",
+            Place::Start => "Start page",
+        }
+    }
+
+    /// What it is, for the Where list.
+    pub fn about(self) -> &'static str {
+        match self {
+            Place::Editor => "an open file's text",
+            Place::Find => "the box ⌘F opens over the editor",
+            Place::Tree => "walking the files on the left",
+            Place::TreeSearch => "\"Search files and folders\" above the tree",
+            Place::Changes => "the changed files, in Source Control",
+            Place::Message => "the box at the top of Source Control",
+            Place::Terminal => "a terminal, and what runs in it",
+            Place::List => "the command palette, Open…, Search in Files…",
+            Place::Start => "no folder open",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Place> {
+        Place::ALL.into_iter().find(|p| p.id() == id)
+    }
+}
+
 /// The places a command's key works from (the owner's table, part by
 /// part); `None`: not decided yet, it works wherever it can run. A list's
 /// own key closes it from inside whatever this says (`App::run`).
@@ -546,6 +608,12 @@ impl Combo {
 
     /// Does a key press match? `physical` rescues chords whose logical key is
     /// a different character: ⌥O types "ø" on macOS, ⇧, types "<".
+    /// ⌥↵ (⇧ or not): a terminal program's (Claude Code's new line), never
+    /// a shortcut (the owner's rule).
+    pub fn is_reserved(&self) -> bool {
+        self.alt && !self.ctrl && self.key == Key::Enter
+    }
+
     fn matches(&self, key: Key, physical: Option<Key>, m: Modifiers) -> bool {
         (key == self.key || ((m.alt || m.shift) && physical == Some(self.key)))
             && self.ctrl == (m.ctrl || m.mac_cmd)
@@ -600,18 +668,26 @@ pub fn joined(caps: &[String]) -> String {
     caps.join(if mac_keys() { "" } else { "+" })
 }
 
-/// One entry of `keybindings.json`.
+/// One entry of `keybindings.json`: a key for a command, or where its keys
+/// work (`"where": ["editor", "terminal"]`, `Place::id`). Each kind
+/// replaces only its own: a `where` keeps the default keys.
 #[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct UserBinding {
-    key: String,
+    #[serde(default)]
+    key: Option<String>,
     command: String,
+    #[serde(default, rename = "where")]
+    places: Option<Vec<String>>,
 }
 
 pub struct Keymap {
     bindings: Vec<(Combo, Command)>,
     /// Commands whose keys come from `keybindings.json`.
     custom: Vec<Command>,
+    /// Where a command's keys work, as `keybindings.json` says (in place
+    /// of `works_in`'s).
+    places: Vec<(Command, Vec<Place>)>,
 }
 
 impl Keymap {
@@ -620,8 +696,9 @@ impl Keymap {
         let mut errors = Vec::new();
         let mut bindings = Vec::new();
         let mut custom = Vec::new();
+        let mut places = Vec::new();
         for info in COMMANDS {
-            let overrides: Vec<_> = user.iter().filter(|b| b.command == info.id).collect();
+            let overrides: Vec<_> = user.iter().filter(|b| b.command == info.id && b.key.is_some()).collect();
             if !overrides.is_empty() {
                 custom.push(info.command);
             }
@@ -630,23 +707,43 @@ impl Keymap {
             } else {
                 overrides
                     .iter()
-                    .map(|b| b.key.as_str())
+                    .filter_map(|b| b.key.as_deref())
                     .filter(|k| !k.trim().is_empty())
                     .collect()
             };
             for k in keys {
                 match Combo::parse(k) {
+                    Ok(c) if c.is_reserved() => errors.push(format!("\"{k}\" is kept for the terminal's programs (Claude Code's new line)")),
                     Ok(c) => bindings.push((c, info.command)),
                     Err(e) => errors.push(e),
                 }
             }
         }
         for b in user {
-            if !COMMANDS.iter().any(|c| c.id == b.command) && !RETIRED.contains(&b.command.as_str()) {
+            let known = COMMANDS.iter().find(|c| c.id == b.command);
+            if known.is_none() && !RETIRED.contains(&b.command.as_str()) {
                 errors.push(format!("unknown command \"{}\"", b.command));
             }
+            if b.key.is_none() && b.places.is_none() {
+                errors.push(format!("\"{}\": needs a \"key\" or a \"where\"", b.command));
+            }
+            let (Some(info), Some(names)) = (known, &b.places) else { continue };
+            let mut list = Vec::new();
+            for name in names {
+                match Place::from_id(name) {
+                    Some(p) if !list.contains(&p) => list.push(p),
+                    Some(_) => {}
+                    None => errors.push(format!(
+                        "unknown place \"{name}\" for \"{}\" (one of: {})",
+                        b.command,
+                        Place::ALL.map(Place::id).join(", ")
+                    )),
+                }
+            }
+            places.retain(|(c, _)| *c != info.command);
+            places.push((info.command, list));
         }
-        (Keymap { bindings, custom }, errors)
+        (Keymap { bindings, custom, places }, errors)
     }
 
     pub fn command_for(&self, key: Key, physical: Option<Key>, m: Modifiers) -> Option<Command> {
@@ -679,6 +776,21 @@ impl Keymap {
 
     pub fn is_custom(&self, command: Command) -> bool {
         self.custom.contains(&command)
+    }
+
+    /// Where `command`'s keys work: `keybindings.json`'s `where`, else the
+    /// owner's table (`works_in`); `None`: wherever it can run.
+    pub fn places(&self, command: Command) -> Option<&[Place]> {
+        self.places
+            .iter()
+            .find(|(c, _)| *c == command)
+            .map(|(_, p)| p.as_slice())
+            .or_else(|| works_in(command))
+    }
+
+    /// Whether `keybindings.json` says where `command`'s keys work.
+    pub fn custom_places(&self, command: Command) -> bool {
+        self.places.iter().any(|(c, _)| *c == command)
     }
 
     /// The first key bound to `command`, for showing in the UI.
@@ -717,7 +829,11 @@ pub fn template() -> String {
     let mut s = String::from(
         "// Oxru keyboard shortcuts. Saved changes apply instantly.\n\
          //\n\
-         // Each entry replaces ALL default keys of its command; use \"key\": \"\" to unbind.\n\
+         // A \"key\" entry replaces ALL default keys of its command; use \"key\": \"\" to unbind.\n\
+         // A \"where\" entry says where its keys work, e.g.\n\
+         //   { \"command\": \"file.save\", \"where\": [\"editor\", \"terminal\"] }\n\
+         // (places: editor, find, tree, treeSearch, sourceControl, commitMessage,\n\
+         // terminal, lists, start). Keyboard Shortcuts (→ on a row) sets both.\n\
          // Modifiers: ctrl (also matches ⌘ on macOS), alt, shift. Example: \"ctrl+shift+p\".\n\
          //\n\
          // Defaults — uncomment a line to change it:\n[\n",
@@ -759,8 +875,40 @@ mod tests {
 
     fn user(key: &str, command: &str) -> UserBinding {
         UserBinding {
-            key: key.into(),
+            key: Some(key.into()),
             command: command.into(),
+            places: None,
+        }
+    }
+
+    fn user_where(command: &str, places: &[&str]) -> UserBinding {
+        UserBinding {
+            key: None,
+            command: command.into(),
+            places: Some(places.iter().map(|p| p.to_string()).collect()),
+        }
+    }
+
+    /// A `where` entry sets where the keys work and keeps the keys; an
+    /// unknown place is an error, not a crash; a key entry leaves `where`.
+    #[test]
+    fn where_entries_keep_the_keys() {
+        let (km, errors) = Keymap::new(&[user_where("file.save", &["editor"])]);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(km.combo_for(Command::Save).is_some(), "Save keeps ⌘S");
+        assert!(!km.is_custom(Command::Save));
+        assert_eq!(km.places(Command::Save), Some(&[Place::Editor][..]));
+        assert!(km.custom_places(Command::Save));
+        // Not overridden: the owner's table.
+        assert_eq!(km.places(Command::CloseTab), works_in(Command::CloseTab));
+        let (km, errors) = Keymap::new(&[user_where("file.save", &["editor", "nowhere"]), user("ctrl+e", "file.save")]);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("unknown place \"nowhere\""));
+        assert_eq!(km.places(Command::Save), Some(&[Place::Editor][..]));
+        assert_eq!(km.combo_for(Command::Save).map(|c| c.to_config()), Some("ctrl+e".into()));
+        // Every place's id reads back.
+        for p in Place::ALL {
+            assert_eq!(Place::from_id(p.id()), Some(p));
         }
     }
 
@@ -785,6 +933,19 @@ mod tests {
         } else {
             assert!(f11.as_deref().is_some_and(|l| l.contains("F11")), "{f11:?}");
         }
+    }
+
+    /// No default is ⌥↵, and recording it is refused (`record_binding`).
+    #[test]
+    fn alt_enter_is_never_a_shortcut() {
+        assert!(Combo::parse("alt+enter").unwrap().is_reserved());
+        assert!(Combo::parse("alt+shift+enter").unwrap().is_reserved());
+        assert!(!Combo::parse("ctrl+alt+enter").unwrap().is_reserved());
+        let (km, _) = Keymap::new(&[]);
+        assert!(km.bindings.iter().all(|(c, _)| !c.is_reserved()));
+        let (km, errors) = Keymap::new(&[user("alt+enter", "file.save")]);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(km.combo_for(Command::Save).is_none(), "refused, not bound");
     }
 
     #[test]
@@ -940,7 +1101,7 @@ mod tests {
         // Uncommented, every line is a valid binding — including `ctrl+\\`.
         let live = template().replace("  // {", "  {");
         let parsed: Vec<UserBinding> = json5::from_str(&live).unwrap();
-        assert!(parsed.iter().any(|b| b.key == "ctrl+\\"));
+        assert!(parsed.iter().any(|b| b.key.as_deref() == Some("ctrl+\\")));
         for c in COMMANDS {
             for k in c.keys.iter().map(|k| k.strip_prefix("pc:").unwrap_or(k)) {
                 assert!(Combo::parse(k).is_ok(), "{k}");

@@ -19,7 +19,10 @@ zoom…) work anywhere; keys that act on one place work only there
 (Source Control's commit / push / pull while it shows, `git_ready` for
 its buttons; the tree's Move to Trash). Where each key works is the owner's
 table, `keymap::works_in` (the places: `Place`, where the keyboard is now:
-`App::place`); a key it doesn't name yet works wherever it can run. Its
+`App::place`); a key it doesn't name yet works wherever it can run.
+Users change it per command in Keyboard Shortcuts (→ on a row:
+`Mode::Where`), saved as `keybindings.json` `"where"` entries, which
+`Keymap::places` reads first. ⌥↵ can never be a key (`is_reserved`). Its
 hints follow it (`key_reaches`). A key shown on screen works from
 there (`visible_keys_work`), and one that can't run now is never shown.
 A focused terminal leaves the program its ⌃ and ⌥ chords
