@@ -76,7 +76,7 @@ enum Act {
 }
 
 impl App {
-    fn repos(&self) -> &[Repo] {
+    pub(crate) fn repos(&self) -> &[Repo] {
         self.project.as_ref().map_or(&[], |p| p.repos.as_slice())
     }
 
@@ -84,6 +84,27 @@ impl App {
     /// keyboard is: its keys work from the editor and a terminal then.
     pub(crate) fn changes_shown(&self) -> bool {
         self.changes.on && self.sidebar_shown()
+    }
+
+    /// Commit ▾'s actions, grouped, each with whether it can run now: the
+    /// card's menu and its key's list (`Mode::Git`).
+    pub(crate) fn git_menu(&self) -> crate::ui::MenuGroups {
+        let busy = self.changes.busy.is_some();
+        let repos = self.repos();
+        let can = |cmd: Command| !busy && self.git_ready(cmd);
+        let ahead: u32 = repos.iter().map(|r| r.head.ahead).sum();
+        let here_ahead = self.current_repo().and_then(|r| repos.get(r)).map_or(0, |r| r.head.ahead);
+        let staged_all = repos.iter().any(|r| r.files.iter().any(|f| f.unstaged.is_some()));
+        vec![
+            vec![(Command::GitCommit, "Commit", can(Command::GitCommit)), (Command::GitCommitAll, "Commit All", can(Command::GitCommitAll))],
+            vec![
+                (Command::GitPush, "Push", !busy && here_ahead > 0),
+                (Command::GitPushAll, "Push All", can(Command::GitPushAll) && ahead > 0),
+                (Command::GitPull, "Pull", can(Command::GitPull)),
+                (Command::GitPullAll, "Pull All", can(Command::GitPullAll)),
+            ],
+            vec![(Command::GitStageAll, "Stage All", !busy && staged_all)],
+        ]
     }
 
     /// Whether the keyboard is in the Changes view.
@@ -910,19 +931,10 @@ impl App {
         caret_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "More Git Actions"));
         // A line between the two halves.
         ui.painter().vline(more.left(), more.y_range().shrink(5.0 * s), Stroke::new(1.0, if on { c.accent_text.gamma_multiply(0.4) } else { c.border }));
-        let staged_all = repos.iter().any(|r| r.files.iter().any(|f| f.unstaged.is_some()));
-        let groups: crate::ui::MenuGroups = vec![
-            vec![(Command::GitCommit, "Commit", can(Command::GitCommit)), (Command::GitCommitAll, "Commit All", can(Command::GitCommitAll))],
-            vec![
-                (Command::GitPush, "Push", busy.is_none() && here_ahead > 0),
-                (Command::GitPushAll, "Push All", can(Command::GitPushAll) && ahead > 0),
-                (Command::GitPull, "Pull", can(Command::GitPull)),
-                (Command::GitPullAll, "Pull All", can(Command::GitPullAll)),
-            ],
-            vec![(Command::GitStageAll, "Stage All", busy.is_none() && staged_all)],
-        ];
+        let groups = self.git_menu();
         let key = |c: Command| self.config.keymap.combos(c).next().map(|k| k.label());
-        if let Some(picked) = egui::Popup::menu(&caret_resp.on_hover_text("More: commit all, push, pull, stage all"))
+        let more_tip = format!("More: commit all, push, pull, stage all{}", self.tip_keys(Command::GitMenu));
+        if let Some(picked) = egui::Popup::menu(&caret_resp.on_hover_text(more_tip))
             .show(|ui| crate::ui::command_menu(ui, &groups, &key))
             .and_then(|r| r.inner)
         {

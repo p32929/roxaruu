@@ -420,6 +420,8 @@ fn passes_the_shell_on(c: crate::keymap::Command, windows: bool) -> bool {
             // Source Control's, only while it shows (`App::available`):
             // otherwise they stay the program's.
             | GitCommit | GitCommitAll | GitPush | GitPushAll | GitPull | GitPullAll | GitOpenFile
+            // Ctrl+↓ elsewhere: no shell binds it.
+            | TerminalBottom
             // The terminal's own ⌥ keys, and clipboard history (Meta-V is
             // unbound in readline and zsh).
             | ToggleTerminal | NewTerminal | CopyTerminalOutput | CloseTerminal | ToggleTerminalGrid

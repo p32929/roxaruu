@@ -367,6 +367,7 @@ pub mod icon {
             Command::GoToTab(_) => FILE,
             Command::SwitchFocus => TERMINAL,
             Command::ClearTerminal => CLEAR,
+            Command::TerminalBottom => ARROW_DOWN,
             Command::TogglePinTab => PIN,
             Command::CopyTerminalOutput => COPY,
             Command::SourceControl => SOURCE_CONTROL,
@@ -376,6 +377,7 @@ pub mod icon {
             Command::GitPush | Command::GitPushAll => PUSH,
             Command::GitPull | Command::GitPullAll => PULL,
             Command::GitOpenFile => GO_TO_FILE,
+            Command::GitMenu => SOURCE_CONTROL,
             Command::FocusSidebar => FILE,
             Command::ToggleTerminal | Command::SwitchTerminal | Command::JumpTerminal(_) => {
                 TERMINAL
@@ -2622,10 +2624,22 @@ impl App {
         use crate::ui::changes::Row;
         let cmd = |c, what| self.hint(c, what);
         let raw = |keys: &str, what: &'static str| Some((keys.to_string(), what, None));
+        // Elsewhere, its keys that work from there (`works_in`; Open the
+        // Changed File shows on the editor's row).
         if !self.changes_focused() {
-            return vec![cmd(Command::SourceControl, "go to"), cmd(Command::ToggleSidebar, "hide")];
+            return vec![
+                cmd(Command::SourceControl, "go to"),
+                cmd(Command::GitCommit, "commit"),
+                cmd(Command::GitCommitAll, "commit all"),
+                cmd(Command::GitPush, "push"),
+                cmd(Command::GitPushAll, "push all"),
+                cmd(Command::GitPull, "pull"),
+                cmd(Command::GitPullAll, "pull all"),
+                cmd(Command::GitDiscard, "discard"),
+                cmd(Command::ToggleSidebar, "hide"),
+            ];
         }
-        let commit = [cmd(Command::GitCommit, "commit"), cmd(Command::GitCommitAll, "commit all")];
+        let commit = [cmd(Command::GitCommit, "commit"), cmd(Command::GitCommitAll, "commit all"), cmd(Command::GitMenu, "more")];
         let fold = cmd(Command::CollapseFolders, if self.all_folded() { "expand all" } else { "collapse all" });
         if self.changes.typing {
             return commit.into_iter().chain([raw("↓", "to the changes"), raw("esc", "leave the message")]).collect();
@@ -2640,8 +2654,8 @@ impl App {
         };
         let stage = if self.can_stage() { raw("space", if staged { "unstage" } else { "stage" }) } else { None };
         // Most used first: a narrow sidebar shows what fits.
-        let [commit, commit_all] = commit;
-        let mut list = vec![stage, commit, cmd(Command::GitPush, "push"), open, commit_all];
+        let [commit, commit_all, more] = commit;
+        let mut list = vec![stage, commit, cmd(Command::GitPush, "push"), open, commit_all, more];
         list.extend([
             cmd(Command::GitPushAll, "push all"),
             cmd(Command::GitPull, "pull"),
@@ -2676,6 +2690,7 @@ impl App {
                 cmd(Command::ToggleTerminal, "hide"),
                 cmd(Command::MaximizeTerminal, if self.terminal_max { "restore size" } else { "maximize" }),
                 cmd(Command::SwitchTerminal, "switch"),
+                cmd(Command::TerminalBottom, "to the bottom"),
                 cmd(Command::ClearTerminal, "clear"),
                 cmd(Command::CopyTerminalOutput, "copy output"),
                 cmd(Command::OpenTerminalLink, "open a link"),
@@ -5363,6 +5378,7 @@ impl App {
         }
         // Scrolled up: where in the history (a thin bar at the edge), and how
         // much is below, which a click goes back to (as typing does).
+        let bottom_key = self.tip_keys(Command::TerminalBottom);
         if let Some(t) = self.terminals.get_mut(i)
             && t.pane.scroll_offset() > 0
         {
@@ -5385,7 +5401,7 @@ impl App {
             if r.hovered() {
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
-            if r.on_hover_text("Back to the bottom (typing goes there too)").clicked() {
+            if r.on_hover_text(format!("Back to the bottom (typing goes there too){bottom_key}")).clicked() {
                 t.pane.scroll_to_bottom();
             }
         }
@@ -6512,6 +6528,7 @@ impl App {
             Mode::Terminals => vec![(k("↑ ↓"), "move"), (k("↵"), "switch to terminal"), esc],
             Mode::Links => vec![(k("↑ ↓"), "move"), (k("↵"), "open in browser"), esc],
             Mode::Line => vec![(k("↵"), "go to line"), esc],
+            Mode::Git => vec![(k("↑ ↓"), "move"), (k("↵"), "run"), esc],
         }
     }
 }

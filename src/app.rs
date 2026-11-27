@@ -779,6 +779,12 @@ impl App {
             Command::GitPull => self.sync(crate::git::Op::Pull, false, ctx),
             Command::GitPullAll => self.sync(crate::git::Op::Pull, true, ctx),
             Command::GitOpenFile => self.open_changed_file(),
+            Command::GitMenu => self.open_palette(Mode::Git, ctx),
+            Command::TerminalBottom => {
+                if let Some(t) = self.terminal_mut() {
+                    t.pane.scroll_to_bottom();
+                }
+            }
             Command::CloseOtherTabs
             | Command::CloseTabsToRight
             | Command::CloseTabsToLeft
@@ -1016,6 +1022,8 @@ impl App {
             Command::GitStage => self.can_stage(),
             Command::GitDiscard => self.can_discard(),
             Command::GitOpenFile => self.changes_shown() && self.changed_file_target(),
+            Command::GitMenu => self.changes_shown() && !self.repos().is_empty(),
+            Command::TerminalBottom => self.terminal_focused() && self.terminal().is_some_and(|t| t.pane.scroll_offset() > 0),
             // While Source Control shows: otherwise a terminal's ⌥P, ⌥L…
             // are the program's (the buttons ask `git_ready`).
             Command::GitCommit
@@ -2471,6 +2479,7 @@ impl App {
         let (mode, query) = (p.mode, p.query.clone());
         let items = match mode {
             Mode::Commands => self.command_items(&query),
+            Mode::Git => self.git_items(&query),
             Mode::Themes => {
                 let names: Vec<String> =
                     self.config.themes.iter().map(|t| t.name.clone()).collect();
@@ -2548,6 +2557,27 @@ impl App {
             .collect();
         scored.sort_by_key(|(s, _)| -s); // stable: ties keep COMMANDS order
         scored.into_iter().map(|(_, i)| i).collect()
+    }
+
+    /// Commit ▾'s actions that can run now, as a list (`Mode::Git`).
+    fn git_items(&self, query: &str) -> Vec<Item> {
+        self.git_menu()
+            .into_iter()
+            .flatten()
+            .filter(|(_, _, on)| *on)
+            .filter_map(|(c, title, _)| {
+                Some(Item {
+                    icon: icon::for_command(c),
+                    label: title.to_string(),
+                    detail: String::new(),
+                    caps: self.config.keymap.combo_for(c).map(|k| k.caps()).unwrap_or_default(),
+                    matched: fuzzy::positions(query, title),
+                    dim: false,
+                    tint: None,
+                    pick: Pick::Command(fuzzy::score(query, title).map(|_| c)?),
+                })
+            })
+            .collect()
     }
 
     /// Start a search once typing has paused, and take results when done.
@@ -3122,6 +3152,7 @@ fn own_list(c: Command) -> Option<Mode> {
         Command::Settings => Mode::Settings,
         Command::Keybindings => Mode::Keybindings,
         Command::ClipboardHistory => Mode::Clipboard,
+        Command::GitMenu => Mode::Git,
         _ => return None,
     })
 }

@@ -93,6 +93,7 @@ pub enum Command {
     GoToTab(u8),
     SwitchFocus,
     ClearTerminal,
+    TerminalBottom,
     CopyTerminalOutput,
     ToggleTerminal,
     NewTerminal,
@@ -116,6 +117,7 @@ pub enum Command {
     GitPull,
     GitPullAll,
     GitOpenFile,
+    GitMenu,
     Quit,
 }
 
@@ -236,10 +238,10 @@ pub fn works_in(c: Command) -> Option<&'static [Place]> {
         | Command::SwitchTerminal
         | Command::JumpTerminal(_) => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal],
         Command::ToggleTerminal | Command::NewTerminal => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, Start],
-        Command::ClearTerminal | Command::CopyTerminalOutput | Command::CloseTerminal | Command::OpenTerminalLink => &[Terminal],
+        Command::ClearTerminal | Command::CopyTerminalOutput | Command::CloseTerminal | Command::OpenTerminalLink | Command::TerminalBottom => &[Terminal],
         // Source Control's: while it shows (`App::available`).
         Command::SourceControl => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal],
-        Command::GitStage | Command::GitStageAll => &[Changes, Message],
+        Command::GitStage | Command::GitStageAll | Command::GitMenu => &[Changes, Message],
         Command::GitDiscard => &[Editor, Changes, Message],
         Command::GitCommit
         | Command::GitCommitAll
@@ -369,6 +371,7 @@ commands! {
     ToggleTerminal, "terminal.toggle", "Show / Hide Terminal", ["alt+t"];
     NewTerminal, "terminal.new", "New Terminal", ["alt+n"];
     ClearTerminal, "terminal.clear", "Clear Terminal", ["ctrl+k"];
+    TerminalBottom, "terminal.bottom", "Terminal: Back to the Bottom", ["ctrl+down"];
     CopyTerminalOutput, "terminal.copyOutput", "Copy the Last Command's Output", ["alt+c"];
     CloseTerminal, "terminal.close", "Close Terminal", ["alt+w"];
     ToggleTerminalGrid, "terminal.grid", "Terminals Side by Side / as Tabs", ["alt+g"];
@@ -398,6 +401,7 @@ commands! {
     GitPull, "git.pull", "Pull", ["alt+l"];
     GitPullAll, "git.pullAll", "Pull All Repositories", ["alt+shift+l"];
     GitOpenFile, "git.openFile", "Open the Changed File", ["alt+shift+o"];
+    GitMenu, "git.more", "More Git Actions…", ["alt+shift+g"];
     Quit, "app.quit", "Quit", ["ctrl+q"];
 }
 

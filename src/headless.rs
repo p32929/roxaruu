@@ -1732,6 +1732,16 @@ fn headless_every_shortcut() {
     assert_eq!(crate::app::dry_run(false), [Command::CopyTerminalOutput]);
     done.push(Command::CopyTerminalOutput);
 
+    // Back to the bottom: once it's scrolled up.
+    run(&mut h, "for i in $(seq 0 29); do echo line-$i; done");
+    wait_for(&mut h, "the lines", screen_line("line-29"));
+    h.state_mut().0.terminal_mut().unwrap().pane.scroll_lines(10);
+    assert!(app(&h).available(Command::TerminalBottom), "scrolled up");
+    let (_, _, (key, mods)) = sheet.iter().find(|s| s.0 == Command::TerminalBottom).copied().unwrap();
+    press(&mut h, mods, key);
+    assert_eq!(app(&h).terminal().unwrap().pane.scroll_offset(), 0, "⌘↓: back at the bottom");
+    done.push(Command::TerminalBottom);
+
     // From the file tree: its own keys get through.
     h.state_mut().0.focus_sidebar();
     h.step();
@@ -2813,6 +2823,13 @@ fn headless_source_control() {
     press(&mut h, CMD_SHIFT, Key::G);
     assert!(app(&h).changes_focused());
     assert!(h.query_by_label("Push").is_none() && h.query_by_label("Push All").is_none(), "nothing to push yet");
+    // Its key (⌥⇧G) lists them to pick with the keyboard; again, it's gone.
+    press(&mut h, ALT | SHIFT, Key::G);
+    let pal = app(&h).palette.as_ref().expect("⌥⇧G lists the actions");
+    assert_eq!(pal.mode, crate::palette::Mode::Git);
+    assert!(pal.items.iter().any(|i| i.label == "Commit All"), "{:?}", pal.items.iter().map(|i| &i.label).collect::<Vec<_>>());
+    press(&mut h, ALT | SHIFT, Key::G);
+    assert!(app(&h).palette.is_none());
     // The compose card: Commit's ▾ holds Commit All (and push, pull…).
     h.get_by_label("More Git Actions").click();
     h.run();

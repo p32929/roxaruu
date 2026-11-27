@@ -28,6 +28,8 @@ pub enum Mode {
     Keybindings,
     Line,
     Links,
+    /// Commit ▾'s actions (Source Control): push, pull, commit all…
+    Git,
 }
 
 impl Mode {
@@ -41,6 +43,7 @@ impl Mode {
             Mode::Folders => "Type a folder's path…",
             Mode::Terminals => "Switch to a terminal…",
             Mode::Line => "Line number — or line:column",
+            Mode::Git => "Git: commit, push, pull…",
             Mode::Search => "Search in files…",
             Mode::Todos => "Add a task…",
             Mode::Clipboard => "Filter what you've copied…",
