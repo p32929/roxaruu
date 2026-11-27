@@ -355,7 +355,6 @@ pub mod icon {
             Command::ToggleRemoteAccess | Command::ShowRemoteAddress | Command::SwitchWindow => EYE,
             Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => FONT,
             Command::FullScreen | Command::MaximizeWindow => MAXIMIZE,
-            Command::MinimizeWindow => WINDOW_MINIMIZE,
             Command::MoveLineUp
             | Command::MoveLineDown
             | Command::DuplicateLineUp
@@ -2465,7 +2464,7 @@ impl App {
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let key = |cmd: Command| self.shortcut(cmd).map(|k| format!("  {k}")).unwrap_or_default();
         let buttons = [
-            (icon::WINDOW_MINIMIZE, format!("Minimize{}", key(Command::MinimizeWindow)), false),
+            (icon::WINDOW_MINIMIZE, "Minimize".to_string(), false),
             (
                 if maximized { icon::WINDOW_RESTORE } else { icon::WINDOW_MAXIMIZE },
                 format!("{}{}", if maximized { "Restore" } else { "Maximize" }, key(Command::MaximizeWindow)),

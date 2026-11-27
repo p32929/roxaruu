@@ -261,6 +261,7 @@ fn main() -> eframe::Result {
                 tracing::info!(gpu = %a.name, backend = ?a.backend, driver = %a.driver_info, "graphics");
             }
             sys::quit_closes_the_window();
+            sys::window_menu();
             // The detached copy's launcher has already exited: come to the
             // front ourselves rather than open behind the terminal.
             if launch.foreground {

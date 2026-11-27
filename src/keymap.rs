@@ -78,7 +78,6 @@ pub enum Command {
     ResetZoom,
     FullScreen,
     MaximizeWindow,
-    MinimizeWindow,
     FocusSidebar,
     GoToLine,
     ToggleComment,
@@ -125,6 +124,19 @@ pub struct CommandInfo {
     pub id: &'static str,
     pub title: &'static str,
     pub keys: &'static [&'static str],
+}
+
+impl CommandInfo {
+    /// Its default keys on this system: one written `pc:…` is Windows' and
+    /// Linux's only (on a Mac, F11 is the system's: macOS's own ⌃⌘F, in
+    /// its Window menu, is full screen there).
+    pub fn default_keys(&self) -> impl Iterator<Item = &'static str> {
+        self.keys.iter().filter_map(|k| match k.strip_prefix("pc:") {
+            Some(_) if cfg!(target_os = "macos") => None,
+            Some(k) => Some(k),
+            None => Some(*k),
+        })
+    }
 }
 
 /// The file manager's name here, in what Roxaruu says.
@@ -207,7 +219,15 @@ pub fn works_in(c: Command) -> Option<&'static [Place]> {
         Command::RenameFile | Command::OpenInTerminal => FILES,
         Command::DeleteFile => &[Tree, TreeSearch],
         Command::OpenInDefaultApp | Command::CopyPath | Command::CopyRelativePath => &[Editor, Tree, TreeSearch, Changes],
-        Command::SearchInFiles => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, List, Start],
+        Command::SearchInFiles
+        | Command::ZoomIn
+        | Command::ZoomOut
+        | Command::ResetZoom
+        | Command::FullScreen => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, List, Start],
+        Command::ToggleSplit | Command::ToggleWordWrap => &[Editor],
+        Command::ToggleSidebar => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, List],
+        Command::FocusSidebar | Command::CollapseFolders => &[Editor, Tree, TreeSearch, Changes, Message, Terminal],
+        Command::SwitchFocus => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal],
         // Tabs: the editor's, or in a terminal the terminals'.
         Command::CloseTab
         | Command::CloseAllTabs
@@ -228,7 +248,7 @@ pub fn works_in(c: Command) -> Option<&'static [Place]> {
 
 /// Ids of commands that are gone (merged into Open…): a keybindings file
 /// naming one is quietly ignored, not an error.
-const RETIRED: &[&str] = &["folder.recent", "terminal.recent", "terminal.openInFolder", "file.editWhole", "search.toggleBuildFolders"];
+const RETIRED: &[&str] = &["folder.recent", "terminal.recent", "terminal.openInFolder", "file.editWhole", "search.toggleBuildFolders", "view.minimize"];
 
 macro_rules! commands {
     ($($command:ident $(($arg:literal))?, $id:literal, $title:expr, [$($key:literal),*];)*) => {
@@ -320,12 +340,11 @@ commands! {
     ToggleSidebar, "view.sidebar", "File Tree: Show and Go In, or Hide", ["ctrl+b"];
     FocusSidebar, "view.focusSidebar", "File Tree: Go In, or Back to the Editor", ["ctrl+shift+e"];
     CollapseFolders, "view.collapseFolders", "File Tree: Collapse All Folders", ["alt+shift+c"];
-    ZoomIn, "view.zoomIn", "Bigger Text", ["ctrl+=", "ctrl+shift+=", "ctrl++"];
+    ZoomIn, "view.zoomIn", "Bigger Text", ["ctrl+="];
     ZoomOut, "view.zoomOut", "Smaller Text", ["ctrl+-"];
     ResetZoom, "view.resetZoom", "Reset Text Size", ["ctrl+0"];
-    FullScreen, "view.fullScreen", "Full Screen On / Off", ["f11"];
+    FullScreen, "view.fullScreen", "Full Screen On / Off", ["pc:f11"];
     MaximizeWindow, "view.maximize", "Maximize / Restore Window", [];
-    MinimizeWindow, "view.minimize", "Minimize Window", ["ctrl+m"];
     SwitchFocus, "view.switchFocus", "Switch Between Editor and Terminal", ["ctrl+j"];
     ToggleTerminal, "terminal.toggle", "Show / Hide Terminal", ["alt+t"];
     NewTerminal, "terminal.new", "New Terminal", ["alt+n"];
@@ -583,7 +602,7 @@ impl Keymap {
                 custom.push(info.command);
             }
             let keys: Vec<&str> = if overrides.is_empty() {
-                info.keys.to_vec()
+                info.default_keys().collect()
             } else {
                 overrides
                     .iter()
@@ -680,7 +699,8 @@ pub fn template() -> String {
          // Defaults — uncomment a line to change it:\n[\n",
     );
     for c in COMMANDS {
-        let keys = if c.keys.is_empty() { &[""][..] } else { c.keys };
+        let keys: Vec<&str> = c.default_keys().collect();
+        let keys = if keys.is_empty() { vec![""] } else { keys };
         for key in keys {
             let key = serde_json::to_string(key).unwrap_or_default(); // escapes `\\`
             s += &format!(
@@ -730,6 +750,19 @@ mod tests {
         ..Modifiers::NONE
     };
 
+    /// F11 is full screen off macOS only: a Mac's F11 is the system's
+    /// (its own ⌃⌘F does it there, from the Window menu).
+    #[test]
+    fn full_screen_is_f11_off_macos() {
+        let (km, _) = Keymap::new(&[]);
+        let f11 = km.combo_for(Command::FullScreen).map(|c| c.label());
+        if cfg!(target_os = "macos") {
+            assert_eq!(f11, None);
+        } else {
+            assert!(f11.as_deref().is_some_and(|l| l.contains("F11")), "{f11:?}");
+        }
+    }
+
     #[test]
     fn defaults_never_conflict() {
         let (km, errors) = Keymap::new(&[]);
@@ -766,7 +799,7 @@ mod tests {
     #[test]
     fn combos_round_trip_through_config_text() {
         for c in COMMANDS {
-            for k in c.keys {
+            for k in c.keys.iter().map(|k| k.strip_prefix("pc:").unwrap_or(k)) {
                 let combo = Combo::parse(k).unwrap();
                 assert_eq!(Combo::parse(&combo.to_config()), Ok(combo), "{k}");
             }
@@ -885,7 +918,7 @@ mod tests {
         let parsed: Vec<UserBinding> = json5::from_str(&live).unwrap();
         assert!(parsed.iter().any(|b| b.key == "ctrl+\\"));
         for c in COMMANDS {
-            for k in c.keys {
+            for k in c.keys.iter().map(|k| k.strip_prefix("pc:").unwrap_or(k)) {
                 assert!(Combo::parse(k).is_ok(), "{k}");
             }
         }

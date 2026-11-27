@@ -3919,9 +3919,9 @@ fn headless_start_page_recent_and_resets() {
     assert_eq!(first(&h), ("Settings".to_string(), "recently used".to_string()));
     press(&mut h, Modifiers::NONE, Key::Escape);
 
-    // ⌘+ (⇧= on most keyboards): bigger text, shown in the status bar.
+    // ⌘= (the + key): bigger text, shown in the status bar.
     let size = app(&h).config.settings.ui_font_size;
-    press(&mut h, CMD, Key::Plus);
+    press(&mut h, CMD, Key::Equals);
     assert_eq!(app(&h).config.settings.ui_font_size, size + 1.0);
     shot(&mut h, "w2-zoomed");
     press(&mut h, CMD, Key::Num0);
@@ -6733,7 +6733,7 @@ fn headless_every_key_that_applies_shows() {
         // App-wide: the palette and F1.
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
         OpenProjectSettings, OpenConfigFolder, ZoomIn, ZoomOut, ResetZoom, FullScreen,
-        MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleWordWrap, NewTerminal,
+        MaximizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleWordWrap, NewTerminal,
         ToggleTerminal, NewWindow, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
         // A tab's or the tree's right-click menu.
         RenameFile, RevealInFinder, OpenInDefaultApp, OpenInTerminal, CopyPath, CopyRelativePath,

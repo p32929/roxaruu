@@ -51,7 +51,7 @@ I looked for something that already solved this, didn't like what I found, so I 
 
 **Make it yours**
 1. Settings, shortcuts and colour themes are plain JSON files in `~/.config/roxaruu/`. Edits apply as soon as you save. **Ctrl+,** (**⌘,**) lists the settings to search and change; one you've changed says what its default was, and **Ctrl+Backspace** (**⌘⌫**) puts it back.
-1. **Ctrl+=** / **Ctrl+-** (**⌘+** / **⌘−**) make all text bigger or smaller, kept for next time; the status bar shows by how much, and a click on it (or **Ctrl+0** / **⌘0**) goes back.
+1. **Ctrl+=** / **Ctrl+-** (**⌘=** / **⌘−**) make all text bigger or smaller, kept for next time; the status bar shows by how much, and a click on it (or **Ctrl+0** / **⌘0**) goes back.
 2. Four themes built in (Oxide, Oxide Light, Midnight, Moss), or make your own. Pick a UI font and a code font, or use any font file.
 3. Also included: a clipboard history, a to-do list, and recent folders (an empty window lists the last ones, with their branch; tick several with the checkbox a row shows under the pointer, **Space** or **Tab**, or Ctrl-/Shift-click, and **Enter** opens them all, the first in this window; **Esc** deselects them all. Open… and the clipboard history work the same way).
 

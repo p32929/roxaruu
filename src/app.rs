@@ -879,12 +879,8 @@ impl App {
             Command::ZoomIn => self.zoom(Some(1.0), ctx),
             Command::ZoomOut => self.zoom(Some(-1.0), ctx),
             Command::ResetZoom => self.zoom(None, ctx),
-            Command::FullScreen => {
-                let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
-            }
+            Command::FullScreen => crate::sys::toggle_full_screen(ctx),
             Command::MaximizeWindow => toggle_maximized(ctx),
-            Command::MinimizeWindow => crate::sys::minimize(ctx, true),
             Command::ToggleWordWrap => {
                 let wrap = !self.config.settings.word_wrap;
                 self.config.settings.word_wrap = wrap;
@@ -1059,7 +1055,7 @@ impl App {
             // The page's window list: nothing to switch to on the Mac.
             Command::SwitchWindow => self.remote_pass,
             // The window's own: a browser's copy has none to move.
-            Command::MinimizeWindow | Command::MaximizeWindow => !self.remote_pass,
+            Command::MaximizeWindow => !self.remote_pass,
             _ => true,
         }
     }

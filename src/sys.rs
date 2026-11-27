@@ -400,6 +400,61 @@ pub fn quit_closes_the_window() {
 #[cfg(not(target_os = "macos"))]
 pub fn quit_closes_the_window() {}
 
+/// macOS's Window menu: Minimize (⌘M) and Enter Full Screen (⌃⌘F), done by
+/// AppKit itself, as in every Mac app (winit's menu has neither). Elsewhere
+/// the window manager has its own keys for these.
+#[cfg(target_os = "macos")]
+pub fn window_menu() {
+    use objc2::{MainThreadMarker, MainThreadOnly, sel};
+    use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
+    use objc2_foundation::NSString;
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(mtm);
+    let Some(bar) = app.mainMenu() else { return };
+    let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Window"));
+    for (title, action, key, mods) in [
+        ("Minimize", sel!(performMiniaturize:), "m", NSEventModifierFlags::Command),
+        ("Enter Full Screen", sel!(toggleFullScreen:), "f", NSEventModifierFlags::Command | NSEventModifierFlags::Control),
+    ] {
+        // SAFETY: real selectors, sent to the key window through the
+        // responder chain (no target), which every NSWindow answers.
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(title),
+                Some(action),
+                &NSString::from_str(key),
+            )
+        };
+        item.setKeyEquivalentModifierMask(mods);
+        menu.addItem(&item);
+    }
+    let holder = NSMenuItem::new(mtm);
+    holder.setSubmenu(Some(&menu));
+    bar.addItem(&holder);
+    app.setWindowsMenu(Some(&menu));
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn window_menu() {}
+
+/// Full screen on or off: on macOS AppKit's own (as ⌃⌘F does), elsewhere
+/// egui's.
+#[cfg(target_os = "macos")]
+pub fn toggle_full_screen(_ctx: &eframe::egui::Context) {
+    use objc2_app_kit::NSApplication;
+    let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+    for w in NSApplication::sharedApplication(mtm).windows().iter() {
+        w.toggleFullScreen(None);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn toggle_full_screen(ctx: &eframe::egui::Context) {
+    let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+    ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Fullscreen(!on));
+}
+
 /// Minimize the window (or bring it back). On macOS through AppKit, never
 /// egui's `ViewportCommand::Minimized`: that marks the viewport minimized,
 /// which egui-winit never reads back on a Mac (egui #3494), so on coming
