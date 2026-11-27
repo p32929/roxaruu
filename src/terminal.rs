@@ -414,6 +414,9 @@ fn passes_the_shell_on(c: crate::keymap::Command, windows: bool) -> bool {
     matches!(
         c,
         SwitchFocus | GoToTab(_) | ToggleSidebar | FocusSidebar | Save | SaveAll | Quit | ZoomIn | ZoomOut | ResetZoom
+            // Asked for from a terminal too (the owner's call): ⌥F and ⌥O
+            // aren't the program's then.
+            | GoToFile | OpenFolder
             // The terminal's own ⌥ keys, and clipboard history (Meta-V is
             // unbound in readline and zsh).
             | ToggleTerminal | NewTerminal | CopyTerminalOutput | CloseTerminal | ToggleTerminalGrid

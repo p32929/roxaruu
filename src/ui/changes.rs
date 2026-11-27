@@ -550,15 +550,15 @@ impl App {
 
     /// Open the file behind the chosen row, or behind the diff in front (at
     /// the line the caret's on).
+    /// The changed file on the row you're on, if it's one.
+    pub(crate) fn chosen_file(&self) -> Option<std::path::PathBuf> {
+        let Some(Row::File(r, _, i)) = self.chosen_row() else { return None };
+        self.repos().get(r)?.files.get(i).map(|f| f.path.clone())
+    }
+
     pub(crate) fn open_changed_file(&mut self) {
         if self.changes_focused() {
-            if let Some(Row::File(r, _, i)) = self.chosen_row()
-                && let Some(path) = self
-                    .repos()
-                    .get(r)
-                    .and_then(|repo| repo.files.get(i))
-                    .map(|f| f.path.clone())
-            {
+            if let Some(path) = self.chosen_file() {
                 self.open_file(&path);
                 self.focus = Focus::Editor;
             }

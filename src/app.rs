@@ -15,7 +15,7 @@ use crate::find::Find;
 use crate::fonts;
 use crate::fstree::{self, FileTree};
 use crate::fuzzy::{self, FileMatcher};
-use crate::keymap::{COMMANDS, Command};
+use crate::keymap::{COMMANDS, Command, Place};
 use crate::palette::{Item, Mode, Palette, Pick, Revert};
 use crate::terminal::{self, Terminal, Throttle};
 use crate::ui::icon;
@@ -672,10 +672,7 @@ impl App {
         // Trash's key (⌘⌫) works only in the file tree (and its search box):
         // elsewhere, even in the command palette's search box, it deletes to
         // the line start.
-        let in_files = self.palette.is_none() && self.focus == Focus::Sidebar;
-        let command_for = |e: &egui::Event| {
-            bound(e).filter(|c| self.available(*c) && (*c != Command::DeleteFile || in_files))
-        };
+        let command_for = |e: &egui::Event| bound(e).filter(|c| self.works_here(*c) && self.available(*c));
         let (pressed, chord): (Vec<Command>, bool) = ctx.input(|i| {
             (
                 i.events.iter().filter_map(command_for).collect(),
@@ -726,18 +723,7 @@ impl App {
             return;
         }
         // The key that opened a list closes it again.
-        let list = match command {
-            Command::Palette => Some(Mode::Commands),
-            Command::OpenFolder => Some(Mode::Open),
-            Command::SearchInFiles => Some(Mode::Search),
-            Command::GoToLine => Some(Mode::Line),
-            Command::SwitchTerminal => Some(Mode::Terminals),
-            Command::OpenTerminalLink => Some(Mode::Links),
-            Command::Settings => Some(Mode::Settings),
-            Command::Keybindings => Some(Mode::Keybindings),
-            Command::ClipboardHistory => Some(Mode::Clipboard),
-            _ => None,
-        };
+        let list = own_list(command);
         if list.is_some() && self.palette.as_ref().map(|p| p.mode) == list {
             return self.close_palette(false, ctx);
         }
@@ -1689,6 +1675,36 @@ impl App {
 
     pub fn modal_open(&self) -> bool {
         self.prompt.is_some() || self.conflict.is_some() || self.ask.is_some() || self.help
+    }
+
+    /// Where the keyboard is, for `keymap::works_in`.
+    pub fn place(&self) -> Place {
+        if self.palette.is_some() {
+            Place::List
+        } else if self.terminal_focused() {
+            Place::Terminal
+        } else if self.project.is_none() && self.tabs.is_empty() {
+            Place::Start
+        } else if self.focus == Focus::Find && self.find.is_some() {
+            Place::Find
+        } else if self.focus == Focus::Sidebar && self.sidebar_shown() {
+            match (self.changes.on, self.changes.typing) {
+                (true, true) => Place::Message,
+                (true, false) => Place::Changes,
+                _ if self.sidebar.searching || !self.sidebar.query.is_empty() => Place::TreeSearch,
+                _ => Place::Tree,
+            }
+        } else {
+            Place::Editor
+        }
+    }
+
+    /// Whether `c`'s key works from where the keyboard is: its places
+    /// (`works_in`), or inside the list it opens (which it closes).
+    pub fn works_here(&self, c: Command) -> bool {
+        let place = self.place();
+        crate::keymap::works_in(c).is_none_or(|places| places.contains(&place))
+            || own_list(c).is_some_and(|m| self.palette.as_ref().is_some_and(|p| p.mode == m))
     }
 
     pub fn terminal_focused(&self) -> bool {
@@ -3100,6 +3116,22 @@ fn folder_items(query: &str) -> Vec<Item> {
 }
 
 /// Maximize the window, or restore it (the title bar's double-click).
+/// The list a command opens: its key closes it again from inside.
+fn own_list(c: Command) -> Option<Mode> {
+    Some(match c {
+        Command::Palette => Mode::Commands,
+        Command::OpenFolder => Mode::Open,
+        Command::SearchInFiles => Mode::Search,
+        Command::GoToLine => Mode::Line,
+        Command::SwitchTerminal => Mode::Terminals,
+        Command::OpenTerminalLink => Mode::Links,
+        Command::Settings => Mode::Settings,
+        Command::Keybindings => Mode::Keybindings,
+        Command::ClipboardHistory => Mode::Clipboard,
+        _ => return None,
+    })
+}
+
 pub fn toggle_maximized(ctx: &egui::Context) {
     let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
     ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!max));

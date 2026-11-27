@@ -17,7 +17,10 @@ where the keyboard is, for what's there (the owner's rule): keys that take
 you somewhere (⌘J, ⇧⌘G, ⌥T, ⌥1–9…) and app-wide ones (palette, Save,
 zoom…) work anywhere; keys that act on one place work only while it has
 the keyboard (Source Control's commit / push / pull, `git_ready` for its
-buttons; the tree's Move to Trash). A key shown on screen works from
+buttons; the tree's Move to Trash). Where each key works is the owner's
+table, `keymap::works_in` (the places: `Place`, where the keyboard is now:
+`App::place`); a key it doesn't name yet works wherever it can run. Its
+hints follow it (`key_reaches`). A key shown on screen works from
 there (`visible_keys_work`), and one that can't run now is never shown.
 A focused terminal leaves the program its ⌃ and ⌥ chords
 (`belongs_to_shell`): ⌥↵ is Claude Code's new line, never bind it. The keys between the editor, the tree and the

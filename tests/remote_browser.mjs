@@ -288,7 +288,7 @@ async function inputScenario() {
   await mark("link-opened");
   await chord(["meta"], "j", "KeyJ");                // ⌘J: back to the editor
   await mark("editor-again");
-  await chord(["meta"], "p", "KeyP");                // ⌘P: Go to File, the tree's search (Chrome's Print otherwise)
+  await chord(["alt"], "ƒ", "KeyF", "ƒ");           // ⌥F: Go to File, the tree's search (not typing "ƒ")
   await goAhead("palette");
   await press("Escape", "Escape");
   await goAhead("palette-closed");

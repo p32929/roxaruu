@@ -2547,17 +2547,19 @@ impl App {
     }
 
     /// `c`'s first key that gets to the app from where the keyboard is
-    /// (in a terminal ⌥F is the shell's, so Go to File shows ⌘P).
+    /// (off macOS a terminal's shell keeps plain Ctrl chords).
     pub(crate) fn reaching_combo(&self, c: Command) -> Option<crate::keymap::Combo> {
         self.config.keymap.combos(c).find(|k| self.key_reaches(c, k))
     }
 
-    /// Whether `c`'s key gets to the app from where the keyboard is: off
-    /// macOS, a terminal keeps plain Ctrl chords for its shell (but for
-    /// `passes_the_shell`), so a hint there mustn't promise one.
+    /// Whether `c`'s key gets to the app from where the keyboard is: it
+    /// works there (`works_here`), and off macOS a terminal keeps plain
+    /// Ctrl chords for its shell (but for `passes_the_shell`), so a hint
+    /// there mustn't promise one.
     fn key_reaches(&self, c: Command, k: &crate::keymap::Combo) -> bool {
         let (key, m) = k.chord();
-        !(self.terminal_focused() && crate::terminal::belongs_to_shell(key, m)) || crate::terminal::passes_the_shell(c)
+        self.works_here(c)
+            && (!(self.terminal_focused() && crate::terminal::belongs_to_shell(key, m)) || crate::terminal::passes_the_shell(c))
     }
 
     /// Every key in the status bar: the tree's section, then the rest.

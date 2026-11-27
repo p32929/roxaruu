@@ -58,6 +58,8 @@ impl App {
     /// the command palette) the active tab's file.
     pub fn file_target(&self) -> Option<PathBuf> {
         match self.palette.as_ref().map(|p| p.mode) {
+            // Source Control: the changed file chosen there.
+            None if self.changes_focused() => self.chosen_file(),
             // Searching: the chosen match (none, with nothing found).
             None if self.focus == Focus::Sidebar && !self.sidebar.query.is_empty() => {
                 self.hit_path(self.sidebar.hit)

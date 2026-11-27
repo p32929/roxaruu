@@ -163,7 +163,6 @@ const KEYLESS: &[Command] = &[
     Command::OpenNotificationSettings,
     Command::ShowRemoteAddress,
     Command::CloseFolder,
-    Command::CopyRelativePath,
     Command::CloseTabsToRight,
     Command::CloseTabsToLeft,
     Command::CloseSavedTabs,
@@ -172,6 +171,46 @@ const KEYLESS: &[Command] = &[
     Command::MaximizeWindow,
     Command::InstallRox,
 ];
+
+/// Where the keyboard is: what a key may act on (`works_in`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Place {
+    /// An open file's text (or the folder's page, with none open).
+    Editor,
+    /// The editor's find / replace box.
+    Find,
+    /// The file tree, walking its rows.
+    Tree,
+    /// The tree's search box (Go to File).
+    TreeSearch,
+    /// Source Control's list.
+    Changes,
+    /// Source Control's commit message.
+    Message,
+    Terminal,
+    /// A list over everything: the palette, Open…, Search in Files…
+    List,
+    /// No folder open.
+    Start,
+}
+
+/// The places a command's key works from (the owner's table, part by
+/// part); `None`: not decided yet, it works wherever it can run. A list's
+/// own key closes it from inside whatever this says (`App::run`).
+pub fn works_in(c: Command) -> Option<&'static [Place]> {
+    use Place::*;
+    const FILES: &[Place] = &[Editor, Tree, TreeSearch];
+    Some(match c {
+        Command::GoToFile => &[Editor, Tree, TreeSearch, Changes, Terminal],
+        Command::OpenFolder => &[Editor, Tree, TreeSearch, Changes, Terminal, Start],
+        Command::Save | Command::SaveAll => &[Editor, Terminal],
+        Command::NewFile | Command::NewFolder => &[Editor, Tree, TreeSearch, Terminal],
+        Command::RenameFile | Command::OpenInTerminal => FILES,
+        Command::DeleteFile => &[Tree, TreeSearch],
+        Command::OpenInDefaultApp | Command::CopyPath | Command::CopyRelativePath => &[Editor, Tree, TreeSearch, Changes],
+        _ => return None,
+    })
+}
 
 /// Ids of commands that are gone (merged into Open…): a keybindings file
 /// naming one is quietly ignored, not an error.
@@ -193,7 +232,7 @@ commands! {
     About, "app.about", "About Roxaruu", [];
     CheckForUpdates, "app.update", "Check for Updates", [];
     OpenNotificationSettings, "app.notificationSettings", "Open Notification Settings", [];
-    GoToFile, "file.goTo", "Go to File", ["alt+f", "ctrl+p"];
+    GoToFile, "file.goTo", "Go to File", ["alt+f"];
     OpenFolder, "folder.open", "Open Folder or Terminal…", ["ctrl+o", "alt+o"];
     CloseFolder, "folder.close", "Close Folder", [];
     SelectTheme, "theme.select", "Select Theme", [];
@@ -225,7 +264,7 @@ commands! {
     OpenInDefaultApp, "file.openInDefaultApp", "Open in Default App", ["ctrl+alt+o"];
     OpenInTerminal, "file.openInTerminal", "Open in Terminal (a New One, in That Folder)", ["alt+shift+t"];
     CopyPath, "file.copyPath", "Copy Path", ["ctrl+alt+c"];
-    CopyRelativePath, "file.copyRelativePath", "Copy Relative Path", [];
+    CopyRelativePath, "file.copyRelativePath", "Copy Relative Path", ["ctrl+alt+shift+c"];
     ToggleBuildFolders, "search.toggleBuildFolders", "Search: Include / Skip Ignored Files", ["alt+h"];
     NextTab, "tab.next", "Next Tab", ["ctrl+tab"];
     PrevTab, "tab.previous", "Previous Tab", ["ctrl+shift+tab"];

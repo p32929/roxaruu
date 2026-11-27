@@ -1669,8 +1669,10 @@ fn headless_every_shortcut() {
         .collect();
     let mut done = vec![Command::DeleteFile]; // only in Go to File, below
     for &(command, title, (key, mods)) in &sheet {
-        if done.contains(&command) || !app(&h).available(command) {
-            continue; // a terminal's own (⌘K), checked from there
+        // A terminal's own (⌘K), checked from there; and keys that don't
+        // work from here (`works_in`), checked where they do.
+        if done.contains(&command) || !app(&h).available(command) || !app(&h).works_here(command) {
+            continue;
         }
         crate::app::dry_run(true);
         press(&mut h, mods, key);
@@ -1688,7 +1690,7 @@ fn headless_every_shortcut() {
     visible_keys_work(&mut h, "a terminal");
     let mut from_terminal = 0;
     for &(command, title, _) in &sheet {
-        if command == Command::DeleteFile || !app(&h).available(command) {
+        if !app(&h).available(command) || !app(&h).works_here(command) {
             continue;
         }
         // (Not pressed: Meta keys would leave the shell mid-command.)
@@ -1732,7 +1734,7 @@ fn headless_every_shortcut() {
     h.step();
     visible_keys_work(&mut h, "the tree");
     for &(command, title, (key, mods)) in &sheet {
-        if done.contains(&command) || !app(&h).available(command) {
+        if done.contains(&command) || !app(&h).available(command) || !app(&h).works_here(command) {
             continue;
         }
         crate::app::dry_run(true);
@@ -1740,6 +1742,13 @@ fn headless_every_shortcut() {
         assert_eq!(crate::app::dry_run(false), [command], "from the tree, {title}");
         done.push(command);
     }
+    // A key works only where it's meant to (`works_in`): Save, from the
+    // tree, saves nothing (the editor or a terminal, the owner's table).
+    assert_eq!(app(&h).place(), crate::keymap::Place::Tree);
+    assert!(app(&h).available(Command::Save) && !app(&h).works_here(Command::Save));
+    crate::app::dry_run(true);
+    press(&mut h, CMD, Key::S);
+    assert_eq!(crate::app::dry_run(false), [], "⌘S from the tree");
     h.state_mut().0.focus = crate::app::Focus::Editor;
 
     // Move to Trash, from Go to File.
@@ -1771,8 +1780,14 @@ fn headless_every_shortcut() {
     press(&mut h, Modifiers::NONE, Key::ArrowDown);
     assert!(matches!(app(&h).chosen_row(), Some(crate::ui::changes::Row::File(..))), "{:?}", app(&h).chosen_row());
     visible_keys_work(&mut h, "Source Control");
+    // Copy Path and Open in Default App: the changed file chosen here.
+    assert_eq!(app(&h).file_target(), app(&h).chosen_file());
+    assert!(app(&h).file_target().is_some_and(|p| p.ends_with("kept.rs")));
+    for c in [Command::CopyPath, Command::CopyRelativePath, Command::OpenInDefaultApp] {
+        assert!(app(&h).available(c) && app(&h).works_here(c), "{c:?} from Source Control");
+    }
     for &(command, title, (key, mods)) in &sheet {
-        if done.contains(&command) || !app(&h).available(command) {
+        if done.contains(&command) || !app(&h).available(command) || !app(&h).works_here(command) {
             continue;
         }
         crate::app::dry_run(true);
@@ -5883,7 +5898,7 @@ fn node_and_chrome() -> Option<(&'static str, &'static str)> {
 /// Real key, mouse, wheel and touch events from Chrome (CDP's
 /// `Input.dispatch*Event`, so through the page's real handlers) reach the
 /// window as on the Mac: typing with ⇧, ⌥ accents and dead keys, ⌥T not
-/// typing "†", ⌘P opening Go to File, the wheel and finger drags scrolling
+/// typing "†", ⌥F opening Go to File, the wheel and finger drags scrolling
 /// (a flick coasting further), clicks, ⇧-click, triple-click and ⌘C/⌘X/⌘V
 /// with this browser's clipboard, right-click and long-press menus, ⌃C in a
 /// shell, links opening in the browser, the phone keyboard (input methods,
@@ -5963,7 +5978,7 @@ fn headless_remote_input_in_chrome() {
             // machine got the step before the key).
             "dragged" => row_with(h, "A").is_some(),
             "flicked" => row_with(h, "F").is_some(),
-            // ⌘P and esc reached the window (a loaded machine got the step first).
+            // ⌥F and esc reached the window (a loaded machine got the step first).
             "palette" => app(h).focus == crate::app::Focus::Sidebar,
             "palette-closed" => app(h).focus == crate::app::Focus::Editor,
             // The shell's answer to the line typed after ⌃C ("done-2" only
@@ -6027,7 +6042,7 @@ fn headless_remote_input_in_chrome() {
             "pinched" => assert_eq!(text_of(&h), before_pinch, "a pinch types nothing"),
             "menu" | "long-pressed" => assert!(menu_open(&h), "a menu is up {what}"),
             "menu-closed" => assert!(!menu_open(&h), "{what}"),
-            "palette" => assert_eq!(a.focus, crate::app::Focus::Sidebar, "⌘P went to the file search"),
+            "palette" => assert_eq!(a.focus, crate::app::Focus::Sidebar, "⌥F went to the file search"),
             "palette-closed" => {
                 assert_eq!(a.focus, crate::app::Focus::Editor);
                 caret_before = a.active_tab().unwrap().caret();
