@@ -237,6 +237,17 @@ pub fn works_in(c: Command) -> Option<&'static [Place]> {
         | Command::JumpTerminal(_) => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal],
         Command::ToggleTerminal | Command::NewTerminal => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, Start],
         Command::ClearTerminal | Command::CopyTerminalOutput | Command::CloseTerminal | Command::OpenTerminalLink => &[Terminal],
+        // Source Control's: while it shows (`App::available`).
+        Command::SourceControl => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal],
+        Command::GitStage | Command::GitStageAll => &[Changes, Message],
+        Command::GitDiscard => &[Editor, Changes, Message],
+        Command::GitCommit
+        | Command::GitCommitAll
+        | Command::GitPush
+        | Command::GitPushAll
+        | Command::GitPull
+        | Command::GitPullAll
+        | Command::GitOpenFile => &[Editor, Changes, Message, Terminal],
         // Tabs: the editor's, or in a terminal the terminals'.
         Command::CloseTab
         | Command::CloseAllTabs

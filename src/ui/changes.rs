@@ -80,6 +80,12 @@ impl App {
         self.project.as_ref().map_or(&[], |p| p.repos.as_slice())
     }
 
+    /// Whether Source Control is on screen (in the sidebar), wherever the
+    /// keyboard is: its keys work from the editor and a terminal then.
+    pub(crate) fn changes_shown(&self) -> bool {
+        self.changes.on && self.sidebar_shown()
+    }
+
     /// Whether the keyboard is in the Changes view.
     pub(crate) fn changes_focused(&self) -> bool {
         self.changes.on && self.focus == Focus::Sidebar && self.sidebar_shown()
@@ -279,7 +285,18 @@ impl App {
 
     /// The files a discard would put back, and what to call them.
     fn discard_target(&self) -> Option<(Repo, Vec<String>, String)> {
-        let row = self.chosen_row().filter(|_| self.changes_focused())?;
+        // From the editor, with Source Control showing: the file in front
+        // (or the one its diff is of).
+        if !self.changes_focused() {
+            if !self.changes_shown() {
+                return None;
+            }
+            let file = self.active_tab().and_then(|t| t.path().cloned().or_else(|| t.diff.as_ref()?.file.clone()))?;
+            let repo = self.repos().iter().find(|r| r.files.iter().any(|f| f.path == file))?.clone();
+            let rel = repo.files.iter().find(|f| f.path == file)?.rel.clone();
+            return Some((repo, vec![rel.clone()], rel));
+        }
+        let row = self.chosen_row()?;
         let repo = self.repos().get(row_repo(row)?)?.clone();
         let (rels, what): (Vec<String>, String) = match row {
             Row::File(_, _, i) => {

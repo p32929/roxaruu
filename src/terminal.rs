@@ -417,6 +417,9 @@ fn passes_the_shell_on(c: crate::keymap::Command, windows: bool) -> bool {
             // Asked for from a terminal too (the owner's call): ⌥F and ⌥O
             // aren't the program's then.
             | GoToFile | OpenFolder | SearchInFiles | CollapseFolders | ToggleRemoteAccess | SwitchWindow
+            // Source Control's, only while it shows (`App::available`):
+            // otherwise they stay the program's.
+            | GitCommit | GitCommitAll | GitPush | GitPushAll | GitPull | GitPullAll | GitOpenFile
             // The terminal's own ⌥ keys, and clipboard history (Meta-V is
             // unbound in readline and zsh).
             | ToggleTerminal | NewTerminal | CopyTerminalOutput | CloseTerminal | ToggleTerminalGrid
@@ -453,7 +456,10 @@ mod tests {
             assert_eq!(belongs_to_shell(Key::C, cmd_alt), !mac, "⌘⌥C is ours on a Mac; Ctrl+Alt+C the shell's elsewhere");
         }
         assert!(passes_the_shell_on(Command::NewTerminal, false) && passes_the_shell_on(Command::JumpTerminal(2), false));
-        assert!(!passes_the_shell_on(Command::GitCommit, false) && !passes_the_shell_on(Command::GitPush, false));
+        // Source Control's get past it, but run only while it shows
+        // (`App::available`); otherwise they're the program's.
+        assert!(passes_the_shell_on(Command::GitCommit, false) && passes_the_shell_on(Command::GitPush, false));
+        assert!(!passes_the_shell_on(Command::GitStageAll, false), "⌥A: only in Source Control itself");
     }
 
     const CTRL: Modifiers = Modifiers {

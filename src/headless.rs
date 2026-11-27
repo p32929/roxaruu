@@ -2791,13 +2791,24 @@ fn headless_source_control() {
     assert_eq!(app(&h).changes.message, "Both at once");
     assert!(app(&h).changes.typing);
     shot(&mut h, "g2-message");
-    // Its keys are Source Control's: with the keyboard in the editor ⇧⌘M
-    // commits nothing, but the buttons are still there to click.
+    // Its keys work while it shows, from the editor too (the owner's
+    // table); hidden, they do nothing (a terminal's program keeps ⌥P…).
     h.state_mut().0.focus = crate::app::Focus::Editor;
+    crate::app::dry_run(true);
+    press(&mut h, ALT | SHIFT, Key::M);
+    assert_eq!(crate::app::dry_run(false), [crate::keymap::Command::GitCommitAll], "⌥⇧M from the editor");
+    // Discard from the editor: the changed file in front.
+    assert!(app(&h).active_tab().and_then(|t| t.path()).is_some_and(|p| p.ends_with("kept.rs")));
+    assert!(app(&h).can_discard() && app(&h).works_here(crate::keymap::Command::GitDiscard));
+    h.state_mut().0.changes.on = false;
+    h.step();
+    assert!(!app(&h).can_discard(), "Source Control hidden: nothing to discard from the editor");
     press(&mut h, CMD_SHIFT, Key::M);
     press(&mut h, ALT | SHIFT, Key::P);
     assert!(!app(&h).available(crate::keymap::Command::GitCommitAll) && app(&h).git_ready(crate::keymap::Command::GitCommitAll));
     assert_eq!(app(&h).changes.message, "Both at once", "nothing committed");
+    h.state_mut().0.changes.on = true;
+    h.step();
     assert!(h.query_by_label("Commit").is_some());
     press(&mut h, CMD_SHIFT, Key::G);
     assert!(app(&h).changes_focused());

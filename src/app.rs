@@ -1015,15 +1015,15 @@ impl App {
             Command::SourceControl => self.project.is_some(),
             Command::GitStage => self.can_stage(),
             Command::GitDiscard => self.can_discard(),
-            Command::GitOpenFile => self.changed_file_target(),
-            // Only in Source Control: from a terminal or the editor ⇧⌘M, ⌥P…
-            // are the program's or the text's (the buttons ask `git_ready`).
+            Command::GitOpenFile => self.changes_shown() && self.changed_file_target(),
+            // While Source Control shows: otherwise a terminal's ⌥P, ⌥L…
+            // are the program's (the buttons ask `git_ready`).
             Command::GitCommit
             | Command::GitCommitAll
             | Command::GitPush
             | Command::GitPull
             | Command::GitPushAll
-            | Command::GitPullAll => self.changes_focused() && self.git_ready(command),
+            | Command::GitPullAll => self.changes_shown() && self.git_ready(command),
             // Only there: elsewhere ⌥A types (å on a Mac).
             Command::GitStageAll => self.changes_focused() && self.project.as_ref().is_some_and(|p| p.repos.iter().any(|r| r.files.iter().any(|f| f.unstaged.is_some()))),
             Command::SwitchFocus => {
