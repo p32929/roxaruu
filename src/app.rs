@@ -934,8 +934,7 @@ impl App {
             | Command::OpenInDefaultApp
             | Command::OpenInTerminal
             | Command::CopyPath
-            | Command::CopyRelativePath
-            | Command::ToggleBuildFolders => self.run_file_command(command, ctx),
+            | Command::CopyRelativePath => self.run_file_command(command, ctx),
             Command::Settings => self.open_palette(Mode::Settings, ctx),
             Command::Keybindings => self.open_palette(Mode::Keybindings, ctx),
             Command::Todos => self.open_todos(ctx),
@@ -970,7 +969,6 @@ impl App {
             | Command::CloseFolder
             | Command::NewFile
             | Command::NewFolder
-            | Command::ToggleBuildFolders
             | Command::OpenProjectSettings
             | Command::ToggleSidebar
             | Command::FocusSidebar => self.project.is_some(),

@@ -1251,15 +1251,18 @@ run_command(&mut h, crate::keymap::Command::CopyRelativePath);
         Some(format!("Copied {}", rel(&h)).as_str())
     );
 
-    // Build folders: skipped by search until ⌥H.
+    // Build folders: skipped by search until the setting includes them.
     press(&mut h, ALT, Key::F);
     type_text(&mut h, "index.js");
     assert!(app(&h).sidebar.hits.is_empty(), "node_modules is skipped");
+    assert!(app(&h).ignored_hint().is_some_and(|t| t.contains("Settings")));
     shot(&mut h, "a5-no-match-hint");
-    press(&mut h, ALT, Key::H);
+    let ctx = h.ctx.clone();
+    h.state_mut().0.change_setting(crate::app::Setting::SearchIgnored, 1, &ctx);
     wait_for(&mut h, "re-indexing with build folders", |a| !a.sidebar.hits.is_empty());
+    assert!(app(&h).ignored_hint().is_none());
     shot(&mut h, "a5-build-folders-on");
-    press(&mut h, ALT, Key::H);
+    h.state_mut().0.change_setting(crate::app::Setting::SearchIgnored, 1, &ctx);
     press(&mut h, Modifiers::NONE, Key::Escape);
 
     // Finder drop on the editor: opens. Hovering shows where it'll land.
@@ -6730,7 +6733,7 @@ fn headless_every_key_that_applies_shows() {
         // App-wide: the palette and F1.
         SelectTheme, SelectUiFont, SelectCodeFont, Settings, Keybindings, OpenSettings, OpenKeybindings,
         OpenProjectSettings, OpenConfigFolder, ZoomIn, ZoomOut, ResetZoom, FullScreen,
-        MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleBuildFolders, ToggleWordWrap, NewTerminal,
+        MaximizeWindow, MinimizeWindow, ToggleRemoteAccess, Quit, CloseFolder, ToggleWordWrap, NewTerminal,
         ToggleTerminal, NewWindow, Palette, SearchInFiles, SwitchFocus, About, OpenNotificationSettings, CheckForUpdates,
         // A tab's or the tree's right-click menu.
         RenameFile, RevealInFinder, OpenInDefaultApp, OpenInTerminal, CopyPath, CopyRelativePath,

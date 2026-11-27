@@ -84,9 +84,6 @@ impl App {
     }
 
     pub fn run_file_command(&mut self, command: Command, ctx: &egui::Context) {
-        if command == Command::ToggleBuildFolders {
-            return self.toggle_build_folders(ctx);
-        }
         if matches!(command, Command::NewFile | Command::NewFolder) {
             let Some(dir) = self.new_file_dir() else {
                 return self.notify("Open a folder first");
@@ -143,15 +140,14 @@ impl App {
         }
     }
 
-    /// ⌥H: search what's ignored too, or not (kept, for every window).
-    fn toggle_build_folders(&mut self, ctx: &egui::Context) {
-        let on = !self.config.settings.search_ignored;
-        self.save_choice_quietly(crate::app::Setting::SearchIgnored.key(), on, ctx);
-        self.notify(if on {
-            "Search now includes ignored files: .gitignore'd, node_modules, target…"
-        } else {
-            "Search skips ignored files: .gitignore'd, node_modules, target…"
-        });
+    /// Nothing found while ignored files are skipped: where to include
+    /// them (Settings' "Search ignored files too").
+    pub(crate) fn ignored_hint(&self) -> Option<String> {
+        if self.config.settings.search_ignored {
+            return None;
+        }
+        let key = self.config.keymap.combo_for(Command::Settings).map(|k| format!(" ({})", k.label())).unwrap_or_default();
+        Some(format!("ignored files (.gitignore, node_modules…) are skipped: Settings{key} includes them"))
     }
 
     /// Enter / a button on the file dialog: `ok` false cancels.

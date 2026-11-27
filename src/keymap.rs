@@ -53,7 +53,6 @@ pub enum Command {
     OpenInTerminal,
     CopyPath,
     CopyRelativePath,
-    ToggleBuildFolders,
     NextTab,
     PrevTab,
     MoveTabLeft,
@@ -208,6 +207,7 @@ pub fn works_in(c: Command) -> Option<&'static [Place]> {
         Command::RenameFile | Command::OpenInTerminal => FILES,
         Command::DeleteFile => &[Tree, TreeSearch],
         Command::OpenInDefaultApp | Command::CopyPath | Command::CopyRelativePath => &[Editor, Tree, TreeSearch, Changes],
+        Command::SearchInFiles => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, List, Start],
         // Tabs: the editor's, or in a terminal the terminals'.
         Command::CloseTab
         | Command::CloseAllTabs
@@ -228,7 +228,7 @@ pub fn works_in(c: Command) -> Option<&'static [Place]> {
 
 /// Ids of commands that are gone (merged into Open…): a keybindings file
 /// naming one is quietly ignored, not an error.
-const RETIRED: &[&str] = &["folder.recent", "terminal.recent", "terminal.openInFolder", "file.editWhole"];
+const RETIRED: &[&str] = &["folder.recent", "terminal.recent", "terminal.openInFolder", "file.editWhole", "search.toggleBuildFolders"];
 
 macro_rules! commands {
     ($($command:ident $(($arg:literal))?, $id:literal, $title:expr, [$($key:literal),*];)*) => {
@@ -279,7 +279,6 @@ commands! {
     OpenInTerminal, "file.openInTerminal", "Open in Terminal (a New One, in That Folder)", ["alt+shift+t"];
     CopyPath, "file.copyPath", "Copy Path", ["ctrl+alt+c"];
     CopyRelativePath, "file.copyRelativePath", "Copy Relative Path", ["ctrl+alt+shift+c"];
-    ToggleBuildFolders, "search.toggleBuildFolders", "Search: Include / Skip Ignored Files", ["alt+h"];
     NextTab, "tab.next", "Next Tab", ["ctrl+tab"];
     PrevTab, "tab.previous", "Previous Tab", ["ctrl+shift+tab"];
     MoveTabLeft, "tab.moveLeft", "Move Tab Left", ["ctrl+shift+,"];

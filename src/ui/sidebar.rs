@@ -846,23 +846,17 @@ impl App {
         });
         if self.sidebar.hits.is_empty() {
             let indexing = p.matcher.is_none();
-            let build = self
-                .config
-                .keymap
-                .combo_for(Command::ToggleBuildFolders)
-                .filter(|_| !self.config.settings.search_ignored)
-                .map(|k| format!("{} to include ignored files", k.label()));
+            let build = self.ignored_hint();
             let msg = if indexing { "Indexing files…".to_string() } else { "No matches".to_string() };
             let at = out.inner_rect.center_top() + vec2(0.0, 24.0 * s);
             ui.painter().text(at, Align2::CENTER_CENTER, msg, pt.font(12.5, Weight::Regular), c.text_subtle);
             if let Some(build) = build.filter(|_| !indexing) {
-                ui.painter().text(
-                    at + vec2(0.0, 20.0 * s),
-                    Align2::CENTER_CENTER,
-                    build,
-                    pt.font(11.5, Weight::Regular),
-                    c.text_subtle,
-                );
+                // Wrapped and centred: the tree is narrow.
+                let wrap = out.inner_rect.width() - 24.0 * s;
+                let mut job = egui::text::LayoutJob::simple(build, pt.font(11.5, Weight::Regular), c.text_subtle, wrap);
+                job.halign = egui::Align::Center;
+                let g = ui.fonts_mut(|f| f.layout_job(job));
+                ui.painter().galley(at + vec2(0.0, 12.0 * s), g, c.text_subtle);
             }
         }
         self.sidebar.hits_offset = out.state.clamped_offset().y;

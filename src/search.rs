@@ -1,6 +1,6 @@
 //! Project-wide "Search in Files" (⌘⇧F), ported from Oxru: one query searched
 //! across the project's files as git sees them (gitignored files and build
-//! folders skipped, unless the `searchIgnored` setting, ⌥H, includes them;
+//! folders skipped, unless the `searchIgnored` setting includes them;
 //! via [`crate::fstree::walk_builder`]), grouped by file with a line preview
 //! per match — VS Code's "Search" view.
 //!
