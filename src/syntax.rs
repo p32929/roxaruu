@@ -874,7 +874,9 @@ impl Incremental {
         let mut node = self.tree.root_node().descendant_for_byte_range(a, b)?;
         loop {
             if node.start_byte() <= a && b <= node.end_byte() && kinds.contains(&node.kind()) && own_lines(&node) {
-                return Some(node);
+                // Broken there (a `"` left open): coloured alone it can come
+                // out other than in the whole file, so the whole file is.
+                return (!node.has_error()).then_some(node);
             }
             node = node.parent()?;
         }

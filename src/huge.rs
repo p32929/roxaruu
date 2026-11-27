@@ -1,8 +1,9 @@
 //! Files too big to hold in memory, read straight from disk a screenful at a
 //! time. One pass at open builds a sparse index (the byte offset of every
 //! `STEP`th line); showing a line is then a seek to the mark before it and a
-//! short read forward. Read-only: editing would need the whole file in memory
-//! (`Command::EditWholeFile` does that on request).
+//! short read forward. Read-only.
+// ponytail: no editing here; a piece table over the file (edits kept apart,
+// saving streams the pieces to a new file) would allow it without loading it.
 
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};

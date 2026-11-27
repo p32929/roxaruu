@@ -1742,21 +1742,6 @@ fn headless_every_shortcut() {
     }
     h.state_mut().0.focus = crate::app::Focus::Editor;
 
-    // Edit a Huge File: only with one in front (a long line makes it one).
-    let wide = root.join("min.js");
-    std::fs::write(&wide, "x".repeat(crate::huge::LONG_LINE + 1)).unwrap();
-    h.state_mut().0.open_file(&wide);
-    h.step();
-    let (_, _, (key, mods)) = sheet
-        .iter()
-        .find(|s| s.0 == Command::EditWholeFile)
-        .copied()
-        .unwrap();
-    crate::app::dry_run(true);
-    press(&mut h, mods, key);
-    assert_eq!(crate::app::dry_run(false), [Command::EditWholeFile]);
-    done.push(Command::EditWholeFile);
-
     // Move to Trash, from Go to File.
     press(&mut h, ALT, Key::F);
     type_text(&mut h, "b.rs");
@@ -6573,7 +6558,6 @@ fn headless_huge_file() {
     assert!(!app(&h).active_tab().unwrap().buf.modified);
     assert_eq!(std::fs::metadata(&path).unwrap().len(), size);
     assert!(!app(&h).available(crate::keymap::Command::Paste));
-    assert!(app(&h).available(crate::keymap::Command::EditWholeFile));
 
     // Go to Line.
     press(&mut h, CMD, Key::L);

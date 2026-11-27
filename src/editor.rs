@@ -212,7 +212,7 @@ impl Tab {
 
     pub fn open(path: &Path) -> Result<Tab, String> {
         let mut tab = Tab::lazy(path);
-        tab.load(false)?;
+        tab.load()?;
         Ok(tab)
     }
 
@@ -235,12 +235,12 @@ impl Tab {
         if self.loaded {
             return Ok(());
         }
-        self.load(false)
+        self.load()
     }
 
-    /// Read the file: into memory, or (too big, unless `whole`) as the
-    /// read-only view that reads only what's on screen.
-    pub fn load(&mut self, whole: bool) -> Result<(), String> {
+    /// Read the file: into memory, or (too big) as the read-only view that
+    /// reads only what's on screen.
+    pub fn load(&mut self) -> Result<(), String> {
         self.loaded = true;
         let Some(path) = self.buf.path.clone() else {
             return Ok(());
@@ -249,7 +249,7 @@ impl Tab {
             return Err(reason);
         }
         let size = std::fs::metadata(&path).map_or(0, |m| m.len());
-        if !whole && size > huge::HUGE_BYTES {
+        if size > huge::HUGE_BYTES {
             return self.open_huge(path);
         }
         let text = std::fs::read_to_string(&path)
@@ -258,7 +258,7 @@ impl Tab {
         for line in text.split('\n') {
             widest = (widest.0.max(line.len()), widest.1.max(display_cols(line.chars())));
         }
-        if !whole && widest.0 > huge::LONG_LINE {
+        if widest.0 > huge::LONG_LINE {
             return self.open_huge(path);
         }
         let (id, lang) = (self.buf.id, self.buf.lang);
@@ -521,7 +521,7 @@ impl Tab {
             return Ok(());
         }
         if self.huge.is_some() {
-            self.load(false).map_err(anyhow::Error::msg)?;
+            self.load().map_err(anyhow::Error::msg)?;
         } else {
             self.buf.reload_from_disk()?;
         }
@@ -939,10 +939,6 @@ mod tests {
         assert_eq!(t.huge.as_ref().map(HugeView::lines), Some(3));
         assert!(!t.buf.is_loaded() && t.line_count() == 3);
         assert_eq!(t.line_text(2), "b");
-        let mut t = t;
-        t.load(true).unwrap();
-        assert!(t.huge.is_none() && t.buf.is_loaded(), "unless asked for whole");
-        assert_eq!(t.line_count(), 3);
     }
 
     #[test]

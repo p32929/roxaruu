@@ -66,7 +66,6 @@ pub enum Command {
     SelectAll,
     Find,
     Replace,
-    EditWholeFile,
     AddNextOccurrence,
     AddCursorAbove,
     AddCursorBelow,
@@ -176,7 +175,7 @@ const KEYLESS: &[Command] = &[
 
 /// Ids of commands that are gone (merged into Open…): a keybindings file
 /// naming one is quietly ignored, not an error.
-const RETIRED: &[&str] = &["folder.recent", "terminal.recent", "terminal.openInFolder"];
+const RETIRED: &[&str] = &["folder.recent", "terminal.recent", "terminal.openInFolder", "file.editWhole"];
 
 macro_rules! commands {
     ($($command:ident $(($arg:literal))?, $id:literal, $title:expr, [$($key:literal),*];)*) => {
@@ -249,7 +248,6 @@ commands! {
     SelectAll, "edit.selectAll", "Select All", ["ctrl+a"];
     Find, "edit.find", "Find", ["ctrl+f"];
     Replace, "edit.replace", "Replace", ["ctrl+r"];
-    EditWholeFile, "file.editWhole", "Edit a Huge File (Load It Whole)", ["ctrl+alt+e"];
     AddNextOccurrence, "edit.addNextOccurrence", "Add Cursor at Next Match", ["ctrl+d"];
     AddCursorAbove, "edit.addCursorAbove", "Add Cursor Above", ["ctrl+alt+up"];
     AddCursorBelow, "edit.addCursorBelow", "Add Cursor Below", ["ctrl+alt+down"];

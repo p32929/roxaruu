@@ -340,7 +340,7 @@ pub mod icon {
             Command::Redo => REDO,
             Command::Copy | Command::Cut => COPY,
             Command::Paste => PASTE,
-            Command::SelectAll | Command::EditWholeFile => EDIT,
+            Command::SelectAll => EDIT,
             Command::Find | Command::SearchInFiles => SEARCH,
             Command::Replace => REPLACE,
             Command::AddNextOccurrence | Command::AddCursorAbove | Command::AddCursorBelow => {
@@ -2732,8 +2732,6 @@ impl App {
             ]);
         } else if self.active_tab().is_some_and(|t| t.diff.is_some()) {
             list.push(cmd(Command::GitOpenFile, "open the file"));
-        } else if !self.editable() {
-            list.push(cmd(Command::EditWholeFile, "edit the whole file"));
         }
         list.extend([
             cmd(Command::Save, "save").filter(|_| unsaved),
@@ -3989,10 +3987,7 @@ impl App {
         let rect = ui.available_rect_before_wrap();
         let rows = ((rect.height() / row_h) as usize).max(1);
         let show_current_line = self.config.settings.current_line;
-        let note = match self.shortcut(Command::EditWholeFile) {
-            Some(k) => format!("Read-only: too big to edit here  ·  {k}  load the whole file to edit it"),
-            None => "Read-only: too big to edit here".to_string(),
-        };
+        let note = "Read-only: too big to edit here";
         let query = match &self.find {
             Some(f) if !f.query.is_empty() && self.active == Some(i) => {
                 let fold = |s: &str| if f.case { s.to_string() } else { s.to_ascii_lowercase() };
@@ -4150,7 +4145,7 @@ impl App {
         // Why it can't be edited, and the key that changes that.
         let s = pt.s;
         let g = ui.fonts_mut(|f| {
-            f.layout_no_wrap(note, pt.font(12.0, Weight::Regular), c.text_muted)
+            f.layout_no_wrap(note.to_string(), pt.font(12.0, Weight::Regular), c.text_muted)
         });
         let pill = Rect::from_min_size(
             pos2(

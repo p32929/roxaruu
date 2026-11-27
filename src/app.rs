@@ -830,19 +830,6 @@ impl App {
             | Command::Paste
             | Command::SelectAll => self.edit_command(command, ctx),
             Command::Find | Command::Replace => self.open_find(command == Command::Replace),
-            Command::EditWholeFile => {
-                if let Some(t) = self.active_tab_mut() {
-                    let line = t.caret().0;
-                    match t.load(true) {
-                        Ok(()) => {
-                            t.go_to(line, 0..0);
-                            let name = t.name();
-                            self.notify(format!("{name} is open for editing"));
-                        }
-                        Err(e) => self.warn(e),
-                    }
-                }
-            }
             Command::AddNextOccurrence | Command::AddCursorAbove | Command::AddCursorBelow => {
                 if let Some(t) = self.active_tab_mut() {
                     match command {
@@ -1028,7 +1015,6 @@ impl App {
             | Command::AddNextOccurrence
             | Command::AddCursorAbove
             | Command::AddCursorBelow => self.editable(),
-            Command::EditWholeFile => self.active_tab().is_some_and(|t| t.huge.is_some()),
             // Line edits are the editor's: in a terminal ⌥↑ and ⌘↵ stay the shell's.
             Command::GoToLine => self.active.is_some() && self.focus == Focus::Editor,
             Command::ToggleComment
