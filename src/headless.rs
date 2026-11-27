@@ -1749,6 +1749,11 @@ fn headless_every_shortcut() {
     crate::app::dry_run(true);
     press(&mut h, CMD, Key::S);
     assert_eq!(crate::app::dry_run(false), [], "⌘S from the tree");
+    // Nor do the tabs' keys (the editor's or a terminal's).
+    assert!(app(&h).available(Command::CloseTab) && !app(&h).works_here(Command::CloseTab));
+    crate::app::dry_run(true);
+    press(&mut h, CMD, Key::W);
+    assert_eq!(crate::app::dry_run(false), [], "⌘W from the tree");
     h.state_mut().0.focus = crate::app::Focus::Editor;
 
     // Move to Trash, from Go to File.

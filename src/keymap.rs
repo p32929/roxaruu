@@ -208,6 +208,20 @@ pub fn works_in(c: Command) -> Option<&'static [Place]> {
         Command::RenameFile | Command::OpenInTerminal => FILES,
         Command::DeleteFile => &[Tree, TreeSearch],
         Command::OpenInDefaultApp | Command::CopyPath | Command::CopyRelativePath => &[Editor, Tree, TreeSearch, Changes],
+        // Tabs: the editor's, or in a terminal the terminals'.
+        Command::CloseTab
+        | Command::CloseAllTabs
+        | Command::TogglePinTab
+        | Command::CloseOtherTabs
+        | Command::CloseTabsToRight
+        | Command::CloseTabsToLeft
+        | Command::CloseSavedTabs
+        | Command::ReopenTab
+        | Command::NextTab
+        | Command::PrevTab
+        | Command::MoveTabLeft
+        | Command::MoveTabRight
+        | Command::GoToTab(_) => &[Editor, Terminal],
         _ => return None,
     })
 }
