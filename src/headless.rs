@@ -5915,6 +5915,14 @@ fn node_and_chrome() -> Option<(&'static str, &'static str)> {
 #[test]
 #[ignore]
 fn headless_remote_input_in_chrome() {
+    // The terminal's lines with text, and whether one is a prompt.
+    fn screen_lines(h: &Harness<'static, Root>) -> Vec<String> {
+        let screen = app(h).terminal().map(|t| t.pane.screen().contents()).unwrap_or_default();
+        screen.lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect()
+    }
+    fn is_prompt(l: &str) -> bool {
+        l.trim_end().ends_with(['$', '%', '#', '>'])
+    }
     use crate::app::Focus;
     use std::io::BufRead;
     let Some((node, chrome)) = node_and_chrome() else {
@@ -5992,6 +6000,15 @@ fn headless_remote_input_in_chrome() {
             // The shell's answer to the line typed after ⌃C ("done-2" only
             // shows once it ran; a loaded machine got the step first).
             // And the prompt after it: keys typed before it are dropped.
+            "shell" => screen_lines(h).last().is_some_and(|l| is_prompt(l)),
+            "sleeping" => {
+                let lines = screen_lines(h);
+                lines.iter().rposition(|l| l.trim_end().ends_with("sleep 30")).is_some_and(|i| !lines.iter().skip(i + 1).any(|l| is_prompt(l)))
+            }
+            "interrupted" => {
+                let lines = screen_lines(h);
+                lines.iter().rposition(|l| l.contains("^C")).is_some_and(|i| lines.iter().skip(i + 1).any(|l| is_prompt(l)))
+            }
             "terminal" => app(h).terminal().is_some_and(|t| {
                 let screen = t.pane.screen().contents();
                 let lines: Vec<&str> = screen.lines().collect();
@@ -5999,7 +6016,7 @@ fn headless_remote_input_in_chrome() {
             }),
             _ => true,
         };
-        if matches!(step, "link-printed" | "links-listed" | "dragged" | "flicked" | "palette" | "palette-closed" | "terminal") {
+        if matches!(step, "link-printed" | "links-listed" | "dragged" | "flicked" | "palette" | "palette-closed" | "shell" | "sleeping" | "interrupted" | "terminal") {
             // What it's waiting on, every few seconds, in a file (a waiting
             // test's output is held back): a wait that never ends says why.
             let note = shots.join("input-waiting.log");

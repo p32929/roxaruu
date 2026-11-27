@@ -227,7 +227,13 @@ pub fn works_in(c: Command) -> Option<&'static [Place]> {
         Command::ToggleSplit | Command::ToggleWordWrap => &[Editor],
         Command::ToggleSidebar => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, List],
         Command::FocusSidebar | Command::CollapseFolders => &[Editor, Tree, TreeSearch, Changes, Message, Terminal],
-        Command::SwitchFocus => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal],
+        Command::SwitchFocus
+        | Command::ToggleTerminalGrid
+        | Command::MaximizeTerminal
+        | Command::SwitchTerminal
+        | Command::JumpTerminal(_) => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal],
+        Command::ToggleTerminal | Command::NewTerminal => &[Editor, Find, Tree, TreeSearch, Changes, Message, Terminal, Start],
+        Command::ClearTerminal | Command::CopyTerminalOutput | Command::CloseTerminal | Command::OpenTerminalLink => &[Terminal],
         // Tabs: the editor's, or in a terminal the terminals'.
         Command::CloseTab
         | Command::CloseAllTabs

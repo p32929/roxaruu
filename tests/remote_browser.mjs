@@ -265,12 +265,14 @@ async function inputScenario() {
 
   step = "input: terminal";
   await chord(["alt"], "†", "KeyT", "†");            // ⌥T opens the terminal, types nothing
-  await sleep(1500);
+  // Each line typed once the shell is ready for it: typed sooner, the tty
+  // echoes it and the shell drops it as it draws its prompt.
+  await goAhead("shell");                            // its prompt is up
   await type("sleep 30");
   await press("Enter", "Enter", 0, "\r");
-  await sleep(800);
+  await goAhead("sleeping");                         // it runs
   await chord(["ctrl"], "c", "KeyC");                // ⌃C from a Mac: the shell's interrupt, not Copy
-  await sleep(500);
+  await goAhead("interrupted");                      // a prompt again
   await type("echo done-$((1+1))");
   await press("Enter", "Enter", 0, "\r");
   await goAhead("terminal");                         // once the shell answered
