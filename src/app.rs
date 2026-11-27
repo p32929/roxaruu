@@ -911,7 +911,7 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
             }
             Command::MaximizeWindow => toggle_maximized(ctx),
-            Command::MinimizeWindow => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            Command::MinimizeWindow => crate::sys::minimize(ctx, true),
             Command::ToggleWordWrap => {
                 let wrap = !self.config.settings.word_wrap;
                 self.config.settings.word_wrap = wrap;

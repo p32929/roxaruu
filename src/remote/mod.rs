@@ -443,7 +443,7 @@ impl Remote {
             && !matches!(app.ask, Some(crate::app::Ask::RemoteAddress));
         if hide != self.minimized {
             self.minimized = hide;
-            main.send_viewport_cmd(egui::ViewportCommand::Minimized(hide));
+            crate::sys::minimize(main, hide);
         }
         // Serving here, but the marker is gone or someone else's: turned off
         // from another window.

@@ -400,6 +400,30 @@ pub fn quit_closes_the_window() {
 #[cfg(not(target_os = "macos"))]
 pub fn quit_closes_the_window() {}
 
+/// Minimize the window (or bring it back). On macOS through AppKit, never
+/// egui's `ViewportCommand::Minimized`: that marks the viewport minimized,
+/// which egui-winit never reads back on a Mac (egui #3494), so on coming
+/// back from the Dock eframe kept skipping every frame and the window froze
+/// for good. macOS tells winit (`Occluded`) when it really is hidden.
+#[cfg(target_os = "macos")]
+pub fn minimize(_ctx: &eframe::egui::Context, on: bool) {
+    use objc2_app_kit::NSApplication;
+    // AppKit only answers on the main thread, where frames run.
+    let Some(mtm) = objc2::MainThreadMarker::new() else {
+        tracing::warn!(on, "minimize: not on the main thread");
+        return;
+    };
+    // One window per process.
+    for w in NSApplication::sharedApplication(mtm).windows().iter() {
+        if on { w.miniaturize(None) } else { w.deminiaturize(None) }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn minimize(ctx: &eframe::egui::Context, on: bool) {
+    ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(on));
+}
+
 /// How a notification went, for the terminal's tab to say on hover: sent or
 /// not, whether something is likely keeping it out of sight (`trouble`),
 /// and what to do about it. Only what the system lets an app see for free:
@@ -1019,6 +1043,17 @@ pub fn activate(_pid: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimizing goes through `minimize` alone: egui's own command froze
+    /// a Mac window for good once it came back from the Dock.
+    #[test]
+    fn only_minimize_minimizes() {
+        let others = ["app.rs", "ui.rs", "main.rs", "remote/mod.rs", "app/extras.rs", "app/files.rs"];
+        let srcs = [include_str!("app.rs"), include_str!("ui.rs"), include_str!("main.rs"), include_str!("remote/mod.rs"), include_str!("app/extras.rs"), include_str!("app/files.rs")];
+        for (name, src) in others.iter().zip(srcs) {
+            assert!(!src.contains(concat!("ViewportCommand::", "Minimized")), "{name} minimizes through egui: use sys::minimize");
+        }
+    }
 
     /// Windows terminals are Git Bash (GitHub's runners have it), whatever
     /// was chosen before: never PowerShell or cmd.

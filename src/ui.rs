@@ -2487,7 +2487,7 @@ impl App {
             ui.painter().text(r.center(), Align2::CENTER_CENTER, glyph, pt.font(13.0, Weight::Regular), color);
             if resp.on_hover_text(tip).clicked() {
                 match n {
-                    0 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                    0 => crate::sys::minimize(ctx, true),
                     1 => crate::app::toggle_maximized(ctx),
                     // Through the close request: "Close this window?" asks first.
                     _ => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
