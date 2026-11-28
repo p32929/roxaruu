@@ -5339,7 +5339,7 @@ impl App {
             .into_iter()
             .filter_map(|(at, held)| Some((at?, held)))
         {
-            let file_span = file_here.as_ref().map(|f| f.3.clone());
+            let file_span = file_here.as_ref().map(|f| f.2.clone());
             let Some(span) = crate::terminalpane::url_cols_in_row(&screen, r)
                 .into_iter()
                 .find(|s| s.contains(&col))
@@ -5348,10 +5348,14 @@ impl App {
                 continue;
             };
             let what = match &file_here {
-                Some((path, line, ..)) => format!(
-                    "{link_mod_key}-click to open {} at line {line}",
-                    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-                ),
+                Some((path, at, _)) => {
+                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    match at {
+                        Some((line, _)) => format!("{link_mod_key}-click to open {name} at line {line}"),
+                        None if crate::app::files::viewed(path) && !self.remote_pass => format!("{link_mod_key}-click to open {name} in its app"),
+                        None => format!("{link_mod_key}-click to open {name}"),
+                    }
+                }
                 None => format!("{link_mod_key}-click to open this link{all_links}"),
             };
             let y = inner.top() + (r + 1) as f32 * row_h - 2.0;
@@ -5378,15 +5382,8 @@ impl App {
         if let Some(url) = link {
             self.offer_url(url);
         }
-        if let Some((path, line, col, _)) = file_link {
-            self.open_file(&path);
-            if let Some(a) = self.active {
-                self.load_tab(a);
-            }
-            if let Some(t) = self.active_tab_mut() {
-                t.go_to(line - 1, col - 1..col - 1);
-            }
-            self.focus = Focus::Editor;
+        if let Some((path, at, _)) = file_link {
+            self.open_terminal_file(&path, at);
         }
         // Scrolled up: where in the history (a thin bar at the edge), and how
         // much is below, which a click goes back to (as typing does).

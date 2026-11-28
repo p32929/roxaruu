@@ -83,6 +83,29 @@ impl App {
         Some(dir)
     }
 
+    /// A file ⌘-clicked in a terminal: code and text in the editor (at its
+    /// line, if it names one); what's looked at rather than edited (a page,
+    /// a PDF, a picture) in its own app. Never anything that could run:
+    /// terminal output is untrusted, so a script opens as text at most.
+    pub fn open_terminal_file(&mut self, path: &Path, at: Option<(usize, usize)>) {
+        tracing::debug!(path = %path.display(), ?at, "file from a terminal");
+        // (A browser's copy would open it on this computer, out of sight.)
+        if at.is_none() && viewed(path) && !self.remote_pass {
+            return self.open_external(path);
+        }
+        if let Some(reason) = crate::buffer::unsupported_reason(path) {
+            return self.warn(reason);
+        }
+        self.open_file(path);
+        if let Some(a) = self.active {
+            self.load_tab(a);
+        }
+        if let (Some((line, col)), Some(t)) = (at, self.active_tab_mut()) {
+            t.go_to(line.saturating_sub(1), col.saturating_sub(1)..col.saturating_sub(1));
+        }
+        self.focus = Focus::Editor;
+    }
+
     pub fn run_file_command(&mut self, command: Command, ctx: &egui::Context) {
         if matches!(command, Command::NewFile | Command::NewFolder) {
             let Some(dir) = self.new_file_dir() else {
@@ -605,6 +628,17 @@ fn clipboard_files() -> Option<Vec<PathBuf>> {
 fn clipboard_files() -> Option<Vec<PathBuf>> {
     let files = CLIPBOARD_FILES.with(|c| c.borrow().clone());
     (!files.is_empty()).then_some(files)
+}
+
+/// A file you look at rather than edit, which its own app shows: a web
+/// page, a PDF, a picture, a recording. A list of what's safe, not of
+/// what's not: nothing here runs anything.
+pub(crate) fn viewed(path: &Path) -> bool {
+    const VIEWED: &[&str] = &[
+        "html", "htm", "pdf", "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "tif", "tiff", "heic", "avif", "mp4", "mov",
+        "webm", "mkv", "m4v", "mp3", "wav", "m4a", "ogg", "flac",
+    ];
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| VIEWED.contains(&e.to_ascii_lowercase().as_str()))
 }
 
 /// Move to the Trash. Tests delete outright, so nothing lands in the real Trash.

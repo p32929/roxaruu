@@ -659,11 +659,11 @@ impl TerminalPane {
         url_span_at(&joined, at)
     }
 
-    /// A `file:line[:col]` at a visible cell (a compiler's error, a stack
-    /// trace) naming a file that exists, relative to the terminal's folder:
-    /// the file, its line and column (from 1), and the cells it covers on
-    /// that row.
-    pub fn file_at(&self, row: u16, col: u16) -> Option<(PathBuf, usize, usize, std::ops::Range<u16>)> {
+    /// A file at a visible cell, `file:line[:col]` (a compiler's error, a
+    /// stack trace) or a path on its own, naming a file that exists
+    /// (relative to the terminal's folder): the file, its line and column
+    /// (from 1) if given, and the cells it covers on that row.
+    pub fn file_at(&self, row: u16, col: u16) -> Option<(PathBuf, Option<LineCol>, std::ops::Range<u16>)> {
         let screen = self.screen();
         let (rows, cols) = screen.size();
         if row >= rows || col >= cols {
@@ -671,7 +671,7 @@ impl TerminalPane {
         }
         let (joined, row_ranges) = wrapped_line(&screen, row);
         let range = row_ranges.into_iter().find(|(r, _)| *r == row)?.1;
-        let (span, path, line, column) = file_span_at(&joined, range.start + col as usize)?;
+        let (span, path, at) = file_span_at(&joined, range.start + col as usize)?;
         let path = crate::config::expand_home(&path);
         let path = if path.is_absolute() { path } else { self.dir.join(path) };
         if !path.is_file() {
@@ -679,7 +679,7 @@ impl TerminalPane {
         }
         let start = span.start.max(range.start) - range.start;
         let end = span.end.min(range.end) - range.start;
-        Some((path, line, column, start as u16..end as u16))
+        Some((path, at, start as u16..end as u16))
     }
 
     /// The tab label: the folder, plus the running command when one is active.
@@ -1888,10 +1888,14 @@ pub fn url_cols_in_row(screen: &vt100::Screen, row: u16) -> Vec<std::ops::Range<
         .collect()
 }
 
-/// The `path:line[:col]` covering char `at` in `line`: its char span, the
-/// path as written, the line, and the column (1 when none). Whatever's
-/// around it — quotes, brackets, a trailing `:` or `.` — is left out.
-pub fn file_span_at(line: &str, at: usize) -> Option<(std::ops::Range<usize>, String, usize, usize)> {
+/// A file's line and column, from 1.
+pub type LineCol = (usize, usize);
+
+/// The `path:line[:col]`, or path on its own (with a `/`), covering char
+/// `at` in `line`: its char span, the path as written, and its line and
+/// column if given (column 1 when only a line). Whatever's around it —
+/// quotes, brackets, a trailing `:` or `.` — is left out.
+pub fn file_span_at(line: &str, at: usize) -> Option<(std::ops::Range<usize>, String, Option<LineCol>)> {
     let chars: Vec<char> = line.chars().collect();
     let edge = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '<' | '>' | '{' | '}' | ',' | ';' | '|');
     if chars.get(at).is_none_or(|&c| edge(c)) {
@@ -1907,14 +1911,18 @@ pub fn file_span_at(line: &str, at: usize) -> Option<(std::ops::Range<usize>, St
     let mut parts = token.rsplitn(3, ':');
     let (a, b, c) = (parts.next()?, parts.next(), parts.next());
     let number = |s: &str| s.parse::<usize>().ok().filter(|n| *n > 0);
-    let (path, line, col) = match (number(a), b.and_then(number), c) {
-        (Some(col), Some(line), Some(path)) => (path.to_string(), line, col),
-        (Some(line), _, _) => (token.rsplit_once(':')?.0.to_string(), line, 1),
+    let (path, at) = match (number(a), b.and_then(number), c) {
+        (Some(col), Some(line), Some(path)) => (path.to_string(), Some((line, col))),
+        (Some(line), _, _) => (token.rsplit_once(':')?.0.to_string(), Some((line, 1))),
+        // A path on its own (a file written, a report): with a `/` (or `\`)
+        // in it, so a plain word isn't taken for one; `file_at` checks it's
+        // a file.
+        _ if token.contains(['/', '\\']) => (token.clone(), None),
         _ => return None,
     };
     // A name, not a time (12:30) or a URL's port.
     let has_name = path.chars().any(char::is_alphabetic) && !path.contains("://");
-    has_name.then(|| (start..start + token.chars().count(), path, line, col))
+    has_name.then(|| (start..start + token.chars().count(), path, at))
 }
 
 /// Find the URL covering character index `at` in `line`, if any.
@@ -2193,15 +2201,20 @@ mod tests {
 
     #[test]
     fn file_positions_are_found_in_what_tools_print() {
-        let at = |line: &str, word: &str| file_span_at(line, line.find(word).unwrap()).map(|(_, p, l, c)| (p, l, c));
-        assert_eq!(at("  --> src/app.rs:42:7", "app"), Some(("src/app.rs".into(), 42, 7)));
-        assert_eq!(at("error at main.go:9.", "main"), Some(("main.go".into(), 9, 1)));
-        assert_eq!(at("at Object.<anonymous> (/home/me/x.js:3:15)", "home"), Some(("/home/me/x.js".into(), 3, 15)));
-        assert_eq!(at(r"C:\code\a.rs:5:2 oops", "code"), Some((r"C:\code\a.rs".into(), 5, 2)));
+        let at = |line: &str, word: &str| file_span_at(line, line.find(word).unwrap()).map(|(_, p, a)| (p, a));
+        let line = |p: &str, l, c| Some((p.to_string(), Some((l, c))));
+        assert_eq!(at("  --> src/app.rs:42:7", "app"), line("src/app.rs", 42, 7));
+        assert_eq!(at("error at main.go:9.", "main"), line("main.go", 9, 1));
+        assert_eq!(at("at Object.<anonymous> (/home/me/x.js:3:15)", "home"), line("/home/me/x.js", 3, 15));
+        assert_eq!(at(r"C:\code\a.rs:5:2 oops", "code"), line(r"C:\code\a.rs", 5, 2));
         assert_eq!(at("see https://x.org:8080/a", "x.org"), None, "a URL's port isn't a line");
         assert_eq!(at("12:30 done", "30"), None, "a time isn't a file");
-        assert_eq!(at("main.rs and more", "main"), None, "a name without a line");
-        assert_eq!(at("Makefile:12: *** missing separator", "Make"), Some(("Makefile".into(), 12, 1)));
+        assert_eq!(at("main.rs and more", "main"), None, "a name without a line or a /");
+        assert_eq!(at("Makefile:12: *** missing separator", "Make"), line("Makefile", 12, 1));
+        // A path on its own, no line: the whole path, its full stop off.
+        assert_eq!(at("Wrote /Users/me/report.html.", "Users"), Some(("/Users/me/report.html".into(), None)));
+        assert_eq!(at("open ~/notes/a.md now", "notes"), Some(("~/notes/a.md".into(), None)));
+        assert_eq!(at("see https://x.org/a/b", "x.org"), None, "a link is a link");
         // The span is the token, not its brackets or trailing colon.
         let line = "(src/a.rs:3):";
         let (span, ..) = file_span_at(line, 3).unwrap();

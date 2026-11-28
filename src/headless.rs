@@ -1447,6 +1447,47 @@ run_command(&mut h, crate::keymap::Command::CopyRelativePath);
     assert_eq!(tab.path(), Some(&file), "the file opened");
     assert_eq!(tab.caret(), (2, 9), "at line 3, column 10");
     assert_eq!(app(&h).focus, crate::app::Focus::Editor);
+
+    // A path on its own: text opens in the editor; a page (looked at, not
+    // edited) in its own app; something that could run never does.
+    let page = dir.path().canonicalize().unwrap().join("report.html");
+    let notes = dir.path().canonicalize().unwrap().join("notes.md");
+    let script = dir.path().canonicalize().unwrap().join("go.command");
+    std::fs::write(&page, "<p>hi</p>\n").unwrap();
+    std::fs::write(&notes, "# notes\n").unwrap();
+    std::fs::write(&script, "echo hi\n").unwrap();
+    h.state_mut().0.focus = crate::app::Focus::Terminal;
+    for (file, name) in [(&page, "report.html"), (&notes, "notes.md"), (&script, "go.command")] {
+        run(&mut h, &format!("printf 'Wrote {}.\\n'", file.display()));
+        let row_of = move |a: &App| {
+            a.terminal().and_then(|t| {
+                let screen = t.pane.screen();
+                screen.rows(0, screen.size().1).position(|l| l.starts_with("Wrote ") && l.contains(name))
+            })
+        };
+        wait_for(&mut h, "the path", move |a| row_of(a).is_some());
+        let row = row_of(app(&h)).unwrap();
+        let at = egui::pos2(term.left() + 10.0 * s + 8.5 * char_w, term.top() + 6.0 * s + (row as f32 + 0.5) * row_h);
+        assert!(app(&h).terminal().unwrap().pane.file_at(row as u16, 8).is_some_and(|f| &f.0 == file && f.1.is_none()), "{name} found");
+        App::take_launched();
+        h.event(Event::ModifiersChanged(CMD));
+        h.event(Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: CMD });
+            h.step();
+        }
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.step();
+        let launched = App::take_launched();
+        if file == &page {
+            assert_eq!(launched, [vec![page.to_string_lossy().into_owned()]], "the page, in its app");
+        } else {
+            assert!(launched.is_empty(), "{name} runs nothing: {launched:?}");
+            assert_eq!(app(&h).active_tab().and_then(|t| t.path()), Some(file), "{name}, in the editor");
+        }
+        h.state_mut().0.focus = crate::app::Focus::Terminal;
+    }
 }
 
 /// Step 9: to-do list, clipboard history, settings, shortcuts, F1 help,
