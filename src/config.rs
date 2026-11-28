@@ -465,6 +465,7 @@ fn fallback_theme() -> Theme {
         name: "Fallback".into(),
         dark: true,
         colors,
+        file: None,
     }
 }
 

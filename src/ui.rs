@@ -5589,6 +5589,14 @@ impl App {
                     return true;
                 }
             }
+            // ⌘⌫ on a theme of your own: deleted.
+            Mode::Themes => {
+                if let Some(name) = self.selected_own_theme()
+                    && ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Backspace))
+                {
+                    self.delete_theme(&name, ctx);
+                }
+            }
             Mode::Where => {
                 self.sync_places(ctx);
                 let (reset, back) = ctx.input_mut(|i| {
@@ -6178,6 +6186,9 @@ impl App {
         };
         let pos = pos2(screen.center().x - width / 2.0, top);
         let (mut moved, mut accept, mut query_changed) = (false, false, false);
+        let mut delete: Option<String> = None;
+        let own_themes: Vec<String> = self.config.themes.iter().filter(|t| t.file.is_some()).map(|t| t.name.clone()).collect();
+        let delete_key = if crate::keymap::mac_keys() { "  ⌘⌫" } else { "  Ctrl+Backspace" };
 
         let area = egui::Area::new(egui::Id::unique("palette"))
             .order(egui::Order::Foreground)
@@ -6382,6 +6393,8 @@ impl App {
                 // Lists of several: a checkbox on the right of the row under
                 // the pointer (on every row once one's ticked) picks it.
                 let mut boxes: Vec<Option<bool>> = Vec::new();
+                // Select Theme: a trash button on a theme of your own, under the pointer.
+                let mut bins: Vec<Option<bool>> = Vec::new();
                 for (n, idx) in (pal.scroll..pal.scroll + shown).enumerate() {
                     let r = ui.interact(
                         row_rect(n),
@@ -6397,6 +6410,20 @@ impl App {
                         b.on_hover_text(if on { "Deselect" } else { "Select, to do several at once" })
                     });
                     boxes.push(check.as_ref().map(|c| c.hovered()));
+                    let own = match pal.items.get(idx).map(|it| &it.pick) {
+                        Some(Pick::Theme(name)) if mode == Mode::Themes && own_themes.contains(name) => Some(name.clone()),
+                        _ => None,
+                    };
+                    let bin = own.filter(|_| ui.rect_contains_pointer(row_rect(n))).map(|name| {
+                        let b = ui.interact(pt.checkbox_rect(row_rect(n)).expand(6.0 * s), ui.scope_id().with(("palette-trash", idx)), Sense::click());
+                        b.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Delete {name}")));
+                        let b = b.on_hover_text(format!("Delete this theme (to the Trash){}", delete_key));
+                        if b.clicked() {
+                            delete = Some(name);
+                        }
+                        b.hovered()
+                    });
+                    bins.push(bin);
                     if let Some(check) = &check {
                         if check.hovered() && pointer_moved && pal.selected != idx {
                             pal.selected = idx;
@@ -6466,9 +6493,14 @@ impl App {
                         &item.caps[..]
                     };
                     let check = boxes.get(n).copied().flatten();
-                    pt.check_row(ui, &painter, row_rect(n), t, glyph, label, &item.detail, caps, check.is_some());
+                    let bin = bins.get(n).copied().flatten();
+                    pt.check_row(ui, &painter, row_rect(n), t, glyph, label, &item.detail, caps, check.is_some() || bin.is_some());
                     if let Some(hot) = check {
                         pt.checkbox(&painter, row_rect(n), pal.is_ticked(idx), hot);
+                    }
+                    if let Some(hot) = bin {
+                        let at = pt.checkbox_rect(row_rect(n)).center();
+                        painter.text(at, Align2::CENTER_CENTER, icon::TRASH, pt.font(14.0, Weight::Regular), if hot { c.error } else { c.text_muted });
                     }
                 }
 
@@ -6511,7 +6543,9 @@ impl App {
         if query_changed || moved {
             self.palette_moved(ctx);
         }
-        if accept {
+        if let Some(name) = delete {
+            self.delete_theme(&name, ctx);
+        } else if accept {
             self.palette_accept(ctx);
         } else if outside {
             self.close_palette(false, ctx);
@@ -6528,11 +6562,12 @@ impl App {
         let esc = (k("esc"), if self.ticked().is_empty() { "close" } else { "deselect all" });
         match mode {
             Mode::Themes | Mode::UiFonts | Mode::CodeFonts => {
-                vec![
-                    (k("↑ ↓"), "try each one"),
-                    (k("↵"), "keep this one"),
-                    (k("esc"), "cancel"),
-                ]
+                let mut v = vec![(k("↑ ↓"), "try each one"), (k("↵"), "keep this one")];
+                if self.selected_own_theme().is_some() {
+                    v.push((k("⌘⌫"), "delete theme"));
+                }
+                v.push((k("esc"), "cancel"));
+                v
             }
             Mode::Todos => vec![
                 (k("↵"), "add task · mark done"),

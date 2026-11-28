@@ -186,11 +186,31 @@ fn headless_project_walkthrough() {
     let text = std::fs::read_to_string(&file).unwrap().replace("\"background\": \"#faf9f7\"", "\"background\": \"#ffeedd\"");
     std::fs::write(&file, text).unwrap();
     wait_for(&mut h, "the edited theme", |a| a.config.theme.colors.background == egui::Color32::from_rgb(0xff, 0xee, 0xdd));
+    // Deleted from Select Theme (⌘⌫ on it): its file goes, and the theme in
+    // use becomes the built-in of its kind. Built-ins can't be deleted.
+    press(&mut h, CMD, Key::W);
+    press(&mut h, CMD_SHIFT, Key::P);
+    type_text(&mut h, "select theme");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let select = |h: &mut Harness<'static, Root>, name: &str| {
+        let p = h.state_mut().0.palette.as_mut().unwrap();
+        p.selected = p.items.iter().position(|i| i.pick == crate::palette::Pick::Theme(name.into())).unwrap();
+    };
+    select(&mut h, "Oxide");
+    assert_eq!(h.state().0.selected_own_theme(), None, "a built-in");
+    press(&mut h, CMD, Key::Backspace);
+    assert!(h.state().0.config.themes.iter().any(|t| t.name == "Oxide"));
+    select(&mut h, "Oxide Light (mine)");
+    assert!(h.state().0.selected_own_theme().is_some());
+    press(&mut h, CMD, Key::Backspace);
+    assert!(!file.exists(), "its file is gone");
+    assert!(h.state().0.config.themes.iter().all(|t| t.name != "Oxide Light (mine)"));
+    assert_eq!(h.state().0.config.settings.theme, "Oxide Light", "the built-in of its kind");
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert_eq!(h.state().0.config.theme.name, "Oxide Light", "esc keeps one that exists");
     // Back as it was, for the walkthroughs after.
-    std::fs::remove_file(&file).unwrap();
     let ctx = h.ctx.clone();
     h.state_mut().0.save_choice_quietly("theme", "Oxide", &ctx);
-    press(&mut h, CMD, Key::W);
     assert_eq!(h.state().0.config.theme.name, "Oxide");
 
     // Recent folders.
@@ -6931,3 +6951,5 @@ fn headless_every_key_that_applies_shows() {
     check(&mut h, "a terminal");
     shot(&mut h, "keys-terminal");
 }
+
+

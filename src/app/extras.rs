@@ -770,6 +770,42 @@ impl App {
         self.notify(format!("{name}: change its colours and save, it shows as you go"));
     }
 
+    /// Delete a theme of the user's own (⌘⌫ or its trash button in Select
+    /// Theme): its file to the Trash. In use, the built-in of its kind
+    /// takes over.
+    pub fn delete_theme(&mut self, name: &str, ctx: &egui::Context) {
+        let Some((file, dark)) = self.config.themes.iter().find(|t| t.name == name).and_then(|t| Some((t.file.clone()?, t.dark))) else {
+            return;
+        };
+        let path = config::themes_dir().join(&file);
+        if let Err(e) = super::files::trash(&path) {
+            return self.warn(format!("Couldn't delete {file}: {e}"));
+        }
+        tracing::info!(file = %path.display(), "theme deleted");
+        if self.config.settings.theme == name {
+            self.save_choice_quietly("theme", if dark { "Oxide" } else { "Oxide Light" }, ctx);
+        } else {
+            self.reload_config(ctx);
+        }
+        // Esc in Select Theme goes back to one that still exists.
+        let now = self.config.theme.clone();
+        if let Some(p) = &mut self.palette
+            && matches!(&p.revert, Some(crate::palette::Revert::Theme(t)) if t.name == name)
+        {
+            p.revert = Some(crate::palette::Revert::Theme(now));
+        }
+        self.refresh_items();
+        self.palette_moved(ctx);
+        self.notify(format!("Moved {name} to the Trash ({file})"));
+    }
+
+    /// The theme on the selected row of Select Theme, if it's the user's own.
+    pub(crate) fn selected_own_theme(&self) -> Option<String> {
+        let p = self.palette.as_ref().filter(|p| p.mode == Mode::Themes)?;
+        let Some(Pick::Theme(name)) = p.selected_pick() else { return None };
+        self.config.themes.iter().any(|t| &t.name == name && t.file.is_some()).then(|| name.clone())
+    }
+
     // ---- keyboard shortcuts -----------------------------------------------
 
     pub(super) fn binding_items(&self, query: &str) -> Vec<Item> {

@@ -130,6 +130,8 @@ pub struct Theme {
     pub name: String,
     pub dark: bool,
     pub colors: Colors,
+    /// A user's own: its file in the themes folder (it can be deleted).
+    pub file: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Copy, Default, PartialEq)]
@@ -182,6 +184,7 @@ impl Theme {
             name: file.name,
             dark: file.kind == Kind::Dark,
             colors,
+            file: None,
         })
     }
 }
@@ -261,7 +264,8 @@ pub fn load_all(user_sources: &[(String, String)]) -> (Vec<Theme>, Vec<String>) 
         .map(|s| ("built-in".to_string(), s.to_string()));
     for (origin, src) in builtin.chain(user_sources.iter().cloned()) {
         match Theme::parse(&src, base_for(&src)) {
-            Ok(t) => {
+            Ok(mut t) => {
+                t.file = origin.strip_prefix("themes/").map(String::from);
                 themes.retain(|old| !old.name.eq_ignore_ascii_case(&t.name));
                 themes.push(t);
             }
