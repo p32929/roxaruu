@@ -301,7 +301,7 @@ pub mod icon {
             Command::GoToFile => GO_TO_FILE,
             Command::OpenFolder => FOLDER_OPEN,
             Command::CloseFolder => CLOSE,
-            Command::SelectTheme => THEME,
+            Command::SelectTheme | Command::NewTheme => THEME,
             Command::SelectUiFont | Command::SelectCodeFont => FONT,
             Command::Settings
             | Command::OpenSettings
@@ -454,6 +454,9 @@ struct Btn {
 /// Narrower than this (in points at the default text size), the file tree
 /// is a drawer over the editor and the bars keep only what matters: phones,
 /// tablets held upright, a narrow window.
+/// A terminal's text against its background, at least (WCAG's ratio for
+/// body text, VS Code's default too): `theme::readable`.
+const MIN_CONTRAST: f32 = 4.5;
 const COMPACT_WIDTH: f32 = 900.0;
 
 /// Shorter than this, the rows of tab keys give their room to the text (a
@@ -5231,11 +5234,20 @@ impl App {
                     fg = bg.unwrap_or(c.background);
                     bg = Some(old_fg);
                 }
-                if cell.dim() {
-                    fg = fg.gamma_multiply(0.6);
-                }
                 if pane.is_selected(r, col) {
                     bg = Some(sel_bg);
+                }
+                // A program's colours made for the other kind of background
+                // (Claude Code's on a light theme): readable all the same.
+                if fg != c.text || bg.is_some() {
+                    let under = bg.map_or(c.background, |b| {
+                        let [r, g, bl, a] = b.to_srgba_unmultiplied();
+                        crate::theme::mix(c.background, Color32::from_rgb(r, g, bl), a as f32 / 255.0)
+                    });
+                    fg = crate::theme::readable(fg, under, MIN_CONTRAST);
+                }
+                if cell.dim() {
+                    fg = fg.gamma_multiply(0.6);
                 }
                 let text = cell.contents();
                 cells.push(Cell {

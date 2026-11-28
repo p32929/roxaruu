@@ -742,6 +742,34 @@ impl App {
         self.focus = Focus::Editor;
     }
 
+    /// New Theme: the theme in use, every colour spelled out, as a file of
+    /// the user's own, chosen and opened to edit (each save shows).
+    pub fn new_theme(&mut self, ctx: &egui::Context) {
+        let dir = config::themes_dir();
+        let base = self.config.theme.name.clone();
+        let taken = |name: &str, file: &Path| file.exists() || self.config.themes.iter().any(|t| t.name.eq_ignore_ascii_case(name));
+        // "Oxide Light (mine)" → oxide-light-mine.json
+        let slug = |name: &str| name.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-");
+        let Some((name, file)) = (1..1000).find_map(|n| {
+            let name = if n == 1 { format!("{base} (mine)") } else { format!("{base} (mine {n})") };
+            let file = dir.join(format!("{}.json", slug(&name)));
+            (!taken(&name, &file)).then_some((name, file))
+        }) else {
+            return self.warn("Couldn't find a free name for the theme");
+        };
+        let made = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, self.config.theme.to_file(&name)));
+        if let Err(e) = made {
+            return self.warn(format!("Couldn't create {}: {e}", file.display()));
+        }
+        tracing::info!(file = %file.display(), "new theme");
+        self.close_palette(true, ctx);
+        self.reload_config(ctx);
+        self.save_choice_quietly("theme", name.as_str(), ctx);
+        self.open_file(&file);
+        self.focus = Focus::Editor;
+        self.notify(format!("{name}: change its colours and save, it shows as you go"));
+    }
+
     // ---- keyboard shortcuts -----------------------------------------------
 
     pub(super) fn binding_items(&self, query: &str) -> Vec<Item> {

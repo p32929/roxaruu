@@ -171,7 +171,7 @@ pub fn project_settings_path(root: &Path) -> PathBuf {
     if !path.exists() && old.exists() { old } else { path }
 }
 
-fn themes_dir() -> PathBuf {
+pub fn themes_dir() -> PathBuf {
     dir().join("themes")
 }
 
@@ -609,8 +609,12 @@ pub(crate) fn settings_template() -> String {
 
 fn themes_readme() -> String {
     format!(
-        "# Oxru themes\n\n\
-         Drop a `.json` file here and select it by its `\"name\"` in `settings.json`.\n\
+        "# Roxaruu themes\n\n\
+         Your own themes live here. The quickest start: Select Theme, pick the one\n\
+         closest to what you want, then \"New Theme from This One…\" (the last row,\n\
+         or the palette): it writes every colour of it to a file here, switches to\n\
+         it and opens it; each save shows. Or drop a `.json` file here and select it\n\
+         by its `\"name\"`.\n\
          List only the colours you want to change. Everything else comes from Oxide\n\
          (or Oxide Light when `\"type\": \"light\"`). Colours are `#rrggbb` or `#rrggbbaa`.\n\n\
          The default theme, as a starting point:\n\n```json\n{}```\n",

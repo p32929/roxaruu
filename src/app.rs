@@ -749,6 +749,7 @@ impl App {
             }
             Command::CloseFolder => self.begin_close(self.tab_paths(), After::CloseFolder, ctx),
             Command::SelectTheme => self.open_palette(Mode::Themes, ctx),
+            Command::NewTheme => self.new_theme(ctx),
             Command::SelectUiFont => self.open_palette(Mode::UiFonts, ctx),
             Command::SelectCodeFont => self.open_palette(Mode::CodeFonts, ctx),
             Command::Quit => self.request_quit(ctx),
@@ -2483,7 +2484,15 @@ impl App {
             Mode::Themes => {
                 let names: Vec<String> =
                     self.config.themes.iter().map(|t| t.name.clone()).collect();
-                simple_items(&query, names, icon::THEME, Pick::Theme)
+                let mut items = simple_items(&query, names, icon::THEME, Pick::Theme);
+                // Last: a theme of your own, from the one previewed.
+                let new = "New Theme from This One…";
+                if fuzzy::score(&query, new).is_some() {
+                    let mut it = Item::new(icon::ADD, new, Pick::Command(Command::NewTheme));
+                    it.detail = "every colour of it, in a file of yours to edit".into();
+                    items.push(it);
+                }
+                items
             }
             Mode::UiFonts => simple_items(
                 &query,

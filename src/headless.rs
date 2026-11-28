@@ -166,6 +166,33 @@ fn headless_project_walkthrough() {
     shot(&mut h, "18-theme-cancelled");
     assert_eq!(h.state().0.config.theme.name, "Oxide");
 
+    // A theme of your own, from the one previewed: every colour in a file
+    // of yours, chosen and opened; a save shows.
+    press(&mut h, CMD_SHIFT, Key::P);
+    type_text(&mut h, "select theme");
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    press(&mut h, Modifiers::NONE, Key::ArrowDown);
+    {
+        let p = h.state_mut().0.palette.as_mut().unwrap();
+        p.selected = p.items.iter().position(|i| i.pick == crate::palette::Pick::Command(crate::keymap::Command::NewTheme)).unwrap();
+    }
+    press(&mut h, Modifiers::NONE, Key::Enter);
+    let file = crate::config::themes_dir().join("oxide-light-mine.json");
+    assert!(file.exists());
+    assert_eq!(h.state().0.config.theme.name, "Oxide Light (mine)");
+    assert!(!h.state().0.config.theme.dark);
+    assert_eq!(h.state().0.active_tab().and_then(|t| t.path()), Some(&file));
+    shot(&mut h, "18b-new-theme");
+    let text = std::fs::read_to_string(&file).unwrap().replace("\"background\": \"#faf9f7\"", "\"background\": \"#ffeedd\"");
+    std::fs::write(&file, text).unwrap();
+    wait_for(&mut h, "the edited theme", |a| a.config.theme.colors.background == egui::Color32::from_rgb(0xff, 0xee, 0xdd));
+    // Back as it was, for the walkthroughs after.
+    std::fs::remove_file(&file).unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().0.save_choice_quietly("theme", "Oxide", &ctx);
+    press(&mut h, CMD, Key::W);
+    assert_eq!(h.state().0.config.theme.name, "Oxide");
+
     // Recent folders.
     press(&mut h, ALT, Key::O);
     shot(&mut h, "19-recent");

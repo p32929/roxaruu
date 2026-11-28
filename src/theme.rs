@@ -23,6 +23,11 @@ macro_rules! colors {
                     _ => None,
                 }
             }
+
+            /// Every slot with its JSON key, in `KEYS`' order.
+            fn all(&self) -> [(&'static str, Color32); Self::KEYS.len()] {
+                [$(($key, self.$field)),*]
+            }
         }
     };
 }
@@ -181,6 +186,58 @@ impl Theme {
     }
 }
 
+impl Theme {
+    /// This theme as a complete theme file (every colour spelled out),
+    /// named `name`: a user's own theme starts from it.
+    pub fn to_file(&self, name: &str) -> String {
+        let hex = |c: Color32| {
+            let [r, g, b, a] = c.to_srgba_unmultiplied();
+            if a == 255 { format!("#{r:02x}{g:02x}{b:02x}") } else { format!("#{r:02x}{g:02x}{b:02x}{a:02x}") }
+        };
+        let colors: Vec<String> = self.colors.all().iter().map(|(k, c)| format!("    \"{k}\": \"{}\"", hex(*c))).collect();
+        format!(
+            "{{\n  \"name\": {},\n  \"type\": \"{}\",\n  \"colors\": {{\n{}\n  }}\n}}\n",
+            serde_json::Value::from(name),
+            if self.dark { "dark" } else { "light" },
+            colors.join(",\n")
+        )
+    }
+}
+
+/// How far apart two colours' brightness is, as WCAG measures it: 1 (the
+/// same) to 21 (black on white). Body text wants 4.5.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let lum = |c: Color32| {
+        let ch = |v: u8| {
+            let v = v as f32 / 255.0;
+            if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * ch(c.r()) + 0.7152 * ch(c.g()) + 0.0722 * ch(c.b())
+    };
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// `fg`, moved toward black (on a light `bg`) or white (on a dark one) just
+/// far enough to reach `ratio` against `bg`: a terminal program's colours
+/// made for the other kind of background stay readable (VS Code's and
+/// iTerm2's "minimum contrast"). Readable already: unchanged.
+pub fn readable(fg: Color32, bg: Color32, ratio: f32) -> Color32 {
+    if contrast(fg, bg) >= ratio {
+        return fg;
+    }
+    let solid = Color32::from_rgb(fg.r(), fg.g(), fg.b());
+    let to = if contrast(bg, Color32::BLACK) > contrast(bg, Color32::WHITE) { Color32::BLACK } else { Color32::WHITE };
+    // The least mix that's enough (contrast grows along the way).
+    let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+    for _ in 0..8 {
+        let mid = (lo + hi) / 2.0;
+        if contrast(mix(solid, to, mid), bg) >= ratio { hi = mid } else { lo = mid }
+    }
+    let c = mix(solid, to, hi);
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), fg.a())
+}
+
 /// Every available theme — built-ins, then the user's — plus any errors from
 /// user theme files. A user theme with a built-in's name replaces it.
 pub fn load_all(user_sources: &[(String, String)]) -> (Vec<Theme>, Vec<String>) {
@@ -244,6 +301,37 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Light grey on a light background darkens until readable; text that
+    /// reads already is left alone; on a dark background it lightens.
+    #[test]
+    fn terminal_colours_stay_readable() {
+        let light = Color32::from_rgb(0xfa, 0xf9, 0xf7);
+        let grey = Color32::from_rgb(0xdd, 0xdd, 0xdd);
+        assert!(contrast(grey, light) < 2.0);
+        let fixed = readable(grey, light, 4.5);
+        assert!(contrast(fixed, light) >= 4.5, "{fixed:?}");
+        assert!(fixed.r() < grey.r(), "darker on light");
+        assert!(contrast(fixed, light) < 6.0, "only as far as needed");
+        let black = Color32::from_rgb(0x1c, 0x1b, 0x19);
+        assert_eq!(readable(black, light, 4.5), black, "readable already");
+        let dark = Color32::from_rgb(0x16, 0x16, 0x18);
+        let navy = Color32::from_rgb(0x20, 0x20, 0x60);
+        let up = readable(navy, dark, 4.5);
+        assert!(contrast(up, dark) >= 4.5 && up.r() > navy.r(), "lighter on dark");
+    }
+
+    /// A theme written out (New Theme) reads back as the same theme.
+    #[test]
+    fn a_theme_round_trips_through_its_file() {
+        let (themes, _) = load_all(&[]);
+        for t in &themes {
+            let back = Theme::parse(&t.to_file("Mine"), None).unwrap();
+            assert_eq!(back.name, "Mine");
+            assert_eq!(back.dark, t.dark);
+            assert_eq!(back.colors.all(), t.colors.all(), "{}", t.name);
+        }
+    }
 
     #[test]
     fn builtins_all_load_and_fallbacks_are_complete() {

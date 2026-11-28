@@ -23,6 +23,7 @@ pub enum Command {
     OpenFolder,
     CloseFolder,
     SelectTheme,
+    NewTheme,
     SelectUiFont,
     SelectCodeFont,
     Settings,
@@ -164,6 +165,7 @@ pub const OPEN_FOLDER_TITLE: &str = if cfg!(target_os = "macos") {
 #[cfg(test)]
 const KEYLESS: &[Command] = &[
     Command::SelectTheme,
+    Command::NewTheme,
     Command::SelectUiFont,
     Command::SelectCodeFont,
     Command::OpenSettings,
@@ -354,6 +356,7 @@ commands! {
     OpenFolder, "folder.open", "Open Folder or Terminal…", ["ctrl+o", "alt+o"];
     CloseFolder, "folder.close", "Close Folder", [];
     SelectTheme, "theme.select", "Select Theme", [];
+    NewTheme, "theme.new", "New Theme from This One…", [];
     SelectUiFont, "font.selectUi", "Select UI Font", [];
     SelectCodeFont, "font.selectCode", "Select Code Font", [];
     Settings, "app.settings", "Settings", ["ctrl+,"];
